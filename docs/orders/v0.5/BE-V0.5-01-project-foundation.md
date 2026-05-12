@@ -4,7 +4,7 @@
 
 - 類型：AFK
 - 優先序：P0
-- 預估：16h
+- 預估：15h
 - 依賴：無
 - 交付版本：V0.5
 
@@ -139,4 +139,3 @@ V0.5 先支援：
 - 不要在這張工單引入業務 tables。
 - 不要將 `LOCAL_MODE` 做成 security bypass 到處散落；先集中在 config/context 層。
 - 不要使用 print 作為正式 logging；可先建立 Python logging 基礎。
-

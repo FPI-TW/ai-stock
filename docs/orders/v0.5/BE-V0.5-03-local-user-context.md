@@ -4,7 +4,7 @@
 
 - 類型：AFK
 - 優先序：P0
-- 預估：8h
+- 預估：7.5h
 - 依賴：BE-V0.5-02
 - 交付版本：V0.5
 
@@ -84,4 +84,3 @@ V1 可將 `role` 擴充為 `user | admin`。
 - 不要把固定 owner id 直接散落在 command 或 repository。
 - 不要在 domain service 中讀環境變數。
 - Owner scope 是 application boundary concern，由 API/command 傳入 domain。
-

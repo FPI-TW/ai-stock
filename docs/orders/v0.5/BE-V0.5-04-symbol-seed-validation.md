@@ -4,7 +4,7 @@
 
 - 類型：AFK
 - 優先序：P0
-- 預估：16h
+- 預估：15h
 - 依賴：BE-V0.5-02
 - 交付版本：V0.5
 
@@ -121,4 +121,3 @@ Error codes：
 - 不要讓前端傳 display name 建立 intent。
 - 不要把 seed 寫死在 validation function 中。
 - Symbol string 保持台股代碼原樣，例如 `0050` 不可轉成 int。
-

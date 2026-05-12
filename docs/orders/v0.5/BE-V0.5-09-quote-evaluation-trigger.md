@@ -4,7 +4,7 @@
 
 - 類型：AFK
 - 優先序：P0
-- 預估：36h
+- 預估：32h
 - 依賴：BE-V0.5-07, BE-V0.5-08
 - 交付版本：V0.5
 
@@ -127,4 +127,3 @@ V0.5 minimal title/body：
 - 不要把 notification rendering 分散在 evaluator 內，可使用小型 template function。
 - 不要為 V0.5 引入 background worker 必要性；dev endpoint 或 command 可接受。
 - V1 要升級 outbox，因此 trigger transaction 的邊界要清楚。
-

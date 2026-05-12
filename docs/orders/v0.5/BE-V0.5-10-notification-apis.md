@@ -4,7 +4,7 @@
 
 - 類型：AFK
 - 優先序：P1
-- 預估：16h
+- 預估：15h
 - 依賴：BE-V0.5-09
 - 交付版本：V0.5
 
@@ -95,4 +95,3 @@ Response：
 - Cursor 可先使用 `created_at + id`，不要用 offset 作主要設計。
 - V1 會擴充 template/delivery，不要把 V0.5 schema 設計到無法加欄位。
 - Read model 保持 owner scope。
-

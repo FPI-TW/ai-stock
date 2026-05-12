@@ -4,7 +4,7 @@
 
 - 類型：AFK
 - 優先序：P1
-- 預估：12h
+- 預估：11h
 - 依賴：BE-V0.5-07, BE-V0.5-10
 - 交付版本：V0.5
 
@@ -88,4 +88,3 @@ docs/api/v0.5-local-flow.md
 - 欄位命名需與實作一致，例如 `quantityLots`、`targetPrice`。
 - Price examples 用 string。
 - 不要在 handoff 文件承諾 V1 才有的 CSV/Telegram/OCO。
-

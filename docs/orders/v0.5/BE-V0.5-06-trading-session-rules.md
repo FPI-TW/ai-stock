@@ -4,7 +4,7 @@
 
 - 類型：AFK
 - 優先序：P0
-- 預估：16h
+- 預估：15h
 - 依賴：BE-V0.5-02
 - 交付版本：V0.5
 
@@ -84,4 +84,3 @@ class TradingSessionService:
 - 所有 DB timestamp 仍存 UTC；`trading_date` 用 Taipei date。
 - 不要把 V0.5 weekday rule 包裝成正式 market calendar。
 - V1 會以內部 `market_calendar` table 取代週一到週五簡化規則。
-

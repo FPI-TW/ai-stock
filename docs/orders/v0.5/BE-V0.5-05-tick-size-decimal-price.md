@@ -4,7 +4,7 @@
 
 - 類型：AFK
 - 優先序：P0
-- 預估：24h
+- 預估：22.5h
 - 依賴：BE-V0.5-02
 - 交付版本：V0.5
 
@@ -90,4 +90,3 @@ Invalid tick：
 - 不要用 `float(price)` 做任何比較或 DB 寫入。
 - 不要在 API route 各自實作 tick validation。
 - Price formatting 應集中處理。
-

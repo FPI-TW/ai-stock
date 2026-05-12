@@ -4,7 +4,7 @@
 
 - 類型：AFK
 - 優先序：P0
-- 預估：24h
+- 預估：20h
 - 依賴：BE-V0.5-07, BE-V0.5-09
 - 交付版本：V0.5
 
@@ -109,4 +109,3 @@ V0.5 是要提供本地可展示的主流程。Integration tests 必須固定這
 - 對時間敏感的測試需注入 clock。
 - Quote/session 測試需固定 Taipei time。
 - 不要因測試方便而讓 production code 暴露非 local mode dev endpoints。
-

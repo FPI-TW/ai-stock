@@ -176,48 +176,47 @@ V0.5 的設計原則是盡量避免 demo-only 或做一半的產品功能：
 
 估時為後端 engineer-hours，不包含前端頁面實作、vendor 合約談判、生產基礎設施採購、PM/legal review。
 
-| ID | 工單 | 優先序 | 預估 | 依賴 |
-| --- | --- | --- | ---: | --- |
-| BE-V0.5-01 | 本地專案基礎、config、health、quality scripts | P0 | 16h | 無 |
-| BE-V0.5-02 | 最小 database baseline、Alembic、core intent/notification tables | P0 | 24h | BE-V0.5-01 |
-| BE-V0.5-03 | Local user context 與 owner scope placeholder | P0 | 8h | BE-V0.5-02 |
-| BE-V0.5-04 | 最小 symbol seed、validation、lookup API | P0 | 16h | BE-V0.5-02 |
-| BE-V0.5-05 | Tick-size 與 Decimal price domain services | P0 | 24h | BE-V0.5-02 |
-| BE-V0.5-06 | 基本 trading session / day-intent rules | P0 | 16h | BE-V0.5-02 |
-| BE-V0.5-07 | 單筆 buy/sell price alert create/cancel/list APIs | P0 | 32h | BE-V0.5-03, BE-V0.5-04, BE-V0.5-05, BE-V0.5-06 |
-| BE-V0.5-08 | Development quote adapter 與 quote validation | P0 | 20h | BE-V0.5-04, BE-V0.5-06 |
-| BE-V0.5-09 | Quote evaluation、trigger transaction、minimal notification | P0 | 36h | BE-V0.5-07, BE-V0.5-08 |
-| BE-V0.5-10 | Notification list/read APIs | P1 | 16h | BE-V0.5-09 |
-| BE-V0.5-11 | 本地主流程 API examples 與 frontend handoff | P1 | 12h | BE-V0.5-07, BE-V0.5-10 |
-| BE-V0.5-12 | Integration tests：create → quote → trigger → notification | P0 | 24h | BE-V0.5-07, BE-V0.5-09 |
+| ID         | 工單                                                             | 優先序 |  預估 | 依賴                                           |
+| ---------- | ---------------------------------------------------------------- | ------ | ----: | ---------------------------------------------- |
+| BE-V0.5-01 | 本地專案基礎、config、health、quality scripts                    | P0     |   15h | 無                                             |
+| BE-V0.5-02 | 最小 database baseline、Alembic、core intent/notification tables | P0     | 22.5h | BE-V0.5-01                                     |
+| BE-V0.5-03 | Local user context 與 owner scope placeholder                    | P0     |  7.5h | BE-V0.5-02                                     |
+| BE-V0.5-04 | 最小 symbol seed、validation、lookup API                         | P0     |   15h | BE-V0.5-02                                     |
+| BE-V0.5-05 | Tick-size 與 Decimal price domain services                       | P0     | 22.5h | BE-V0.5-02                                     |
+| BE-V0.5-06 | 基本 trading session / day-intent rules                          | P0     |   15h | BE-V0.5-02                                     |
+| BE-V0.5-07 | 單筆 buy/sell price alert create/cancel/list APIs                | P0     |   30h | BE-V0.5-03, BE-V0.5-04, BE-V0.5-05, BE-V0.5-06 |
+| BE-V0.5-08 | Development quote adapter 與 quote validation                    | P0     |   18h | BE-V0.5-04, BE-V0.5-06                         |
+| BE-V0.5-09 | Quote evaluation、trigger transaction、minimal notification      | P0     |   32h | BE-V0.5-07, BE-V0.5-08                         |
+| BE-V0.5-10 | Notification list/read APIs                                      | P1     |   15h | BE-V0.5-09                                     |
+| BE-V0.5-11 | 本地主流程 API examples 與 frontend handoff                      | P1     |   11h | BE-V0.5-07, BE-V0.5-10                         |
+| BE-V0.5-12 | Integration tests：create → quote → trigger → notification       | P0     |   20h | BE-V0.5-07, BE-V0.5-09                         |
 
-V0.5 小計：244 engineer-hours。
+V0.5 小計：223.5 engineer-hours。
 
 ## 10. V1 Additional 工單簡表
 
-| ID | 工單 | 優先序 | 預估 | 依賴 |
-| --- | --- | --- | ---: | --- |
-| BE-V1-01 | 正式 Auth、sessions、CSRF、invitation、password reset | P0 | 40h | BE-V0.5 |
-| BE-V1-02 | 正式 role 與 owner-scope authorization | P0 | 24h | BE-V1-01 |
-| BE-V1-03 | Production symbol importer 與 admin override readiness | P0 | 32h | BE-V0.5-04 |
-| BE-V1-04 | Production market calendar importer、scheduled activation/expiry | P0 | 44h | BE-V0.5-06 |
-| BE-V1-05 | Licensed quote provider adapter、quote health、pause/resume | P0 | 56h | BE-V0.5-08, BE-V0.5-09 |
-| BE-V1-06 | Outbox、notification delivery attempts、worker retry | P0 | 40h | BE-V0.5-09, BE-V0.5-10 |
-| BE-V1-07 | Take-profit / stop-loss strategy semantics | P1 | 32h | BE-V0.5-07, BE-V0.5-09 |
-| BE-V1-08 | OCO bracket alert group behavior | P1 | 40h | BE-V1-07 |
-| BE-V1-09 | Corporate action importer、cash dividend snapshot、effective price preview | P1 | 56h | BE-V1-03, BE-V1-04 |
-| BE-V1-10 | CSV preview、draft、confirm 與 batch metadata | P1 | 48h | BE-V1-07, BE-V1-08, BE-V1-09 |
-| BE-V1-11 | Telegram bind/unbind 與 Telegram delivery worker | P1 | 40h | BE-V1-01, BE-V1-06 |
-| BE-V1-12 | User notification settings 與 notification center hardening | P1 | 24h | BE-V1-06, BE-V1-11 |
-| BE-V1-13 | Admin user management 與 account disable command | P1 | 40h | BE-V1-01, BE-V1-02, BE-V0.5-07 |
-| BE-V1-14 | Admin data overrides：symbols、calendar、corporate actions | P2 | 40h | BE-V1-03, BE-V1-04, BE-V1-09 |
-| BE-V1-15 | Admin monitoring、alerts、backlog metrics、kill switches | P2 | 48h | BE-V1-05, BE-V1-06 |
-| BE-V1-16 | Audit log、rate limits、retention、privacy anonymization | P2 | 48h | BE-V1-01, BE-V1-06, BE-V1-13 |
-| BE-V1-17 | EC2/RDS deployment readiness、backup/restore、production hardening | P2 | 40h | BE-V1-01, BE-V1-05, BE-V1-15 |
-| BE-V1-18 | Production contract/integration/adapter test hardening | P0 | 48h | BE-V1-05, BE-V1-11, BE-V1-16 |
-| BE-V1-19 | Production OpenAPI examples 與 frontend contract fixtures | P1 | 24h | BE-V1-10, BE-V1-12 |
+| ID       | 工單                                                                       | 優先序 |  預估 | 依賴                           |
+| -------- | -------------------------------------------------------------------------- | ------ | ----: | ------------------------------ |
+| BE-V1-01 | 正式 Auth、sessions、CSRF、invitation、password reset                      | P0     |   35h | BE-V0.5                        |
+| BE-V1-02 | 正式 role 與 owner-scope authorization                                     | P0     |   20h | BE-V1-01                       |
+| BE-V1-03 | Production symbol importer 與 admin override readiness                     | P0     |   30h | BE-V0.5-04                     |
+| BE-V1-04 | Production market calendar importer、scheduled activation/expiry           | P0     |   35h | BE-V0.5-06                     |
+| BE-V1-05 | Licensed quote provider adapter、quote health、pause/resume                | P0     | 42.5h | BE-V0.5-08, BE-V0.5-09         |
+| BE-V1-06 | Outbox、notification delivery attempts、worker retry                       | P0     |   35h | BE-V0.5-09, BE-V0.5-10         |
+| BE-V1-07 | Take-profit / stop-loss strategy semantics                                 | P1     |   30h | BE-V0.5-07, BE-V0.5-09         |
+| BE-V1-08 | OCO bracket alert group behavior                                           | P1     |   35h | BE-V1-07                       |
+| BE-V1-09 | Corporate action importer、cash dividend snapshot、effective price preview | P1     |   45h | BE-V1-03, BE-V1-04             |
+| BE-V1-10 | CSV preview、draft、confirm 與 batch metadata                              | P1     |   15h | BE-V1-07, BE-V1-08, BE-V1-09   |
+| BE-V1-11 | Telegram bind/unbind 與 Telegram delivery worker                           | P1     |   20h | BE-V1-01, BE-V1-06             |
+| BE-V1-12 | User notification settings 與 notification center hardening                | P1     |   20h | BE-V1-06, BE-V1-11             |
+| BE-V1-13 | Admin user management 與 account disable command                           | P1     |   35h | BE-V1-01, BE-V1-02, BE-V0.5-07 |
+| BE-V1-14 | Admin data overrides：symbols、calendar、corporate actions                 | P2     |   30h | BE-V1-03, BE-V1-04, BE-V1-09   |
+| BE-V1-15 | Admin monitoring、alerts、backlog metrics、kill switches                   | P2     |   40h | BE-V1-05, BE-V1-06             |
+| BE-V1-16 | Audit log、rate limits、retention、privacy anonymization                   | P2     |   40h | BE-V1-01, BE-V1-06, BE-V1-13   |
+| BE-V1-17 | EC2/RDS deployment readiness、backup/restore、production hardening         | P2     |   20h | BE-V1-01, BE-V1-05, BE-V1-15   |
+| BE-V1-18 | Production contract/integration/adapter test hardening                     | P0     |   40h | BE-V1-05, BE-V1-11, BE-V1-16   |
+| BE-V1-19 | Production OpenAPI examples 與 frontend contract fixtures                  | P1     |   15h | BE-V1-10, BE-V1-12             |
 
-V1 additional 小計：804 engineer-hours。
+V1 additional 小計：582.5 engineer-hours。
 
-總估時：1048 engineer-hours。
-
+總估時：806 engineer-hours。

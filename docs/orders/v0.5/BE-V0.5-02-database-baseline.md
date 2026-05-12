@@ -4,7 +4,7 @@
 
 - 類型：AFK
 - 優先序：P0
-- 預估：24h
+- 預估：22.5h
 - 依賴：BE-V0.5-01
 - 交付版本：V0.5
 
@@ -156,4 +156,3 @@ Indexes：
 - 若使用 SQLAlchemy，model enum 可以先用字串欄位 + check constraint，避免早期 enum migration 難改。
 - V1 需要新增更多 status，不要把 Python enum 寫死到難以擴充。
 - Duplicate intent partial unique index 若過早複雜，可先在 command transaction 中用 row lock/check 實作，但需有測試。
-

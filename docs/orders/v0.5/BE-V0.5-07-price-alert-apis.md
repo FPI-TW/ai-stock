@@ -4,7 +4,7 @@
 
 - 類型：AFK
 - 優先序：P0
-- 預估：32h
+- 預估：30h
 - 依賴：BE-V0.5-03, BE-V0.5-04, BE-V0.5-05, BE-V0.5-06
 - 交付版本：V0.5
 
@@ -149,4 +149,3 @@ V0.5 至少禁止同一 owner 在同一 trading date 建立完全相同的 activ
 - Domain service 負責 validation 語意，repository 負責查詢。
 - Response price 建議以 string 輸出。
 - 不要在 V0.5 加入尚未使用的 notification channel override。
-

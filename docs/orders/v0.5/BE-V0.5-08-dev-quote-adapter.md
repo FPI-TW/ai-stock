@@ -4,7 +4,7 @@
 
 - 類型：AFK
 - 優先序：P0
-- 預估：20h
+- 預估：18h
 - 依賴：BE-V0.5-04, BE-V0.5-06
 - 交付版本：V0.5
 
@@ -109,4 +109,3 @@ V0.5 可不做 10 秒 freshness threshold；V1 licensed provider 再補完整 fr
 - Development adapter 的命名避免 `FakeProductQuoteProvider` 之類容易誤解的名稱。
 - Quote validation logic 後續會被 licensed provider 共用，避免寫在 dev endpoint 裡。
 - 不要為 V0.5 建 quote history table。
-
