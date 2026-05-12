@@ -12,11 +12,57 @@
 - Python 3.13
 - FastAPI
 - PostgreSQL
+- SQLAlchemy sync engine with `psycopg` 3
 - Alembic
 - uv
 - ruff
 
 V0.5 只需要本地 FastAPI + PostgreSQL。V1 需支援 EC2 + RDS production deployment。
+
+V0.5 DB driver decision：
+
+- 使用 `postgresql+psycopg://` 與 SQLAlchemy sync engine。
+- 不採用 `asyncpg` 作為 V0.5 基礎，避免在骨架階段過早把 route、session dependency、tests 全部推向 async。
+- 若 V1 實際出現高併發 DB I/O 需求，再評估 SQLAlchemy async engine；`psycopg` 3 仍可支援 async path。
+- BE-V0.5-01 提供 local-only PostgreSQL `docker-compose.yml`，使用 `postgres:17`、`ai_stock` database/user/password、`5432:5432`、named volume；不建立 app container，不代表 production Docker decision。
+
+V0.5 settings decision：
+
+- 使用 `pydantic-settings` 建立集中式 typed settings。
+- `.env.example` 提供本地範例。
+- V0.5 預設 `APP_ENV=local`、`APP_NAME=ai-stock-api`、`APP_VERSION=0.5.0`、`LOCAL_MODE=true`、`LOCAL_USER_ID=local-user`、`REQUEST_ID_HEADER=X-Request-Id`。
+- V0.5 local mode 允許 app 在缺少 `DATABASE_URL` 時啟動；`/health` 必須回 `503 DATABASE_UNAVAILABLE`。Production fail-fast 不在 V0.5 範圍。
+
+V0.5 quality script decision：
+
+- `Makefile` 是本地開發與品質檢查的穩定入口，README 記錄等價 `uv` 指令。
+- `make dev` 使用 `uv run uvicorn app.main:app --app-dir src --reload` 以支援 `src` layout。
+- 基礎 targets：`install`、`dev`、`lint`、`format`、`format-check`、`test`、`test-integration`。
+- BE-V0.5-01 暫不加入 `mypy` 或 `pyright`；待 SQLAlchemy ORM/domain model 穩定後再評估 typed Python baseline。
+
+V0.5 test strategy decision：
+
+- `make test` 預設跑不需 Docker 的快速 unit/API tests，可 mock DB ping。
+- `make test-integration` 使用 `pytest -m integration`，要求 local PostgreSQL 已啟動，打真 DB 驗證 health connectivity。
+- V1 完成時不可只依賴 mock；主流程與 DB transaction/constraints 必須有真 PostgreSQL integration tests。
+
+V0.5 health endpoint decision：
+
+- V0.5 只保留 `GET /health`，語意為 readiness，必須檢查 DB connectivity。
+- 暫不拆 `/live` / `/ready`；V1 deployment readiness 再評估。
+
+V0.5 request id decision：
+
+- Request id header 名稱由 `REQUEST_ID_HEADER` 設定決定，預設 `X-Request-Id`。
+- Client 傳入 request id 時，長度 `1..128` 則原樣保留；缺失或空字串則產生 UUID4。
+- 超過 128 字元回 `400 VALIDATION_ERROR`，response 與 error envelope 仍帶有效 request id。
+
+V0.5 error message decision：
+
+- Error envelope 的 `code` 是前端邏輯契約。
+- `message` 使用中文 user-facing 顯示文字。
+- 基礎訊息：`INTERNAL_ERROR=發生未預期錯誤`、`VALIDATION_ERROR=請求資料不合法`、`DATABASE_UNAVAILABLE=資料庫暫時無法使用`。
+- 未處理 exception 的 response 使用 `INTERNAL_ERROR` 與 `details: {}`；stack trace、path、method、request id 只進 server log。
 
 ## 2. V0.5 設計邊界
 
@@ -80,51 +126,53 @@ V1 在 v0.5 主流程上補齊：
 ## 5. 建議 Package Layout
 
 ```text
-app/
-  main.py
-  api/
-    routes/
-    deps.py
-    errors.py
-  core/
-    config.py
-    time.py
-    ids.py
-  db/
-    session.py
-    models/
-    migrations/
-  domain/
-    trade_intents/
-    notifications/
-    symbols/
-    market_calendar/
-    quotes/
-  commands/
-  adapters/
-    quote_provider/
-  tests/
+src/
+  app/
+    main.py
+    api/
+      routes/
+      deps.py
+      errors.py
+    core/
+      config.py
+      time.py
+      ids.py
+    db/
+      session.py
+      models/
+      migrations/
+    domain/
+      trade_intents/
+      notifications/
+      symbols/
+      market_calendar/
+      quotes/
+    commands/
+    adapters/
+      quote_provider/
+tests/
 ```
 
 V1 可再擴充：
 
 ```text
-app/
-  core/security.py
-  domain/
-    corporate_actions/
-    users/
-    admin/
-    outbox/
-    audit/
-  workers/
-    quote_evaluator.py
-    notification_worker.py
-    scheduled_jobs.py
-  adapters/
-    telegram/
-    corporate_action_provider/
-    symbol_provider/
+src/
+  app/
+    core/security.py
+    domain/
+      corporate_actions/
+      users/
+      admin/
+      outbox/
+      audit/
+    workers/
+      quote_evaluator.py
+      notification_worker.py
+      scheduled_jobs.py
+    adapters/
+      telegram/
+      corporate_action_provider/
+      symbol_provider/
 ```
 
 ## 6. V0.5 核心 Domain Model
@@ -350,4 +398,3 @@ V1 tests：
 - Account disable cancellation。
 - Market calendar override。
 - Quote unhealthy pause/resume。
-
