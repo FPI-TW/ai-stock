@@ -48,6 +48,29 @@ make test
 
 `make check` 會執行不需要 PostgreSQL 的品質門檻：lint、format-check、typecheck、unit/API tests。
 
+## Git hooks
+
+本 repo 使用 `pre-commit` 管理 Git hooks。
+
+macOS / Linux：
+
+```bash
+make install-hooks
+```
+
+Windows（Git for Windows）也可直接執行：
+
+```powershell
+git config --unset core.hooksPath
+uv run pre-commit install --install-hooks --hook-type pre-commit --hook-type pre-push
+```
+
+- hook 設定集中在 `.pre-commit-config.yaml`。
+- `pre-commit` 會執行 format、lint、format-check、typecheck。任一指令失敗時 commit 會被阻擋。
+- 若 formatter 修改檔案，`pre-commit` 會中止 commit；請檢查並 stage 格式化後的檔案，再重新 commit。
+- `pre-push` 會執行一般測試，等同 `uv run pytest`。測試失敗時 push 會被阻擋。
+- `make test-integration` 需要本地 PostgreSQL，仍維持手動執行，不放入 push hook。
+
 型別檢查使用 mypy 作為正式品質門檻：
 
 - `make typecheck` 執行 `uv run mypy src tests`。
