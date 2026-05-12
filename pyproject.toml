@@ -1,0 +1,50 @@
+[project]
+name = "ai-stock"
+version = "0.5.0"
+description = "AI Stock local FastAPI backend"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115.0",
+    "pydantic-settings>=2.7.0",
+    "psycopg[binary]>=3.2.0",
+    "sqlalchemy>=2.0.0",
+    "uvicorn[standard]>=0.34.0",
+    "alembic>=1.18.4",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.0",
+    "mypy>=2.1.0",
+    "pytest>=8.3.0",
+    "ruff>=0.8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "integration: tests that require local external services such as PostgreSQL",
+]
+addopts = "-m 'not integration'"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ANN"]
+ignore = [
+    "ANN201",
+]
+
+[tool.mypy]
+python_version = "3.13"
+mypy_path = "src"
+packages = ["app"]
+files = ["src", "tests"]
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true

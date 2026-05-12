@@ -835,7 +835,7 @@ V1 建立內部 symbol master，作為輸入驗證、行情、除息資料對齊
 - `symbol`
 - `display_name`
 - `market = TWSE | TPEx`
-- `instrument_type = stock | ETF`
+- `instrument_type = stock | etf`
 - `tradable_status`
 - `last_updated_at`
 

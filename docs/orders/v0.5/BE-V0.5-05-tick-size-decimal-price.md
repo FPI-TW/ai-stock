@@ -65,7 +65,7 @@ Invalid tick：
 
 ## DB / Serialization
 
-- DB 使用 `numeric(18, 6)` 或更合理 numeric precision。
+- DB 使用 BE-V0.5-02 已決策的 `numeric(9, 4)`。
 - Python 使用 `Decimal`。
 - Pydantic response 對外輸出建議用 string，避免 JSON number 被前端當 float。
 - Internal comparison 全部用 Decimal。
