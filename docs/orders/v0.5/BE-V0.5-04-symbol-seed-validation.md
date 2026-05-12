@@ -33,8 +33,8 @@ V0.5 不做正式 symbol importer，但仍需要內部 symbol master 的最小�
 
 - `2330` 台積電，TWSE，stock，tradable。
 - `2317` 鴻海，TWSE，stock，tradable。
-- `0050` 元大台灣50，TWSE，ETF，tradable。
-- `00878` 國泰永續高股息，TWSE，ETF，tradable。
+- `0050` 元大台灣50，TWSE，etf，tradable。
+- `00878` 國泰永續高股息，TWSE，etf，tradable。
 - 可再加入一筆 `halted` 或 `unsupported` 測試資料。
 
 Seed 可以用 migration、啟動 seed command，或測試 fixture。若使用啟動 seed command，需確保 idempotent。
@@ -92,7 +92,7 @@ class SymbolService:
 Validation rules：
 
 - Symbol 必須存在。
-- `instrument_type in stock | ETF`。
+- `instrument_type in stock | etf`。
 - `tradable_status = tradable`。
 - API/command 內部使用 canonical `symbol`。
 
@@ -104,7 +104,7 @@ Error codes：
 ## 驗收條件
 
 - [ ] Seed data 包含台股現股與 ETF 範例。
-- [ ] V0.5 intents 只接受 seed 中支援的 stock/ETF。
+- [ ] V0.5 intents 只接受 seed 中支援的 `stock` / `etf`。
 - [ ] API 支援用 symbol 查詢。
 - [ ] Create intent 只接收 canonical symbol。
 - [ ] Unknown 或 unsupported symbol 回傳正式 error envelope。

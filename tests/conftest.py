@@ -1,4 +1,5 @@
-from collections.abc import Callable, Generator
+from collections.abc import Generator
+from typing import Protocol
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,6 +8,10 @@ from app.api.deps import get_database_health_checker
 from app.core.config import get_settings
 from app.db.session import get_engine
 from app.main import create_app
+
+
+class ClientFactory(Protocol):
+    def __call__(self, database_available: bool = True) -> TestClient: ...
 
 
 @pytest.fixture(autouse=True)
@@ -21,7 +26,7 @@ def clear_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
 
 
 @pytest.fixture
-def client_factory() -> Callable[[bool], TestClient]:
+def client_factory() -> ClientFactory:
     def make_client(database_available: bool = True) -> TestClient:
         app = create_app()
         app.dependency_overrides[get_database_health_checker] = lambda: lambda: database_available

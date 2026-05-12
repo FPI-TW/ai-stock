@@ -4,6 +4,7 @@ from uuid import uuid4
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.types import ASGIApp
 
 from app.api.errors import ErrorCode, build_error_response
 
@@ -15,7 +16,7 @@ def new_request_id() -> str:
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, header_name: str = "X-Request-Id") -> None:  # noqa: ANN001
+    def __init__(self, app: ASGIApp, header_name: str = "X-Request-Id") -> None:
         super().__init__(app)
         self.header_name = header_name
 

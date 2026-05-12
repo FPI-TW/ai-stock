@@ -26,6 +26,29 @@ V0.5 DB driver decision：
 - 若 V1 實際出現高併發 DB I/O 需求，再評估 SQLAlchemy async engine；`psycopg` 3 仍可支援 async path。
 - BE-V0.5-01 提供 local-only PostgreSQL `docker-compose.yml`，使用 `postgres:17`、`ai_stock` database/user/password、`5432:5432`、named volume；不建立 app container，不代表 production Docker decision。
 
+V0.5 migration timestamp decision：
+
+- 所有 V0.5 tables 都有 `created_at`。
+- 狀態會變更的 tables 有 `updated_at`；V0.5 包含 `symbols`、`trade_intents`、`notifications`。
+- `trigger_records` 是 immutable trigger snapshot，只保留 `created_at` 與 domain event time `triggered_at`。
+- 不建立 DB trigger 自動更新 `updated_at`；更新 command/repository 必須顯式寫入 `updated_at`。
+
+V0.5 database baseline decision：
+
+- BE-V0.5-02 只交付 ORM models、Alembic migration、constraints、integration tests；repository layer 依 BE-V0.5-04/07/09 use case 再補。
+- Alembic migration 不 seed symbols；BE-V0.5-04 負責最小 symbol seed。
+- Canonical symbol fields 使用 lowercase enum where applicable：`instrument_type = stock | etf`，`tradable_status = tradable | halted | unsupported`。
+- `market` canonical values 只允許 `TWSE | TPEx`，不加入 `TPEX` alias。
+- `symbols.symbol` 格式 normalize 留給 symbol service，不在 DB 層加 regex。
+- `trade_intents.symbol` 與 `trigger_records.symbol` 都 FK 到 `symbols(symbol)`。
+- `trigger_records.owner_user_id` 與 `notifications.owner_user_id` 不做 owner composite FK；後續 command transaction tests 驗證 copy/ownership 一致性。
+- Duplicate intent DB invariant 只限制 active/scheduled user-facing duplicate；terminal `cancelled` / `triggered` 後允許重建。
+- Price columns 使用 `numeric(9, 4)`，DB 只限制正數；tick-size validation 留給 BE-V0.5-05。
+- `quote_snapshot` 只保證 non-null JSONB，不加 shape constraint。
+- `trigger_records` 要檢查 `last_fallback` 與 `fallback_used` 一致。
+- `notifications.trade_intent_id` nullable 以保留 V1 擴充，但 `price_triggered` 必須有 `trade_intent_id`。
+- 不加 trade intent status 與 terminal timestamp 的 DB consistency check；BE-V0.5-07/09 command tests 驗證。
+
 V0.5 settings decision：
 
 - 使用 `pydantic-settings` 建立集中式 typed settings。
@@ -39,6 +62,8 @@ V0.5 quality script decision：
 - `make dev` 使用 `uv run uvicorn app.main:app --app-dir src --reload` 以支援 `src` layout。
 - 基礎 targets：`install`、`dev`、`lint`、`format`、`format-check`、`test`、`test-integration`。
 - BE-V0.5-01 暫不加入 `mypy` 或 `pyright`；待 SQLAlchemy ORM/domain model 穩定後再評估 typed Python baseline。
+- BE-V0.5-02 起加入 `mypy`，`make typecheck` 執行 `uv run mypy src tests`，`make check` 執行非 PostgreSQL 品質門檻：`lint`、`format-check`、`typecheck`、`test`。
+- mypy baseline 要求 typed function definitions 與 `check_untyped_defs`，但暫不開 `strict = true` 或 `disallow_any_*`。
 
 V0.5 test strategy decision：
 

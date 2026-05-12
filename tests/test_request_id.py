@@ -1,10 +1,11 @@
-from collections.abc import Callable
 from uuid import UUID
 
 from fastapi.testclient import TestClient
 
+from tests.conftest import ClientFactory
 
-def test_preserves_request_id_header(client_factory: Callable[[bool], TestClient]) -> None:
+
+def test_preserves_request_id_header(client_factory: ClientFactory) -> None:
     client: TestClient = client_factory(database_available=True)
 
     response = client.get("/health", headers={"X-Request-Id": "client-request-id"})
@@ -13,7 +14,7 @@ def test_preserves_request_id_header(client_factory: Callable[[bool], TestClient
     assert response.headers["X-Request-Id"] == "client-request-id"
 
 
-def test_generates_request_id_when_missing(client_factory: Callable[[bool], TestClient]) -> None:
+def test_generates_request_id_when_missing(client_factory: ClientFactory) -> None:
     client: TestClient = client_factory(database_available=True)
 
     response = client.get("/health")
@@ -22,7 +23,7 @@ def test_generates_request_id_when_missing(client_factory: Callable[[bool], Test
     assert UUID(request_id)
 
 
-def test_rejects_too_long_request_id(client_factory: Callable[[bool], TestClient]) -> None:
+def test_rejects_too_long_request_id(client_factory: ClientFactory) -> None:
     client: TestClient = client_factory(database_available=True)
 
     response = client.get("/health", headers={"X-Request-Id": "x" * 129})

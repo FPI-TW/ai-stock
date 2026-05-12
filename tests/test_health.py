@@ -1,9 +1,9 @@
-from collections.abc import Callable
-
 from fastapi.testclient import TestClient
 
+from tests.conftest import ClientFactory
 
-def test_health_success(client_factory: Callable[[bool], TestClient]) -> None:
+
+def test_health_success(client_factory: ClientFactory) -> None:
     client: TestClient = client_factory(database_available=True)
 
     response = client.get("/health")
@@ -20,7 +20,7 @@ def test_health_success(client_factory: Callable[[bool], TestClient]) -> None:
     assert response.headers["X-Request-Id"]
 
 
-def test_health_database_unavailable_uses_error_envelope(client_factory: Callable[[bool], TestClient]) -> None:
+def test_health_database_unavailable_uses_error_envelope(client_factory: ClientFactory) -> None:
     client: TestClient = client_factory(database_available=False)
 
     response = client.get("/health", headers={"X-Request-Id": "req-db-down"})
