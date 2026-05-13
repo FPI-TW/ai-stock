@@ -2,6 +2,7 @@
 
 from typing import Annotated, Any
 
+import pytest
 from fastapi import APIRouter, Body
 from fastapi.testclient import TestClient
 
@@ -27,11 +28,13 @@ def _make_client() -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
-client = _make_client()
+@pytest.fixture()
+def client() -> TestClient:
+    return _make_client()
 
 
 class TestInvalidTick:
-    def test_stock_invalid_tick_returns_422_invalid_tick_size(self) -> None:
+    def test_stock_invalid_tick_returns_422_invalid_tick_size(self, client: TestClient) -> None:
         response = client.post(
             "/price/validate",
             json={"type": "stock", "price": "10.01", "amount": 500},
@@ -48,7 +51,7 @@ class TestInvalidTick:
         }
         assert body["error"]["requestId"] == "req-tick-stock"
 
-    def test_etf_invalid_tick_returns_422_invalid_tick_size(self) -> None:
+    def test_etf_invalid_tick_returns_422_invalid_tick_size(self, client: TestClient) -> None:
         response = client.post(
             "/price/validate",
             json={"type": "etf", "price": "50.01", "amount": 1000},
@@ -64,7 +67,7 @@ class TestInvalidTick:
         }
         assert body["error"]["requestId"] == "req-tick-etf"
 
-    def test_invalid_price_format_returns_invalid_price(self) -> None:
+    def test_invalid_price_format_returns_invalid_price(self, client: TestClient) -> None:
         response = client.post(
             "/price/validate",
             json={"type": "stock", "price": "bad", "amount": 500},
@@ -72,7 +75,7 @@ class TestInvalidTick:
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "INVALID_PRICE"
 
-    def test_zero_amount_returns_invalid_amount(self) -> None:
+    def test_zero_amount_returns_invalid_amount(self, client: TestClient) -> None:
         response = client.post(
             "/price/validate",
             json={"type": "stock", "price": "49.95", "amount": 0},
@@ -80,7 +83,7 @@ class TestInvalidTick:
         assert response.status_code == 422
         assert response.json()["error"]["code"] == "INVALID_AMOUNT"
 
-    def test_invalid_type_returns_invalid_type(self) -> None:
+    def test_invalid_type_returns_invalid_type(self, client: TestClient) -> None:
         response = client.post(
             "/price/validate",
             json={"type": "bond", "price": "49.95", "amount": 500},
@@ -90,7 +93,7 @@ class TestInvalidTick:
 
 
 class TestDecimalPrecision:
-    def test_valid_stock_request_returns_200(self) -> None:
+    def test_valid_stock_request_returns_200(self, client: TestClient) -> None:
         response = client.post(
             "/price/validate",
             json={"type": "stock", "price": "49.95", "amount": 500},
@@ -98,7 +101,7 @@ class TestDecimalPrecision:
         assert response.status_code == 200
         assert response.json() == {"data": {"type": "stock", "price": "49.95", "amount": 500}}
 
-    def test_valid_etf_request_returns_200(self) -> None:
+    def test_valid_etf_request_returns_200(self, client: TestClient) -> None:
         response = client.post(
             "/price/validate",
             json={"type": "etf", "price": "50.05", "amount": 1000},
@@ -106,7 +109,7 @@ class TestDecimalPrecision:
         assert response.status_code == 200
         assert response.json() == {"data": {"type": "etf", "price": "50.05", "amount": 1000}}
 
-    def test_price_is_serialized_as_string(self) -> None:
+    def test_price_is_serialized_as_string(self, client: TestClient) -> None:
         response = client.post(
             "/price/validate",
             json={"type": "stock", "price": "49.95", "amount": 500},
@@ -114,7 +117,7 @@ class TestDecimalPrecision:
         price_value = response.json()["data"]["price"]
         assert isinstance(price_value, str), "price must be a JSON string, not a number"
 
-    def test_precision_survives_http_roundtrip(self) -> None:
+    def test_precision_survives_http_roundtrip(self, client: TestClient) -> None:
         # 這些值在 float 運算下容易產生精度誤差，確保 Decimal → str 路徑完整保留
         cases = [
             ("stock", "0.01", 100),
