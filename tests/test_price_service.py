@@ -33,8 +33,13 @@ class TestParse:
         with pytest.raises(InvalidPriceError, match="Comma is not allowed"):
             PriceService.parse("1,234.5")
 
-    def test_accepts_leading_trailing_whitespace(self) -> None:
-        assert PriceService.parse("  50.05  ") == Decimal("50.05")
+    def test_rejects_leading_whitespace(self) -> None:
+        with pytest.raises(InvalidPriceError, match="must not contain leading or trailing whitespace"):
+            PriceService.parse("  50.05")
+
+    def test_rejects_trailing_whitespace(self) -> None:
+        with pytest.raises(InvalidPriceError, match="must not contain leading or trailing whitespace"):
+            PriceService.parse("50.05  ")
 
     def test_rejects_non_string_int(self) -> None:
         with pytest.raises(InvalidPriceError, match="must be a string"):

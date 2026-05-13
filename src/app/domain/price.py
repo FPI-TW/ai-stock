@@ -76,11 +76,12 @@ class PriceService:
             raise InvalidPriceError(value, "Price must be a string to ensure precision")
 
         try:
-            clean_value = value.strip()
-            if "," in clean_value:
+            if value != value.strip():
+                raise InvalidPriceError(value, "must not contain leading or trailing whitespace")
+            if "," in value:
                 raise InvalidPriceError(value, "Comma is not allowed in price")
 
-            result = Decimal(clean_value)
+            result = Decimal(value)
         except InvalidOperation:
             raise InvalidPriceError(value, "cannot be parsed as a number") from None
         if not result.is_finite():
