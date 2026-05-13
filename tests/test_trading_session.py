@@ -24,108 +24,103 @@ SAT = (2026, 5, 16)
 NEXT_MON = (2026, 5, 18)
 
 
+@pytest.fixture
+def svc() -> TradingSessionService:
+    return TradingSessionService()
+
+
 class TestIsTradingDay:
-    svc = TradingSessionService()
+    def test_monday(self, svc: TradingSessionService) -> None:
+        assert svc.is_trading_day(date(*MON))
 
-    def test_monday(self) -> None:
-        assert self.svc.is_trading_day(date(*MON))
+    def test_friday(self, svc: TradingSessionService) -> None:
+        assert svc.is_trading_day(date(*FRI))
 
-    def test_friday(self) -> None:
-        assert self.svc.is_trading_day(date(*FRI))
+    def test_saturday(self, svc: TradingSessionService) -> None:
+        assert not svc.is_trading_day(date(*SAT))
 
-    def test_saturday(self) -> None:
-        assert not self.svc.is_trading_day(date(*SAT))
-
-    def test_sunday(self) -> None:
-        assert not self.svc.is_trading_day(date(2026, 5, 17))
+    def test_sunday(self, svc: TradingSessionService) -> None:
+        assert not svc.is_trading_day(date(2026, 5, 17))
 
 
 class TestIsWithinRegularSession:
-    svc = TradingSessionService()
+    def test_before_open_not_in_session(self, svc: TradingSessionService) -> None:
+        assert not svc.is_within_regular_session(dt(*MON, 8, 59))
 
-    def test_before_open_not_in_session(self) -> None:
-        assert not self.svc.is_within_regular_session(dt(*MON, 8, 59))
+    def test_at_open_in_session(self, svc: TradingSessionService) -> None:
+        assert svc.is_within_regular_session(dt(*MON, 9, 0))
 
-    def test_at_open_in_session(self) -> None:
-        assert self.svc.is_within_regular_session(dt(*MON, 9, 0))
+    def test_during_session(self, svc: TradingSessionService) -> None:
+        assert svc.is_within_regular_session(dt(*MON, 11, 0))
 
-    def test_during_session(self) -> None:
-        assert self.svc.is_within_regular_session(dt(*MON, 11, 0))
-
-    def test_at_close_not_in_session(self) -> None:
+    def test_at_close_not_in_session(self, svc: TradingSessionService) -> None:
         # 13:30 is exclusive — session is [09:00, 13:30)
-        assert not self.svc.is_within_regular_session(dt(*MON, 13, 30))
+        assert not svc.is_within_regular_session(dt(*MON, 13, 30))
 
-    def test_after_close_not_in_session(self) -> None:
-        assert not self.svc.is_within_regular_session(dt(*MON, 15, 0))
+    def test_after_close_not_in_session(self, svc: TradingSessionService) -> None:
+        assert not svc.is_within_regular_session(dt(*MON, 15, 0))
 
-    def test_saturday_not_in_session(self) -> None:
-        assert not self.svc.is_within_regular_session(dt(*SAT, 10, 0))
+    def test_saturday_not_in_session(self, svc: TradingSessionService) -> None:
+        assert not svc.is_within_regular_session(dt(*SAT, 10, 0))
 
 
 class TestGetDayIntentTradingDate:
-    svc = TradingSessionService()
-
-    def test_monday_before_session_returns_today(self) -> None:
+    def test_monday_before_session_returns_today(self, svc: TradingSessionService) -> None:
         # 週一 08:59 → scheduled today
-        assert self.svc.get_day_intent_trading_date(dt(*MON, 8, 59)) == date(*MON)
+        assert svc.get_day_intent_trading_date(dt(*MON, 8, 59)) == date(*MON)
 
-    def test_monday_at_open_returns_today(self) -> None:
+    def test_monday_at_open_returns_today(self, svc: TradingSessionService) -> None:
         # 週一 09:00 → active today
-        assert self.svc.get_day_intent_trading_date(dt(*MON, 9, 0)) == date(*MON)
+        assert svc.get_day_intent_trading_date(dt(*MON, 9, 0)) == date(*MON)
 
-    def test_monday_at_close_returns_next_weekday(self) -> None:
+    def test_monday_at_close_returns_next_weekday(self, svc: TradingSessionService) -> None:
         # 週一 13:30 後 → scheduled next weekday (Tuesday)
-        assert self.svc.get_day_intent_trading_date(dt(*MON, 13, 30)) == date(*TUE)
+        assert svc.get_day_intent_trading_date(dt(*MON, 13, 30)) == date(*TUE)
 
-    def test_saturday_returns_next_monday(self) -> None:
+    def test_saturday_returns_next_monday(self, svc: TradingSessionService) -> None:
         # 週六 → scheduled next Monday
-        assert self.svc.get_day_intent_trading_date(dt(*SAT, 10, 0)) == date(*NEXT_MON)
+        assert svc.get_day_intent_trading_date(dt(*SAT, 10, 0)) == date(*NEXT_MON)
 
-    def test_friday_after_close_returns_next_monday(self) -> None:
-        assert self.svc.get_day_intent_trading_date(dt(*FRI, 14, 0)) == date(*NEXT_MON)
+    def test_friday_after_close_returns_next_monday(self, svc: TradingSessionService) -> None:
+        assert svc.get_day_intent_trading_date(dt(*FRI, 14, 0)) == date(*NEXT_MON)
 
 
 class TestGetInitialDayIntentStatus:
-    svc = TradingSessionService()
+    def test_monday_before_session_is_scheduled(self, svc: TradingSessionService) -> None:
+        assert svc.get_initial_day_intent_status(dt(*MON, 8, 59)) == "scheduled"
 
-    def test_monday_before_session_is_scheduled(self) -> None:
-        assert self.svc.get_initial_day_intent_status(dt(*MON, 8, 59)) == "scheduled"
+    def test_monday_at_open_is_active(self, svc: TradingSessionService) -> None:
+        assert svc.get_initial_day_intent_status(dt(*MON, 9, 0)) == "active"
 
-    def test_monday_at_open_is_active(self) -> None:
-        assert self.svc.get_initial_day_intent_status(dt(*MON, 9, 0)) == "active"
+    def test_monday_at_close_is_scheduled(self, svc: TradingSessionService) -> None:
+        assert svc.get_initial_day_intent_status(dt(*MON, 13, 30)) == "scheduled"
 
-    def test_monday_at_close_is_scheduled(self) -> None:
-        assert self.svc.get_initial_day_intent_status(dt(*MON, 13, 30)) == "scheduled"
-
-    def test_saturday_is_scheduled(self) -> None:
-        assert self.svc.get_initial_day_intent_status(dt(*SAT, 10, 0)) == "scheduled"
+    def test_saturday_is_scheduled(self, svc: TradingSessionService) -> None:
+        assert svc.get_initial_day_intent_status(dt(*SAT, 10, 0)) == "scheduled"
 
 
 class TestAssertCanEvaluate:
-    svc = TradingSessionService()
-
-    def test_both_in_session_does_not_raise(self) -> None:
+    def test_both_in_session_does_not_raise(self, svc: TradingSessionService) -> None:
         # Evaluator test: valid case
-        self.svc.assert_can_evaluate(dt(*MON, 10, 0), dt(*MON, 10, 0))
+        svc.assert_can_evaluate(dt(*MON, 10, 0), dt(*MON, 10, 0))
 
-    def test_now_outside_session_raises(self) -> None:
+    def test_now_outside_session_raises(self, svc: TradingSessionService) -> None:
         # Evaluator test: now outside session 不觸發
         with pytest.raises(OutsideSessionError):
-            self.svc.assert_can_evaluate(dt(*MON, 8, 59), dt(*MON, 10, 0))
+            svc.assert_can_evaluate(dt(*MON, 8, 59), dt(*MON, 10, 0))
 
-    def test_now_after_close_raises(self) -> None:
+    def test_now_after_close_raises(self, svc: TradingSessionService) -> None:
         with pytest.raises(OutsideSessionError):
-            self.svc.assert_can_evaluate(dt(*MON, 13, 30), dt(*MON, 13, 0))
+            svc.assert_can_evaluate(dt(*MON, 13, 30), dt(*MON, 13, 0))
 
-    def test_quote_time_outside_session_raises(self) -> None:
+    def test_quote_time_outside_session_raises(self, svc: TradingSessionService) -> None:
         # Evaluator test: quote_time outside session 不觸發
         with pytest.raises(OutsideSessionError):
-            self.svc.assert_can_evaluate(dt(*MON, 10, 0), dt(*SAT, 10, 0))
+            svc.assert_can_evaluate(dt(*MON, 10, 0), dt(*SAT, 10, 0))
 
-    def test_now_weekend_raises(self) -> None:
+    def test_now_weekend_raises(self, svc: TradingSessionService) -> None:
         with pytest.raises(OutsideSessionError):
-            self.svc.assert_can_evaluate(dt(*SAT, 10, 0), dt(*SAT, 10, 0))
+            svc.assert_can_evaluate(dt(*SAT, 10, 0), dt(*SAT, 10, 0))
 
 
 class TestClockInjection:
