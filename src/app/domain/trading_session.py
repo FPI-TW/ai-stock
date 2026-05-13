@@ -15,7 +15,7 @@ _SESSION_START = time(9, 0)
 _SESSION_END = time(13, 30)
 
 
-class OutsideSessionError(RuntimeError):
+class OutsideSessionError(Exception):
     """Raised when evaluation is attempted outside the regular trading session."""
 
     def __init__(self, reason: str) -> None:
