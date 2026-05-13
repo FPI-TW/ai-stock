@@ -7,6 +7,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,12 +16,20 @@ class ErrorCode(StrEnum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
     VALIDATION_ERROR = "VALIDATION_ERROR"
     DATABASE_UNAVAILABLE = "DATABASE_UNAVAILABLE"
+    INVALID_PRICE = "INVALID_PRICE"
+    INVALID_TICK_SIZE = "INVALID_TICK_SIZE"
+    INVALID_AMOUNT = "INVALID_AMOUNT"
+    INVALID_TYPE = "INVALID_TYPE"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INTERNAL_ERROR: "發生未預期錯誤",
     ErrorCode.VALIDATION_ERROR: "請求資料不合法",
     ErrorCode.DATABASE_UNAVAILABLE: "資料庫暫時無法使用",
+    ErrorCode.INVALID_PRICE: "價格格式不合法",
+    ErrorCode.INVALID_TICK_SIZE: "價格不符合升降單位規定",
+    ErrorCode.INVALID_AMOUNT: "數量不合法",
+    ErrorCode.INVALID_TYPE: "證券類型不合法",
 }
 
 
@@ -75,6 +85,43 @@ def register_exception_handlers(app: FastAPI) -> None:
             code=exc.code,
             message=exc.message,
             details=exc.details,
+        )
+
+    # InvalidTickSizeError 必須在 InvalidPriceError 之前註冊（子類別優先）
+    @app.exception_handler(InvalidTickSizeError)
+    async def invalid_tick_size_handler(request: Request, exc: InvalidTickSizeError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=422,
+            code=ErrorCode.INVALID_TICK_SIZE,
+            details={"value": str(exc.value)},
+        )
+
+    @app.exception_handler(InvalidPriceError)
+    async def invalid_price_handler(request: Request, exc: InvalidPriceError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=422,
+            code=ErrorCode.INVALID_PRICE,
+            details={"value": str(exc.value)},
+        )
+
+    @app.exception_handler(InvalidAmountError)
+    async def invalid_amount_handler(request: Request, exc: InvalidAmountError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=422,
+            code=ErrorCode.INVALID_AMOUNT,
+            details={"value": str(exc.value)},
+        )
+
+    @app.exception_handler(InvalidTypeError)
+    async def invalid_type_handler(request: Request, exc: InvalidTypeError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=422,
+            code=ErrorCode.INVALID_TYPE,
+            details={"value": str(exc.value)},
         )
 
     @app.exception_handler(RequestValidationError)
