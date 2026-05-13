@@ -21,6 +21,7 @@ MON = (2026, 5, 11)
 TUE = (2026, 5, 12)
 FRI = (2026, 5, 15)
 SAT = (2026, 5, 16)
+SUN = (2026, 5, 17)
 NEXT_MON = (2026, 5, 18)
 
 
@@ -40,7 +41,7 @@ class TestIsTradingDay:
         assert not svc.is_trading_day(date(*SAT))
 
     def test_sunday(self, svc: TradingSessionService) -> None:
-        assert not svc.is_trading_day(date(2026, 5, 17))
+        assert not svc.is_trading_day(date(*SUN))
 
 
 class TestIsWithinRegularSession:
