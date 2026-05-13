@@ -44,18 +44,22 @@ class TradingSessionService:
         taipei = dt.astimezone(TAIPEI_TZ)
         if not self.is_trading_day(taipei.date()):
             return False
-        t = taipei.time().replace(tzinfo=None)
+        t = taipei.time().replace(tzinfo=None)  # strip tzinfo: aware time() can't compare with naive time constants
         return _SESSION_START <= t < _SESSION_END
 
     def get_day_intent_trading_date(self, now: datetime) -> date:
         """Return the trading_date a new day-intent should carry.
 
-        Before session end on a weekday → today (Taipei).
+        Before session end (13:30) on a weekday → today (Taipei), even if the
+        time is before session open (09:00).  This is intentional: the intent
+        is "which trading day are you targeting", not "are you inside the
+        session right now".  Use is_within_regular_session() when you need the
+        stricter >= 09:00 gate.
         At or after session end, or on a weekend → next weekday.
         """
         taipei = now.astimezone(TAIPEI_TZ)
         today = taipei.date()
-        t = taipei.time().replace(tzinfo=None)
+        t = taipei.time().replace(tzinfo=None)  # strip tzinfo: aware time() can't compare with naive time constants
         if self.is_trading_day(today) and t < _SESSION_END:
             return today
         return self._next_weekday(today)
