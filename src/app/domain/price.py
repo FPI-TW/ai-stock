@@ -92,7 +92,12 @@ class PriceService:
 
     @staticmethod
     def tick_size_for(security_type: SecurityType, price: Decimal) -> Decimal:
-        """Return the TWSE tick size for the given security type and price."""
+        """Return the TWSE tick size for the given security type and price.
+
+        Precondition: price must be > 0. Negative or zero values are not guarded
+        here and will silently fall through to the highest tick bucket.
+        Use validate() or parse() to ensure price is positive before calling directly.
+        """
         if security_type == SecurityType.ETF:
             for upper, tick in _ETF_TICK_TABLE:
                 if price < upper:
