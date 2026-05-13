@@ -130,8 +130,10 @@ class PriceService:
         """
         if request.amount <= 0:
             raise InvalidAmountError(request.amount, "must be greater than zero")
-        if request.type not in SecurityType:
-            raise InvalidTypeError(request.type, "must be stock or etf")
+        try:
+            SecurityType(request.type)
+        except ValueError:
+            raise InvalidTypeError(request.type, "must be stock or etf") from None
         price = cls.parse(request.price)
         if not cls.is_valid_tick(request.type, price):
             tick = cls.tick_size_for(request.type, price)
