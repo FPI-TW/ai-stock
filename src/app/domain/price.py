@@ -110,9 +110,13 @@ class PriceService:
 
     @classmethod
     def nearest_lower(cls, security_type: SecurityType, price: Decimal) -> Decimal:
-        """Return the largest valid tick multiple that is ≤ price."""
+        """Return the largest valid tick multiple that is ≤ price, minimum one tick.
+
+        The minimum of one tick ensures the result is always a positive, tradeable price.
+        """
         tick = cls.tick_size_for(security_type, price)
-        return (price // tick) * tick
+        lower = (price // tick) * tick
+        return max(lower, tick)
 
     @classmethod
     def nearest_upper(cls, security_type: SecurityType, price: Decimal) -> Decimal:
