@@ -125,6 +125,12 @@ class TestAssertCanEvaluate:
 
 
 class TestClockInjection:
+    def test_now_taipei_default_returns_aware_taipei_datetime(self) -> None:
+        result = TradingSessionService().now_taipei()
+        assert isinstance(result, datetime)
+        assert result.tzinfo is not None
+        assert result.utcoffset() is not None
+
     def test_now_taipei_uses_injected_clock(self) -> None:
         fixed = dt(*MON, 10, 0)
         svc = TradingSessionService(clock=lambda: fixed)
