@@ -41,7 +41,11 @@ class TestInvalidTick:
         body = response.json()
         assert body["error"]["code"] == "INVALID_TICK_SIZE"
         assert body["error"]["message"] == "價格不符合升降單位規定"
-        assert body["error"]["details"] == {"value": "10.01"}
+        assert body["error"]["details"] == {
+            "value": "10.01",
+            "nearest_lower": "10.00",
+            "nearest_upper": "10.05",
+        }
         assert body["error"]["requestId"] == "req-tick-stock"
 
     def test_etf_invalid_tick_returns_422_invalid_tick_size(self) -> None:
@@ -53,6 +57,11 @@ class TestInvalidTick:
         assert response.status_code == 422
         body = response.json()
         assert body["error"]["code"] == "INVALID_TICK_SIZE"
+        assert body["error"]["details"] == {
+            "value": "50.01",
+            "nearest_lower": "50.00",
+            "nearest_upper": "50.05",
+        }
         assert body["error"]["requestId"] == "req-tick-etf"
 
     def test_invalid_price_format_returns_invalid_price(self) -> None:

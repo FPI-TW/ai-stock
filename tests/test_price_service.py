@@ -201,15 +201,19 @@ class TestValidate:
         req = PriceRequest(type=SecurityType.STOCK, price="49.95", amount=500)
         assert str(PriceService.validate(req)) == "49.95"
 
-    def test_invalid_tick_stock_raises(self) -> None:
+    def test_invalid_tick_stock_raises_with_nearest(self) -> None:
         req = PriceRequest(type=SecurityType.STOCK, price="10.01", amount=500)
-        with pytest.raises(InvalidTickSizeError, match="not a valid tick multiple"):
+        with pytest.raises(InvalidTickSizeError) as exc_info:
             PriceService.validate(req)
+        assert exc_info.value.nearest_lower == Decimal("10.00")
+        assert exc_info.value.nearest_upper == Decimal("10.05")
 
-    def test_invalid_tick_etf_raises(self) -> None:
+    def test_invalid_tick_etf_raises_with_nearest(self) -> None:
         req = PriceRequest(type=SecurityType.ETF, price="50.01", amount=1000)
-        with pytest.raises(InvalidTickSizeError, match="not a valid tick multiple"):
+        with pytest.raises(InvalidTickSizeError) as exc_info:
             PriceService.validate(req)
+        assert exc_info.value.nearest_lower == Decimal("50.00")
+        assert exc_info.value.nearest_upper == Decimal("50.05")
 
     def test_unparseable_price_raises(self) -> None:
         req = PriceRequest(type=SecurityType.STOCK, price="bad", amount=500)
@@ -252,3 +256,57 @@ class TestValidate:
         with pytest.raises(InvalidTickSizeError):
             PriceService.validate(stock_req)
         assert PriceService.validate(etf_req) == Decimal("10.01")
+
+
+class TestNearest:
+    @pytest.mark.parametrize(
+        ("price", "expected_lower", "expected_upper"),
+        [
+            # < 10 → tick 0.01
+            ("9.999", "9.99", "10.00"),
+            ("0.005", "0.00", "0.01"),
+            # 10–50 → tick 0.05
+            ("10.01", "10.00", "10.05"),
+            ("10.04", "10.00", "10.05"),
+            ("49.96", "49.95", "50.00"),
+            # 50–100 → tick 0.1
+            ("50.05", "50.0", "50.1"),
+            ("99.95", "99.9", "100.0"),
+            # 100–500 → tick 0.5
+            ("100.1", "100.0", "100.5"),
+            ("499.9", "499.5", "500.0"),
+            # 500–1000 → tick 1
+            ("500.5", "500", "501"),
+            ("999.9", "999", "1000"),
+            # ≥ 1000 → tick 5
+            ("1001", "1000", "1005"),
+            ("1003", "1000", "1005"),
+        ],
+    )
+    def test_stock_nearest(self, price: str, expected_lower: str, expected_upper: str) -> None:
+        p = Decimal(price)
+        assert PriceService.nearest_lower(SecurityType.STOCK, p) == Decimal(expected_lower)
+        assert PriceService.nearest_upper(SecurityType.STOCK, p) == Decimal(expected_upper)
+
+    @pytest.mark.parametrize(
+        ("price", "expected_lower", "expected_upper"),
+        [
+            # < 50 → tick 0.01
+            ("49.999", "49.99", "50.00"),
+            ("0.005", "0.00", "0.01"),
+            # ≥ 50 → tick 0.05
+            ("50.01", "50.00", "50.05"),
+            ("50.04", "50.00", "50.05"),
+            ("100.01", "100.00", "100.05"),
+        ],
+    )
+    def test_etf_nearest(self, price: str, expected_lower: str, expected_upper: str) -> None:
+        p = Decimal(price)
+        assert PriceService.nearest_lower(SecurityType.ETF, p) == Decimal(expected_lower)
+        assert PriceService.nearest_upper(SecurityType.ETF, p) == Decimal(expected_upper)
+
+    def test_valid_price_nearest_lower_equals_upper_equals_price(self) -> None:
+        # 合法價格的 nearest_lower == nearest_upper == price 本身
+        price = Decimal("49.95")
+        assert PriceService.nearest_lower(SecurityType.STOCK, price) == price
+        assert PriceService.nearest_upper(SecurityType.STOCK, price) == price

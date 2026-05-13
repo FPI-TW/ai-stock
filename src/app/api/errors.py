@@ -94,7 +94,11 @@ def register_exception_handlers(app: FastAPI) -> None:
             request=request,
             status_code=422,
             code=ErrorCode.INVALID_TICK_SIZE,
-            details={"value": str(exc.value)},
+            details={
+                "value": str(exc.value),
+                "nearest_lower": str(exc.nearest_lower),
+                "nearest_upper": str(exc.nearest_upper),
+            },
         )
 
     @app.exception_handler(InvalidPriceError)

@@ -45,6 +45,11 @@ class InvalidPriceError(ValueError):
 class InvalidTickSizeError(InvalidPriceError):
     """Price is parseable but not a valid multiple of its TWSE tick size."""
 
+    def __init__(self, value: object, reason: str, nearest_lower: Decimal, nearest_upper: Decimal) -> None:
+        super().__init__(value, reason)
+        self.nearest_lower = nearest_lower
+        self.nearest_upper = nearest_upper
+
 
 class InvalidAmountError(ValueError):
     def __init__(self, value: object, reason: str) -> None:
@@ -104,6 +109,19 @@ class PriceService:
         return (price % tick) == Decimal("0")
 
     @classmethod
+    def nearest_lower(cls, security_type: SecurityType, price: Decimal) -> Decimal:
+        """Return the largest valid tick multiple that is ≤ price."""
+        tick = cls.tick_size_for(security_type, price)
+        return (price // tick) * tick
+
+    @classmethod
+    def nearest_upper(cls, security_type: SecurityType, price: Decimal) -> Decimal:
+        """Return the smallest valid tick multiple that is ≥ price."""
+        tick = cls.tick_size_for(security_type, price)
+        lower = (price // tick) * tick
+        return lower if lower == price else lower + tick
+
+    @classmethod
     def validate(cls, request: PriceRequest) -> Decimal:
         """Validate all fields of a PriceRequest.
 
@@ -117,5 +135,10 @@ class PriceService:
         price = cls.parse(request.price)
         if not cls.is_valid_tick(request.type, price):
             tick = cls.tick_size_for(request.type, price)
-            raise InvalidTickSizeError(request.price, f"not a valid tick multiple (tick size for this range is {tick})")
+            raise InvalidTickSizeError(
+                request.price,
+                f"not a valid tick multiple (tick size for this range is {tick})",
+                nearest_lower=cls.nearest_lower(request.type, price),
+                nearest_upper=cls.nearest_upper(request.type, price),
+            )
         return price

@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
 
@@ -42,14 +44,19 @@ def test_unhandled_exception_uses_internal_error_envelope() -> None:
 
 
 def test_invalid_tick_size_returns_422() -> None:
-    client = _client_with_route("/tick", InvalidTickSizeError("10.01", "not a valid tick multiple"))
+    exc = InvalidTickSizeError("10.01", "not a valid tick multiple", Decimal("10.00"), Decimal("10.05"))
+    client = _client_with_route("/tick", exc)
     response = client.get("/tick", headers={"X-Request-Id": "req-tick"})
 
     assert response.status_code == 422
     body = response.json()
     assert body["error"]["code"] == "INVALID_TICK_SIZE"
     assert body["error"]["message"] == "價格不符合升降單位規定"
-    assert body["error"]["details"] == {"value": "10.01"}
+    assert body["error"]["details"] == {
+        "value": "10.01",
+        "nearest_lower": "10.00",
+        "nearest_upper": "10.05",
+    }
     assert body["error"]["requestId"] == "req-tick"
 
 
@@ -91,7 +98,8 @@ def test_invalid_type_returns_422() -> None:
 
 def test_invalid_tick_size_not_caught_by_invalid_price_handler() -> None:
     # InvalidTickSizeError 是 InvalidPriceError 子類別，確認 handler 選到正確的那個
-    client = _client_with_route("/tick2", InvalidTickSizeError("50.05", "not a valid tick multiple"))
+    exc = InvalidTickSizeError("50.05", "not a valid tick multiple", Decimal("50.0"), Decimal("50.1"))
+    client = _client_with_route("/tick2", exc)
     response = client.get("/tick2")
 
     assert response.json()["error"]["code"] == "INVALID_TICK_SIZE"
