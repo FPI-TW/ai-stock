@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, status
 from fastapi.testclient import TestClient
 
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
@@ -48,7 +48,7 @@ def test_invalid_tick_size_returns_422() -> None:
     client = _client_with_route("/tick", exc)
     response = client.get("/tick", headers={"X-Request-Id": "req-tick"})
 
-    assert response.status_code == 422
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     body = response.json()
     assert body["error"]["code"] == "INVALID_TICK_SIZE"
     assert body["error"]["message"] == "價格不符合升降單位規定"
@@ -64,7 +64,7 @@ def test_invalid_price_returns_422() -> None:
     client = _client_with_route("/price", InvalidPriceError("abc", "cannot be parsed as a number"))
     response = client.get("/price", headers={"X-Request-Id": "req-price"})
 
-    assert response.status_code == 422
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     body = response.json()
     assert body["error"]["code"] == "INVALID_PRICE"
     assert body["error"]["message"] == "價格格式不合法"
@@ -76,7 +76,7 @@ def test_invalid_amount_returns_422() -> None:
     client = _client_with_route("/amount", InvalidAmountError(0, "must be greater than zero"))
     response = client.get("/amount", headers={"X-Request-Id": "req-amount"})
 
-    assert response.status_code == 422
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     body = response.json()
     assert body["error"]["code"] == "INVALID_AMOUNT"
     assert body["error"]["message"] == "數量不合法"
@@ -88,7 +88,7 @@ def test_invalid_type_returns_422() -> None:
     client = _client_with_route("/type", InvalidTypeError("bond", "must be stock or etf"))
     response = client.get("/type", headers={"X-Request-Id": "req-type"})
 
-    assert response.status_code == 422
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     body = response.json()
     assert body["error"]["code"] == "INVALID_TYPE"
     assert body["error"]["message"] == "證券類型不合法"

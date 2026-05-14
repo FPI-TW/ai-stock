@@ -3,7 +3,7 @@
 from typing import Annotated, Any
 
 import pytest
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, status
 from fastapi.testclient import TestClient
 
 from app.domain.price import PriceRequest, PriceService
@@ -40,7 +40,7 @@ class TestInvalidTick:
             json={"type": "stock", "price": "10.01", "amount": 500},
             headers={"X-Request-Id": "req-tick-stock"},
         )
-        assert response.status_code == 422
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
         body = response.json()
         assert body["error"]["code"] == "INVALID_TICK_SIZE"
         assert body["error"]["message"] == "價格不符合升降單位規定"
@@ -57,7 +57,7 @@ class TestInvalidTick:
             json={"type": "etf", "price": "50.01", "amount": 1000},
             headers={"X-Request-Id": "req-tick-etf"},
         )
-        assert response.status_code == 422
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
         body = response.json()
         assert body["error"]["code"] == "INVALID_TICK_SIZE"
         assert body["error"]["details"] == {
@@ -72,7 +72,7 @@ class TestInvalidTick:
             "/price/validate",
             json={"type": "stock", "price": "bad", "amount": 500},
         )
-        assert response.status_code == 422
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
         assert response.json()["error"]["code"] == "INVALID_PRICE"
 
     def test_zero_amount_returns_invalid_amount(self, client: TestClient) -> None:
@@ -80,7 +80,7 @@ class TestInvalidTick:
             "/price/validate",
             json={"type": "stock", "price": "49.95", "amount": 0},
         )
-        assert response.status_code == 422
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
         assert response.json()["error"]["code"] == "INVALID_AMOUNT"
 
     def test_invalid_type_returns_invalid_type(self, client: TestClient) -> None:
@@ -88,7 +88,7 @@ class TestInvalidTick:
             "/price/validate",
             json={"type": "bond", "price": "49.95", "amount": 500},
         )
-        assert response.status_code == 422
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
         assert response.json()["error"]["code"] == "INVALID_TYPE"
 
 
@@ -98,7 +98,7 @@ class TestDecimalPrecision:
             "/price/validate",
             json={"type": "stock", "price": "49.95", "amount": 500},
         )
-        assert response.status_code == 200
+        assert response.status_code == status.HTTP_200_OK
         assert response.json() == {"data": {"type": "stock", "price": "49.95", "amount": 500}}
 
     def test_valid_etf_request_returns_200(self, client: TestClient) -> None:
@@ -106,7 +106,7 @@ class TestDecimalPrecision:
             "/price/validate",
             json={"type": "etf", "price": "50.05", "amount": 1000},
         )
-        assert response.status_code == 200
+        assert response.status_code == status.HTTP_200_OK
         assert response.json() == {"data": {"type": "etf", "price": "50.05", "amount": 1000}}
 
     def test_price_is_serialized_as_string(self, client: TestClient) -> None:
@@ -132,7 +132,7 @@ class TestDecimalPrecision:
                 "/price/validate",
                 json={"type": sec_type, "price": price, "amount": amount},
             )
-            assert response.status_code == 200, f"Expected 200 for {sec_type} {price}"
+            assert response.status_code == status.HTTP_200_OK, f"Expected 200 for {sec_type} {price}"
             data = response.json()["data"]
             assert data["type"] == sec_type
             assert data["price"] == price, f"Precision lost for {price}"
