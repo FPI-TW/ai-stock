@@ -100,28 +100,28 @@ class TestGetInitialDayIntentStatus:
         assert svc.get_initial_day_intent_status(dt(*SAT, 10, 0)) == "scheduled"
 
 
-class TestAssertCanEvaluate:
+class TestVerifyTradingHours:
     def test_both_in_session_does_not_raise(self, svc: TradingSessionService) -> None:
         # Evaluator test: valid case
-        svc.assert_can_evaluate(dt(*MON, 10, 0), dt(*MON, 10, 0))
+        svc.verify_trading_hours(dt(*MON, 10, 0), dt(*MON, 10, 0))
 
     def test_now_outside_session_raises(self, svc: TradingSessionService) -> None:
         # Evaluator test: now outside session 不觸發
         with pytest.raises(OutsideSessionError, match="now "):
-            svc.assert_can_evaluate(dt(*MON, 8, 59), dt(*MON, 10, 0))
+            svc.verify_trading_hours(dt(*MON, 8, 59), dt(*MON, 10, 0))
 
     def test_now_after_close_raises(self, svc: TradingSessionService) -> None:
         with pytest.raises(OutsideSessionError, match="now "):
-            svc.assert_can_evaluate(dt(*MON, 13, 30), dt(*MON, 13, 0))
+            svc.verify_trading_hours(dt(*MON, 13, 30), dt(*MON, 13, 0))
 
     def test_quote_time_outside_session_raises(self, svc: TradingSessionService) -> None:
         # Evaluator test: quote_time outside session 不觸發
         with pytest.raises(OutsideSessionError, match="quote_time "):
-            svc.assert_can_evaluate(dt(*MON, 10, 0), dt(*SAT, 10, 0))
+            svc.verify_trading_hours(dt(*MON, 10, 0), dt(*SAT, 10, 0))
 
     def test_now_weekend_raises(self, svc: TradingSessionService) -> None:
         with pytest.raises(OutsideSessionError, match="now "):
-            svc.assert_can_evaluate(dt(*SAT, 10, 0), dt(*SAT, 10, 0))
+            svc.verify_trading_hours(dt(*SAT, 10, 0), dt(*SAT, 10, 0))
 
 
 class TestClockInjection:

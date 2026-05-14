@@ -67,7 +67,7 @@ class TradingSessionService:
     def get_initial_day_intent_status(self, now: datetime) -> Literal["active", "scheduled"]:
         return "active" if self.is_within_regular_session(now) else "scheduled"
 
-    def assert_can_evaluate(self, now: datetime, quote_time: datetime) -> None:
+    def verify_trading_hours(self, now: datetime, quote_time: datetime) -> None:
         """Raise OutsideSessionError if now or quote_time is outside the regular session."""
         if not self.is_within_regular_session(now):
             raise OutsideSessionError(f"now {now.isoformat()} is outside regular session")
