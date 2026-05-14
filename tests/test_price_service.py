@@ -233,6 +233,16 @@ class TestValidate:
         with pytest.raises(InvalidAmountError, match="greater than zero"):
             PriceService.validate(req)
 
+    def test_string_amount_raises(self) -> None:
+        req = PriceRequest(type=SecurityType.STOCK, price="49.95", amount="1")  # type: ignore[arg-type]
+        with pytest.raises(InvalidAmountError, match="must be an integer"):
+            PriceService.validate(req)
+
+    def test_none_amount_raises(self) -> None:
+        req = PriceRequest(type=SecurityType.STOCK, price="49.95", amount=None)  # type: ignore[arg-type]
+        with pytest.raises(InvalidAmountError, match="must be an integer"):
+            PriceService.validate(req)
+
     def test_amount_validated_before_price(self) -> None:
         # amount 錯誤優先於 price 錯誤拋出
         req = PriceRequest(type=SecurityType.STOCK, price="bad", amount=0)

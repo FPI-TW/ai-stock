@@ -83,6 +83,22 @@ class TestInvalidTick:
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
         assert response.json()["error"]["code"] == "INVALID_AMOUNT"
 
+    def test_string_amount_returns_invalid_amount(self, client: TestClient) -> None:
+        response = client.post(
+            "/price/validate",
+            json={"type": "stock", "price": "49.95", "amount": "1"},
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+        assert response.json()["error"]["code"] == "INVALID_AMOUNT"
+
+    def test_null_amount_returns_invalid_amount(self, client: TestClient) -> None:
+        response = client.post(
+            "/price/validate",
+            json={"type": "stock", "price": "49.95", "amount": None},
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+        assert response.json()["error"]["code"] == "INVALID_AMOUNT"
+
     def test_invalid_type_returns_invalid_type(self, client: TestClient) -> None:
         response = client.post(
             "/price/validate",

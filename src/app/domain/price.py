@@ -138,6 +138,8 @@ class PriceService:
         Returns the parsed price Decimal on success.
         Raises InvalidAmountError or InvalidPriceError on failure.
         """
+        if not isinstance(request.amount, int) or isinstance(request.amount, bool):
+            raise InvalidAmountError(request.amount, "must be an integer")
         if request.amount <= 0:
             raise InvalidAmountError(request.amount, "must be greater than zero")
         try:
