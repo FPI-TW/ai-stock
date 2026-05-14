@@ -1,4 +1,4 @@
-"""Unit tests for PriceService — parse, tick_size_for, is_valid_tick, validate."""
+"""Unit tests for PriceService — parse, lookup_tick_size, is_valid_tick, validate."""
 
 from decimal import Decimal
 
@@ -97,7 +97,7 @@ class TestTickSizeForStock:
         ],
     )
     def test_tick_boundaries(self, price: str, expected_tick: str) -> None:
-        assert PriceService.tick_size_for(SecurityType.STOCK, Decimal(price)) == Decimal(expected_tick)
+        assert PriceService.lookup_tick_size(SecurityType.STOCK, Decimal(price)) == Decimal(expected_tick)
 
 
 class TestTickSizeForEtf:
@@ -116,7 +116,7 @@ class TestTickSizeForEtf:
         ],
     )
     def test_tick_boundaries(self, price: str, expected_tick: str) -> None:
-        assert PriceService.tick_size_for(SecurityType.ETF, Decimal(price)) == Decimal(expected_tick)
+        assert PriceService.lookup_tick_size(SecurityType.ETF, Decimal(price)) == Decimal(expected_tick)
 
 
 class TestIsValidTickStock:

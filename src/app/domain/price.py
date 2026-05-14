@@ -91,7 +91,7 @@ class PriceService:
         return result
 
     @staticmethod
-    def tick_size_for(security_type: SecurityType, price: Decimal) -> Decimal:
+    def lookup_tick_size(security_type: SecurityType, price: Decimal) -> Decimal:
         """Return the TWSE tick size for the given security type and price.
 
         Precondition: price must be > 0. Negative or zero values are not guarded
@@ -111,7 +111,7 @@ class PriceService:
     @classmethod
     def is_valid_tick(cls, security_type: SecurityType, price: Decimal) -> bool:
         """Return True if price is an exact multiple of its tick size."""
-        tick = cls.tick_size_for(security_type, price)
+        tick = cls.lookup_tick_size(security_type, price)
         return (price % tick) == Decimal("0")
 
     @classmethod
@@ -120,14 +120,14 @@ class PriceService:
 
         The minimum of one tick ensures the result is always a positive, tradeable price.
         """
-        tick = cls.tick_size_for(security_type, price)
+        tick = cls.lookup_tick_size(security_type, price)
         lower = (price // tick) * tick
         return max(lower, tick)
 
     @classmethod
     def nearest_upper(cls, security_type: SecurityType, price: Decimal) -> Decimal:
         """Return the smallest valid tick multiple that is ≥ price."""
-        tick = cls.tick_size_for(security_type, price)
+        tick = cls.lookup_tick_size(security_type, price)
         lower = (price // tick) * tick
         return lower if lower == price else lower + tick
 
@@ -146,7 +146,7 @@ class PriceService:
             raise InvalidTypeError(request.type, "must be stock or etf") from None
         price = cls.parse(request.price)
         if not cls.is_valid_tick(request.type, price):
-            tick = cls.tick_size_for(request.type, price)
+            tick = cls.lookup_tick_size(request.type, price)
             raise InvalidTickSizeError(
                 request.price,
                 f"not a valid tick multiple (tick size for this range is {tick})",
