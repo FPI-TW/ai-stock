@@ -2,7 +2,7 @@ import logging
 from enum import StrEnum
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -92,7 +92,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def invalid_tick_size_handler(request: Request, exc: InvalidTickSizeError) -> JSONResponse:
         return build_error_response(
             request=request,
-            status_code=422,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.INVALID_TICK_SIZE,
             details={
                 "value": str(exc.value),
@@ -105,7 +105,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def invalid_price_handler(request: Request, exc: InvalidPriceError) -> JSONResponse:
         return build_error_response(
             request=request,
-            status_code=422,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.INVALID_PRICE,
             details={"value": str(exc.value)},
         )
@@ -114,7 +114,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def invalid_amount_handler(request: Request, exc: InvalidAmountError) -> JSONResponse:
         return build_error_response(
             request=request,
-            status_code=422,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.INVALID_AMOUNT,
             details={"value": str(exc.value)},
         )
@@ -123,7 +123,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def invalid_type_handler(request: Request, exc: InvalidTypeError) -> JSONResponse:
         return build_error_response(
             request=request,
-            status_code=422,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.INVALID_TYPE,
             details={"value": str(exc.value)},
         )
@@ -132,7 +132,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         return build_error_response(
             request=request,
-            status_code=422,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.VALIDATION_ERROR,
             details={"errors": exc.errors()},
         )
@@ -157,7 +157,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
         return build_error_response(
             request=request,
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             code=ErrorCode.INTERNAL_ERROR,
             details={},
         )

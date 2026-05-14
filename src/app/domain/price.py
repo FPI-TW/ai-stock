@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 
 # TWSE stock tick-size table: (price_upper_bound_exclusive, tick_size)
-# Source: https://www.twse.com.tw/zh/trading/margin/tickSize.html
+# Source: https://www.twse.com.tw/zh/products/system/trading.html
 _STOCK_TICK_TABLE: list[tuple[Decimal, Decimal]] = [
     (Decimal("10"), Decimal("0.01")),
     (Decimal("50"), Decimal("0.05")),
