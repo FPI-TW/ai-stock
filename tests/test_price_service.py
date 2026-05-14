@@ -70,7 +70,7 @@ class TestParse:
             PriceService.parse("NaN")
 
 
-class TestTickSizeForStock:
+class TestLookupTickSize:
     @pytest.mark.parametrize(
         ("price", "expected_tick"),
         [
@@ -96,11 +96,9 @@ class TestTickSizeForStock:
             ("2000", "5"),
         ],
     )
-    def test_tick_boundaries(self, price: str, expected_tick: str) -> None:
+    def test_tick_boundaries_stock(self, price: str, expected_tick: str) -> None:
         assert PriceService.lookup_tick_size(SecurityType.STOCK, Decimal(price)) == Decimal(expected_tick)
 
-
-class TestTickSizeForEtf:
     @pytest.mark.parametrize(
         ("price", "expected_tick"),
         [
@@ -115,7 +113,7 @@ class TestTickSizeForEtf:
             ("1000", "0.05"),
         ],
     )
-    def test_tick_boundaries(self, price: str, expected_tick: str) -> None:
+    def test_tick_boundaries_etf(self, price: str, expected_tick: str) -> None:
         assert PriceService.lookup_tick_size(SecurityType.ETF, Decimal(price)) == Decimal(expected_tick)
 
 
