@@ -36,7 +36,7 @@ def test_request_user_is_frozen() -> None:
 def test_build_local_user_raises_when_local_user_id_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LOCAL_USER_ID", raising=False)
     monkeypatch.setenv("LOCAL_MODE", "false")
-    settings = Settings()
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     with pytest.raises(RuntimeError, match="LOCAL_USER_ID missing"):
         build_local_user(settings)

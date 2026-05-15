@@ -22,7 +22,7 @@ def test_missing_local_user_id_with_local_mode_true_raises(monkeypatch: pytest.M
     monkeypatch.setenv("LOCAL_MODE", "true")
 
     with pytest.raises(ValidationError) as exc_info:
-        Settings()
+        Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert "LOCAL_USER_ID is required when LOCAL_MODE is true" in str(exc_info.value)
 
@@ -31,7 +31,7 @@ def test_missing_local_user_id_with_local_mode_false_allowed(monkeypatch: pytest
     monkeypatch.delenv("LOCAL_USER_ID", raising=False)
     monkeypatch.setenv("LOCAL_MODE", "false")
 
-    settings = Settings()
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.local_mode is False
     assert settings.local_user_id is None
@@ -42,4 +42,4 @@ def test_malformed_local_user_id_raises(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("LOCAL_MODE", "true")
 
     with pytest.raises(ValidationError):
-        Settings()
+        Settings(_env_file=None)  # type: ignore[call-arg]
