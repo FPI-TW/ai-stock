@@ -18,10 +18,11 @@ class SymbolRepository:
         effective_limit = min(limit, MAX_SEARCH_LIMIT)
         stmt = select(Symbol)
         if q:
+            escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             stmt = stmt.where(
                 or_(
-                    Symbol.symbol.like(f"{q}%"),
-                    Symbol.display_name.contains(q),
+                    Symbol.symbol.like(f"{escaped}%", escape="\\"),
+                    Symbol.display_name.contains(escaped, escape="\\"),
                 )
             )
         return list(self.db.execute(stmt.limit(effective_limit)).scalars().all())
