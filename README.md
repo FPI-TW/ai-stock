@@ -119,10 +119,12 @@ DATABASE_URL=postgresql+psycopg://ai_stock:ai_stock@localhost:5432/ai_stock uv r
 
 ## 環境變數
 
+**V0.5 本地模式無 auth，禁止公開部署。** 詳見上方說明。
+
 - `APP_ENV`，預設 `local`
 - `APP_NAME`，預設 `ai-stock-api`
 - `APP_VERSION`，預設 `0.5.0`
 - `DATABASE_URL`，本地範例見 `.env.example`
-- `LOCAL_USER_ID`，預設 `local-user`
+- `LOCAL_USER_ID`，必填 UUID，無預設值；`LOCAL_MODE=true` 時缺漏會在啟動時拋 `ValidationError`
 - `LOCAL_MODE`，預設 `true`
 - `REQUEST_ID_HEADER`，預設 `X-Request-Id`
