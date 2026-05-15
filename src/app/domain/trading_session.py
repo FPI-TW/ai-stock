@@ -15,6 +15,11 @@ _SESSION_START = time(9, 0)
 _SESSION_END = time(13, 30)
 
 
+def _require_aware(dt: datetime) -> None:
+    if dt.tzinfo is None:
+        raise TypeError(f"naive datetime is not allowed; attach a timezone before calling: {dt!r}")
+
+
 class OutsideSessionError(Exception):
     """Raised when evaluation is attempted outside the regular trading session."""
 
@@ -41,10 +46,11 @@ class TradingSessionService:
         return d.weekday() < 5  # Mon=0 … Fri=4
 
     def is_within_regular_session(self, dt: datetime) -> bool:
+        _require_aware(dt)
         taipei = dt.astimezone(TAIPEI_TZ)
         if not self.is_trading_day(taipei.date()):
             return False
-        t = taipei.time().replace(tzinfo=None)  # strip tzinfo: aware time() can't compare with naive time constants
+        t = taipei.time()
         return _SESSION_START <= t < _SESSION_END
 
     def get_day_intent_trading_date(self, now: datetime) -> date:
@@ -57,18 +63,22 @@ class TradingSessionService:
         stricter >= 09:00 gate.
         At or after session end, or on a weekend → next weekday.
         """
+        _require_aware(now)
         taipei = now.astimezone(TAIPEI_TZ)
         today = taipei.date()
-        t = taipei.time().replace(tzinfo=None)  # strip tzinfo: aware time() can't compare with naive time constants
+        t = taipei.time()
         if self.is_trading_day(today) and t < _SESSION_END:
             return today
         return self._next_weekday(today)
 
     def get_initial_day_intent_status(self, now: datetime) -> Literal["active", "scheduled"]:
+        _require_aware(now)
         return "active" if self.is_within_regular_session(now) else "scheduled"
 
     def verify_trading_hours(self, now: datetime, quote_time: datetime) -> None:
         """Raise OutsideSessionError if now or quote_time is outside the regular session."""
+        _require_aware(now)
+        _require_aware(quote_time)
         if not self.is_within_regular_session(now):
             raise OutsideSessionError(f"now {now.isoformat()} is outside regular session")
         if not self.is_within_regular_session(quote_time):

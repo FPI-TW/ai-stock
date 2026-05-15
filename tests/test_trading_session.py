@@ -124,6 +124,31 @@ class TestVerifyTradingHours:
             svc.verify_trading_hours(dt(*SAT, 10, 0), dt(*SAT, 10, 0))
 
 
+class TestNaiveDatetimeRejection:
+    NAIVE = datetime(2026, 5, 11, 10, 0)  # no tzinfo
+    AWARE = datetime(2026, 5, 11, 10, 0, tzinfo=TAIPEI)
+
+    def test_is_within_regular_session_rejects_naive(self, svc: TradingSessionService) -> None:
+        with pytest.raises(TypeError, match="naive datetime is not allowed"):
+            svc.is_within_regular_session(self.NAIVE)
+
+    def test_get_day_intent_trading_date_rejects_naive(self, svc: TradingSessionService) -> None:
+        with pytest.raises(TypeError, match="naive datetime is not allowed"):
+            svc.get_day_intent_trading_date(self.NAIVE)
+
+    def test_get_initial_day_intent_status_rejects_naive(self, svc: TradingSessionService) -> None:
+        with pytest.raises(TypeError, match="naive datetime is not allowed"):
+            svc.get_initial_day_intent_status(self.NAIVE)
+
+    def test_verify_trading_hours_rejects_naive_now(self, svc: TradingSessionService) -> None:
+        with pytest.raises(TypeError, match="naive datetime is not allowed"):
+            svc.verify_trading_hours(self.NAIVE, self.AWARE)
+
+    def test_verify_trading_hours_rejects_naive_quote_time(self, svc: TradingSessionService) -> None:
+        with pytest.raises(TypeError, match="naive datetime is not allowed"):
+            svc.verify_trading_hours(self.AWARE, self.NAIVE)
+
+
 class TestClockInjection:
     def test_now_taipei_default_returns_aware_taipei_datetime(self) -> None:
         result = TradingSessionService().now_taipei()
