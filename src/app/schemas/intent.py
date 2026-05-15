@@ -1,10 +1,12 @@
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class IntentCreateRequest(BaseModel):
     symbol: str
-    side: str
-    quantity: int
+    side: Literal["buy", "sell"]
+    quantity: int = Field(ge=1)
 
 
 class IntentResponseData(BaseModel):
