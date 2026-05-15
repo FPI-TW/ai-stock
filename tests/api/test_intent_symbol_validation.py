@@ -5,11 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.symbol_deps import get_symbol_service
-from app.api.symbol_errors import (
-    SymbolNotTradableError,
-    UnknownSymbolError,
-    UnsupportedInstrumentError,
-)
+from app.api.symbol_errors import SymbolNotTradableError, UnknownSymbolError
 from app.symbol_main import create_symbol_app
 
 
@@ -49,18 +45,6 @@ def test_create_intent_unknown_symbol(client: TestClient, mock_symbol_service: M
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "UNKNOWN_SYMBOL"
-
-
-def test_create_intent_unsupported_instrument(client: TestClient, mock_symbol_service: MagicMock) -> None:
-    mock_symbol_service.get_tradable_symbol.side_effect = UnsupportedInstrumentError("future")
-
-    response = client.post(
-        "/intents",
-        json={"symbol": "8888", "side": "buy", "quantity": 1000},
-    )
-
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "UNSUPPORTED_INSTRUMENT"
 
 
 def test_create_intent_halted_symbol(client: TestClient, mock_symbol_service: MagicMock) -> None:

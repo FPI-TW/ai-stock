@@ -35,16 +35,6 @@ class UnknownSymbolError(SymbolApiError):
         )
 
 
-class UnsupportedInstrumentError(SymbolApiError):
-    def __init__(self, instrument_type: str) -> None:
-        super().__init__(
-            code="UNSUPPORTED_INSTRUMENT",
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            message="不支援的商品類型",
-            details={"instrument_type": instrument_type},
-        )
-
-
 class SymbolNotTradableError(SymbolApiError):
     def __init__(self, symbol: str, tradable_status: str) -> None:
         super().__init__(

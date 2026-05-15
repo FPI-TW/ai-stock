@@ -55,7 +55,7 @@ SYMBOL_SEED: list[dict[str, Any]] = [
     },
     {
         "symbol": "8888",
-        "display_name": "測試不支援商品",
+        "display_name": "測試unsupported狀態股票",
         "market": "TWSE",
         "instrument_type": "stock",
         "tradable_status": "unsupported",

@@ -2,11 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.api.symbol_errors import (
-    SymbolNotTradableError,
-    UnknownSymbolError,
-    UnsupportedInstrumentError,
-)
+from app.api.symbol_errors import SymbolNotTradableError, UnknownSymbolError
 from app.db.models.core import Symbol
 from app.services.symbol import SymbolService
 
@@ -44,22 +40,6 @@ def test_get_tradable_symbol_unknown(service: SymbolService, mock_repo: MagicMoc
     assert exc.value.code == "UNKNOWN_SYMBOL"
     assert exc.value.status_code == 404
     assert exc.value.details == {"symbol": "9998"}
-
-
-def test_get_tradable_symbol_unsupported_instrument(service: SymbolService, mock_repo: MagicMock) -> None:
-    mock_symbol = Symbol(
-        symbol="8888",
-        instrument_type="future",
-        tradable_status="tradable",
-    )
-    mock_repo.find_by_symbol.return_value = mock_symbol
-
-    with pytest.raises(UnsupportedInstrumentError) as exc:
-        service.get_tradable_symbol("8888")
-
-    assert exc.value.code == "UNSUPPORTED_INSTRUMENT"
-    assert exc.value.status_code == 422
-    assert exc.value.details == {"instrument_type": "future"}
 
 
 def test_get_tradable_symbol_not_tradable(service: SymbolService, mock_repo: MagicMock) -> None:
