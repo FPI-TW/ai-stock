@@ -11,7 +11,7 @@ class IntentCreateRequest(BaseModel):
 
 class IntentResponseData(BaseModel):
     symbol: str
-    side: str
+    side: Literal["buy", "sell"]
     quantity: int
     status: str = "pending"
 
