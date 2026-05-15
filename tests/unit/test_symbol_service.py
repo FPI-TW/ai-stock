@@ -2,8 +2,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.api.symbol_errors import SymbolNotTradableError, UnknownSymbolError
 from app.db.models.core import Symbol
+from app.domain.symbol_errors import SymbolNotTradableError, UnknownSymbolError
 from app.services.symbol import SymbolService
 
 
@@ -37,9 +37,7 @@ def test_get_tradable_symbol_unknown(service: SymbolService, mock_repo: MagicMoc
     with pytest.raises(UnknownSymbolError) as exc:
         service.get_tradable_symbol("9998")
 
-    assert exc.value.code == "UNKNOWN_SYMBOL"
-    assert exc.value.status_code == 404
-    assert exc.value.details == {"symbol": "9998"}
+    assert exc.value.symbol == "9998"
 
 
 def test_get_tradable_symbol_not_tradable(service: SymbolService, mock_repo: MagicMock) -> None:
@@ -53,9 +51,8 @@ def test_get_tradable_symbol_not_tradable(service: SymbolService, mock_repo: Mag
     with pytest.raises(SymbolNotTradableError) as exc:
         service.get_tradable_symbol("9999")
 
-    assert exc.value.code == "SYMBOL_NOT_TRADABLE"
-    assert exc.value.status_code == 422
-    assert exc.value.details == {"symbol": "9999", "tradable_status": "halted"}
+    assert exc.value.symbol == "9999"
+    assert exc.value.tradable_status == "halted"
 
 
 def test_find_by_symbol_unknown(service: SymbolService, mock_repo: MagicMock) -> None:

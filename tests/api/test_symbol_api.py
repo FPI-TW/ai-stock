@@ -5,8 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.symbol_deps import get_symbol_service
-from app.api.symbol_errors import UnknownSymbolError
 from app.db.models.core import Symbol
+from app.domain.symbol_errors import UnknownSymbolError
 from app.symbol_main import create_symbol_app
 
 

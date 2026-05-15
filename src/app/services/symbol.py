@@ -1,5 +1,5 @@
-from app.api.symbol_errors import SymbolNotTradableError, UnknownSymbolError
 from app.db.models.core import Symbol
+from app.domain.symbol_errors import SymbolNotTradableError, UnknownSymbolError
 from app.repositories.symbol_repository import SymbolRepository
 
 TRADABLE = "tradable"
