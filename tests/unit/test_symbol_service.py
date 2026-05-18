@@ -55,11 +55,11 @@ def test_get_tradable_symbol_not_tradable(service: SymbolService, mock_repo: Mag
     assert exc.value.tradable_status == "halted"
 
 
-def test_find_by_symbol_unknown(service: SymbolService, mock_repo: MagicMock) -> None:
+def test_get_by_symbol_unknown(service: SymbolService, mock_repo: MagicMock) -> None:
     mock_repo.find_by_symbol.return_value = None
 
     with pytest.raises(UnknownSymbolError):
-        service.find_by_symbol("0000")
+        service.get_by_symbol("0000")
 
 
 def test_symbol_string_type_preserved(service: SymbolService, mock_repo: MagicMock) -> None:

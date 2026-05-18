@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.api.deps import get_database_health_checker
 from app.core.config import get_settings
-from app.db.session import get_engine
+from app.db.session import get_engine, get_session_factory
 from app.main import create_app
 
 
@@ -20,9 +20,11 @@ def clear_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
         monkeypatch.delenv(env_name, raising=False)
     get_settings.cache_clear()
     get_engine.cache_clear()
+    get_session_factory.cache_clear()
     yield
     get_settings.cache_clear()
     get_engine.cache_clear()
+    get_session_factory.cache_clear()
 
 
 @pytest.fixture
