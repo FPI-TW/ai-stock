@@ -3,13 +3,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
 
-from app.api.deps import get_database_health_checker
+from app.api.deps import SettingsDep, get_database_health_checker
 from app.api.errors import ApiError, ErrorCode
-from app.core.config import Settings, get_settings
 
 router = APIRouter()
 
-SettingsDep = Annotated[Settings, Depends(get_settings)]
 DatabaseHealthCheckerDep = Annotated[Callable[[], bool], Depends(get_database_health_checker)]
 
 

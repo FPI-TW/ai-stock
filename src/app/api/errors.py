@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
 from app.domain.symbol_errors import SymbolError, SymbolNotTradableError, UnknownSymbolError
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,10 @@ class ErrorCode(StrEnum):
     DATABASE_UNAVAILABLE = "DATABASE_UNAVAILABLE"
     UNKNOWN_SYMBOL = "UNKNOWN_SYMBOL"
     SYMBOL_NOT_TRADABLE = "SYMBOL_NOT_TRADABLE"
+    INVALID_PRICE = "INVALID_PRICE"
+    INVALID_TICK_SIZE = "INVALID_TICK_SIZE"
+    INVALID_AMOUNT = "INVALID_AMOUNT"
+    INVALID_TYPE = "INVALID_TYPE"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -26,6 +31,10 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.DATABASE_UNAVAILABLE: "資料庫暫時無法使用",
     ErrorCode.UNKNOWN_SYMBOL: "找不到標的代號",
     ErrorCode.SYMBOL_NOT_TRADABLE: "標的目前不可交易",
+    ErrorCode.INVALID_PRICE: "價格格式不合法",
+    ErrorCode.INVALID_TICK_SIZE: "價格不符合升降單位規定",
+    ErrorCode.INVALID_AMOUNT: "數量不合法",
+    ErrorCode.INVALID_TYPE: "證券類型不合法",
 }
 
 
@@ -105,11 +114,52 @@ def register_exception_handlers(app: FastAPI) -> None:
             code=ErrorCode.INTERNAL_ERROR,
         )
 
+    # InvalidTickSizeError 必須在 InvalidPriceError 之前註冊（子類別優先）
+    @app.exception_handler(InvalidTickSizeError)
+    async def invalid_tick_size_handler(request: Request, exc: InvalidTickSizeError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            code=ErrorCode.INVALID_TICK_SIZE,
+            details={
+                "value": str(exc.value),
+                "nearest_lower": str(exc.nearest_lower),
+                "nearest_upper": str(exc.nearest_upper),
+            },
+        )
+
+    @app.exception_handler(InvalidPriceError)
+    async def invalid_price_handler(request: Request, exc: InvalidPriceError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            code=ErrorCode.INVALID_PRICE,
+            details={"value": str(exc.value)},
+        )
+
+    @app.exception_handler(InvalidAmountError)
+    async def invalid_amount_handler(request: Request, exc: InvalidAmountError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            code=ErrorCode.INVALID_AMOUNT,
+            details={"value": str(exc.value)},
+        )
+
+    @app.exception_handler(InvalidTypeError)
+    async def invalid_type_handler(request: Request, exc: InvalidTypeError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            code=ErrorCode.INVALID_TYPE,
+            details={"value": str(exc.value)},
+        )
+
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         return build_error_response(
             request=request,
-            status_code=422,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.VALIDATION_ERROR,
             details={"errors": exc.errors()},
         )
@@ -134,7 +184,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
         return build_error_response(
             request=request,
-            status_code=500,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             code=ErrorCode.INTERNAL_ERROR,
             details={},
         )
