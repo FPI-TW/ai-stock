@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Query
 
-from app.api.symbol_deps import SymbolServiceDep
+from app.api.deps import SymbolServiceDep
 from app.schemas.symbol import SingleSymbolResponse, SymbolListResponse, SymbolResponse
 
 router = APIRouter()
@@ -22,5 +22,5 @@ def get_symbol(
     symbol: str,
 ) -> SingleSymbolResponse:
     # 只做存在性查詢；tradable 驗證由 create intent 流程負責。
-    symbol_obj = service.find_by_symbol(symbol)
+    symbol_obj = service.get_by_symbol(symbol)
     return SingleSymbolResponse(data=SymbolResponse.model_validate(symbol_obj))

@@ -4,6 +4,12 @@ from sqlalchemy.orm import Session
 from app.db.models.core import Symbol
 
 MAX_SEARCH_LIMIT = 50
+LIKE_ESCAPE_CHAR = "\\"
+
+
+def escape_like_pattern(value: str) -> str:
+    """轉義 LIKE wildcards（\\、%、_），需配合 escape='\\' 使用。"""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 class SymbolRepository:
@@ -18,11 +24,11 @@ class SymbolRepository:
         effective_limit = min(limit, MAX_SEARCH_LIMIT)
         stmt = select(Symbol)
         if q:
-            escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            escaped = escape_like_pattern(q)
             stmt = stmt.where(
                 or_(
-                    Symbol.symbol.like(f"{escaped}%", escape="\\"),
-                    Symbol.display_name.contains(escaped, escape="\\"),
+                    Symbol.symbol.like(f"{escaped}%", escape=LIKE_ESCAPE_CHAR),
+                    Symbol.display_name.contains(escaped, escape=LIKE_ESCAPE_CHAR),
                 )
             )
         return list(self.db.execute(stmt.limit(effective_limit)).scalars().all())

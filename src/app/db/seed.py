@@ -12,12 +12,12 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.db.models.core import Symbol
-from app.db.symbol_session import get_session_factory
+from app.db.session import get_session_factory
 
 logger = logging.getLogger(__name__)
 
 
-SYMBOL_SEED: list[dict[str, Any]] = [
+PRODUCTION_SYMBOL_SEED: list[dict[str, Any]] = [
     {
         "symbol": "2330",
         "display_name": "台積電",
@@ -46,6 +46,11 @@ SYMBOL_SEED: list[dict[str, Any]] = [
         "instrument_type": "etf",
         "tradable_status": "tradable",
     },
+]
+
+# 測試專用標的：用來驗證 halted / unsupported tradable_status 在 service / API
+# 層的拒絕行為。V1 importer 上線後應從 seed 移除，改放到 test fixture。
+TEST_FIXTURE_SYMBOL_SEED: list[dict[str, Any]] = [
     {
         "symbol": "9999",
         "display_name": "測試停牌股票",
@@ -61,6 +66,8 @@ SYMBOL_SEED: list[dict[str, Any]] = [
         "tradable_status": "unsupported",
     },
 ]
+
+SYMBOL_SEED: list[dict[str, Any]] = PRODUCTION_SYMBOL_SEED + TEST_FIXTURE_SYMBOL_SEED
 
 
 def seed_symbols(db: Session) -> None:

@@ -2,10 +2,12 @@ import logging
 from enum import StrEnum
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.domain.symbol_errors import SymbolError, SymbolNotTradableError, UnknownSymbolError
 
 logger = logging.getLogger(__name__)
 
@@ -14,12 +16,16 @@ class ErrorCode(StrEnum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
     VALIDATION_ERROR = "VALIDATION_ERROR"
     DATABASE_UNAVAILABLE = "DATABASE_UNAVAILABLE"
+    UNKNOWN_SYMBOL = "UNKNOWN_SYMBOL"
+    SYMBOL_NOT_TRADABLE = "SYMBOL_NOT_TRADABLE"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INTERNAL_ERROR: "發生未預期錯誤",
     ErrorCode.VALIDATION_ERROR: "請求資料不合法",
     ErrorCode.DATABASE_UNAVAILABLE: "資料庫暫時無法使用",
+    ErrorCode.UNKNOWN_SYMBOL: "找不到標的代號",
+    ErrorCode.SYMBOL_NOT_TRADABLE: "標的目前不可交易",
 }
 
 
@@ -75,6 +81,28 @@ def register_exception_handlers(app: FastAPI) -> None:
             code=exc.code,
             message=exc.message,
             details=exc.details,
+        )
+
+    @app.exception_handler(SymbolError)
+    async def symbol_error_handler(request: Request, exc: SymbolError) -> JSONResponse:
+        if isinstance(exc, UnknownSymbolError):
+            return build_error_response(
+                request=request,
+                status_code=status.HTTP_404_NOT_FOUND,
+                code=ErrorCode.UNKNOWN_SYMBOL,
+                details={"symbol": exc.symbol},
+            )
+        if isinstance(exc, SymbolNotTradableError):
+            return build_error_response(
+                request=request,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                code=ErrorCode.SYMBOL_NOT_TRADABLE,
+                details={"symbol": exc.symbol, "tradable_status": exc.tradable_status},
+            )
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code=ErrorCode.INTERNAL_ERROR,
         )
 
     @app.exception_handler(RequestValidationError)
