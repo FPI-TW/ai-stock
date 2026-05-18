@@ -8,6 +8,13 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
+from app.domain.quote_errors import (
+    QuoteCrossedError,
+    QuoteInsufficientPricesError,
+    QuoteNonPositivePriceError,
+    QuoteOutOfSessionError,
+    QuoteValidationError,
+)
 from app.domain.symbol_errors import SymbolError, SymbolNotTradableError, UnknownSymbolError
 
 logger = logging.getLogger(__name__)
@@ -23,6 +30,10 @@ class ErrorCode(StrEnum):
     INVALID_TICK_SIZE = "INVALID_TICK_SIZE"
     INVALID_AMOUNT = "INVALID_AMOUNT"
     INVALID_TYPE = "INVALID_TYPE"
+    QUOTE_OUT_OF_SESSION = "QUOTE_OUT_OF_SESSION"
+    QUOTE_CROSSED = "QUOTE_CROSSED"
+    QUOTE_NON_POSITIVE_PRICE = "QUOTE_NON_POSITIVE_PRICE"
+    QUOTE_INSUFFICIENT_PRICES = "QUOTE_INSUFFICIENT_PRICES"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -35,6 +46,10 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INVALID_TICK_SIZE: "價格不符合升降單位規定",
     ErrorCode.INVALID_AMOUNT: "數量不合法",
     ErrorCode.INVALID_TYPE: "證券類型不合法",
+    ErrorCode.QUOTE_OUT_OF_SESSION: "Quote 時間不在交易時段內",
+    ErrorCode.QUOTE_CROSSED: "Quote bid 大於 ask",
+    ErrorCode.QUOTE_NON_POSITIVE_PRICE: "Quote 價格必須大於 0",
+    ErrorCode.QUOTE_INSUFFICIENT_PRICES: "Quote 需至少提供 bid/ask/last 其中一項",
 }
 
 
@@ -153,6 +168,42 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.INVALID_TYPE,
             details={"value": str(exc.value)},
+        )
+
+    @app.exception_handler(QuoteValidationError)
+    async def quote_validation_handler(request: Request, exc: QuoteValidationError) -> JSONResponse:
+        if isinstance(exc, QuoteOutOfSessionError):
+            return build_error_response(
+                request=request,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                code=ErrorCode.QUOTE_OUT_OF_SESSION,
+                details={"quote_time": exc.quote_time.isoformat()},
+            )
+        if isinstance(exc, QuoteCrossedError):
+            return build_error_response(
+                request=request,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                code=ErrorCode.QUOTE_CROSSED,
+                details={"bid": str(exc.bid), "ask": str(exc.ask)},
+            )
+        if isinstance(exc, QuoteNonPositivePriceError):
+            return build_error_response(
+                request=request,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                code=ErrorCode.QUOTE_NON_POSITIVE_PRICE,
+                details={"field": exc.field, "value": str(exc.value)},
+            )
+        if isinstance(exc, QuoteInsufficientPricesError):
+            return build_error_response(
+                request=request,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                code=ErrorCode.QUOTE_INSUFFICIENT_PRICES,
+                details={"symbol": exc.symbol},
+            )
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code=ErrorCode.INTERNAL_ERROR,
         )
 
     @app.exception_handler(RequestValidationError)

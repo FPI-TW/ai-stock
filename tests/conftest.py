@@ -16,6 +16,7 @@ from app.api.deps import get_database_health_checker  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.db.session import get_engine, get_session_factory  # noqa: E402
 from app.main import create_app  # noqa: E402
+from app.services.quote import get_dev_quote_store  # noqa: E402
 
 
 class ClientFactory(Protocol):
@@ -31,10 +32,12 @@ def clear_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()
+    get_dev_quote_store.cache_clear()
     yield
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()
+    get_dev_quote_store.cache_clear()
 
 
 @pytest.fixture

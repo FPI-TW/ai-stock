@@ -17,6 +17,11 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(symbols_router, prefix="/symbols", tags=["symbols"])
     app.include_router(intents_router, prefix="/intents", tags=["intents"])
+    if settings.local_mode:
+        # Lazy import keeps dev router out of the dependency graph in non-local builds.
+        from app.api.routes.dev_quotes import router as dev_quotes_router
+
+        app.include_router(dev_quotes_router, prefix="/dev", tags=["dev"])
     return app
 
 
