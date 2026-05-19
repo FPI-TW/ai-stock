@@ -171,6 +171,10 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(DuplicateIntentError)
     async def duplicate_intent_handler(request: Request, exc: DuplicateIntentError) -> JSONResponse:
+        logger.warning(
+            "Duplicate intent rejected",
+            extra={"request_id": get_request_id(request), "symbol": exc.symbol, "strategy": exc.strategy},
+        )
         return build_error_response(
             request=request,
             status_code=status.HTTP_409_CONFLICT,
@@ -180,6 +184,10 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(IntentNotFoundError)
     async def intent_not_found_handler(request: Request, exc: IntentNotFoundError) -> JSONResponse:
+        logger.warning(
+            "Intent not found",
+            extra={"request_id": get_request_id(request), "intent_id": str(exc.intent_id)},
+        )
         return build_error_response(
             request=request,
             status_code=status.HTTP_404_NOT_FOUND,
@@ -188,6 +196,10 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(InvalidCursorError)
     async def invalid_cursor_handler(request: Request, exc: InvalidCursorError) -> JSONResponse:
+        logger.warning(
+            "Invalid or expired cursor",
+            extra={"request_id": get_request_id(request), "cursor_id": str(exc.cursor_id)},
+        )
         return build_error_response(
             request=request,
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -196,6 +208,14 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(CancelNotAllowedError)
     async def cancel_not_allowed_handler(request: Request, exc: CancelNotAllowedError) -> JSONResponse:
+        logger.warning(
+            "Cancel not allowed",
+            extra={
+                "request_id": get_request_id(request),
+                "intent_id": str(exc.intent_id),
+                "current_status": exc.current_status,
+            },
+        )
         return build_error_response(
             request=request,
             status_code=status.HTTP_409_CONFLICT,
