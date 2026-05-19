@@ -4,3 +4,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.py[cod]
+
+# Local-only artefacts from dev console manual smoke / playwright captures.
+.playwright-mcp/
+*.png
+

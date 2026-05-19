@@ -19,9 +19,23 @@ def create_app() -> FastAPI:
     app.include_router(intents_router, prefix="/intents", tags=["intents"])
     if settings.local_mode:
         # Lazy import keeps dev router out of the dependency graph in non-local builds.
+        from fastapi.middleware.cors import CORSMiddleware
+
         from app.api.routes.dev_quotes import router as dev_quotes_router
 
         app.include_router(dev_quotes_router, prefix="/dev", tags=["dev"])
+
+        # CORS：dev console 從 standalone repo（任意 localhost port）跨 origin 呼叫。
+        # 僅 LOCAL_MODE 開啟；正式環境不掛此 middleware。
+        # expose_headers 確保 dev console 能讀 X-Request-Id 來對應後端 log。
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=[settings.request_id_header],
+        )
     return app
 
 
