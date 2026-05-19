@@ -294,3 +294,12 @@ class TestUpsertDevQuoteLocalModeOff:
         client = TestClient(app)
         response = client.post("/dev/quotes", json=VALID_QUOTE_PAYLOAD)
         assert response.status_code == 404
+
+    def test_get_endpoint_not_registered_when_local_mode_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LOCAL_MODE", "false")
+        monkeypatch.delenv("LOCAL_USER_ID", raising=False)
+        get_settings.cache_clear()
+        app = create_app()
+        client = TestClient(app)
+        response = client.get("/dev/quotes/2330")
+        assert response.status_code == 404
