@@ -1,8 +1,8 @@
-from datetime import UTC, date, datetime
+from datetime import date
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -77,7 +77,6 @@ class IntentRepository:
         if duplicate is not None:
             raise DuplicateIntentError(owner_user_id, symbol, strategy)
 
-        now = datetime.now(tz=UTC)
         row = TradeIntent(
             id=uuid4(),
             owner_user_id=owner_user_id,
@@ -91,8 +90,6 @@ class IntentRepository:
             trading_date=trading_date,
             time_in_force=time_in_force,
             status=status,
-            created_at=now,
-            updated_at=now,
         )
         self._db.add(row)
         try:
@@ -182,10 +179,12 @@ class IntentRepository:
         if row.status not in CANCELLABLE_STATUSES:
             raise CancelNotAllowedError(intent_id, row.status)
 
-        now = datetime.now(tz=UTC)
-        row.status = "cancelled"
-        row.updated_at = now
-        row.cancelled_at = now
+        self._db.execute(
+            update(TradeIntent)
+            .where(TradeIntent.id == intent_id)
+            .values(status="cancelled", updated_at=func.now(), cancelled_at=func.now()),
+            execution_options={"synchronize_session": False},
+        )
         self._db.commit()
         self._db.refresh(row)
         return _to_domain(row)
