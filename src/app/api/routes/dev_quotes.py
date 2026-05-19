@@ -21,6 +21,12 @@ router = APIRouter()
     "/quotes",
     response_model=DevQuoteUpsertResponse,
     status_code=status.HTTP_200_OK,
+    summary="推送開發用 quote（local mode 限定）",
+    description=(
+        "本地與整合測試用 endpoint，將 quote 寫入 in-memory store。"
+        "Validation 失敗時不會覆蓋既有 snapshot。"
+        "LOCAL_MODE=false 時 router 不會被掛載，呼叫會 404。"
+    ),
 )
 def upsert_dev_quote(
     service: DevQuoteIngestServiceDep,

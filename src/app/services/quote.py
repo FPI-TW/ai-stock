@@ -21,6 +21,21 @@ from app.services.symbol import SymbolService
 
 
 class QuoteProvider(Protocol):
+    """Read-side contract for the quote layer.
+
+    Implemented by DevelopmentQuoteProvider for V0.5 and by a future licensed
+    provider. The BE-V0.5-09 evaluator depends on this Protocol, not on any
+    concrete adapter, so swapping the dev provider for a real one stays a
+    constructor change.
+
+    Contract:
+      - Returns one QuoteSnapshot per symbol that has a stored snapshot.
+      - Missing symbols are silently skipped (not raised); callers match
+        results back by `QuoteSnapshot.symbol`.
+      - Result ordering is not guaranteed.
+      - Returns an empty list when `symbols` is empty.
+    """
+
     def get_quotes(self, symbols: list[str]) -> list[QuoteSnapshot]: ...
 
 
@@ -49,6 +64,13 @@ class InMemoryQuoteStore:
 
 
 class DevelopmentQuoteProvider:
+    """QuoteProvider implementation backed by an in-memory store.
+
+    Server-set `received_at` is generated through an injectable clock so tests
+    can pin it to a fixed instant. `build_snapshot` and `store` are split so
+    the ingest orchestrator can validate before persisting.
+    """
+
     def __init__(
         self,
         store: InMemoryQuoteStore,
