@@ -141,7 +141,12 @@ class IntentRepository:
                 cursor_id = None
 
             if cursor_id is not None:
-                anchor = self._db.execute(select(TradeIntent).where(TradeIntent.id == cursor_id)).scalar_one_or_none()
+                anchor = self._db.execute(
+                    select(TradeIntent).where(
+                        TradeIntent.id == cursor_id,
+                        TradeIntent.owner_user_id == owner_user_id,
+                    )
+                ).scalar_one_or_none()
                 if anchor is not None:
                     if is_terminal_only:
                         stmt = stmt.where(
