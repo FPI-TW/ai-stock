@@ -72,7 +72,7 @@ class QuoteValidator:
             ("ask", snapshot.ask_price),
             ("last", snapshot.last_price),
         ):
-            if value is not None and value <= 0:
+            if value is not None and (not value.is_finite() or value <= 0):
                 raise QuoteNonPositivePriceError(field=field, value=value)
 
         if (

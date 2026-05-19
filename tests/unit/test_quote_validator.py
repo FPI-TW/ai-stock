@@ -99,6 +99,7 @@ class TestCrossedQuote:
             validator.validate(snap)
         assert exc_info.value.bid == Decimal("601.00")
         assert exc_info.value.ask == Decimal("600.00")
+        assert str(exc_info.value) == "Quote is crossed: bid 601.00 is greater than ask 600.00"
 
 
 class TestNonPositivePrice:
@@ -108,7 +109,8 @@ class TestNonPositivePrice:
         with pytest.raises(QuoteNonPositivePriceError) as exc_info:
             validator.validate(snap)
         assert exc_info.value.field == "bid"
-        assert exc_info.value.value == value
+        assert str(exc_info.value.value) == str(value)
+        assert str(exc_info.value) == f"Quote bid price must be finite and greater than 0: {value}"
 
     @pytest.mark.parametrize("value", [Decimal("0"), Decimal("-0.01")])
     def test_non_positive_ask_rejected(self, validator: QuoteValidator, value: Decimal) -> None:
@@ -117,6 +119,7 @@ class TestNonPositivePrice:
             validator.validate(snap)
         assert exc_info.value.field == "ask"
         assert exc_info.value.value == value
+        assert str(exc_info.value) == f"Quote ask price must be finite and greater than 0: {value}"
 
     @pytest.mark.parametrize("value", [Decimal("0"), Decimal("-0.01")])
     def test_non_positive_last_rejected(self, validator: QuoteValidator, value: Decimal) -> None:
@@ -125,6 +128,18 @@ class TestNonPositivePrice:
             validator.validate(snap)
         assert exc_info.value.field == "last"
         assert exc_info.value.value == value
+        assert str(exc_info.value) == f"Quote last price must be finite and greater than 0: {value}"
+
+    @pytest.mark.parametrize("value", [Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")])
+    def test_non_finite_price_rejected_as_quote_validation_error(
+        self, validator: QuoteValidator, value: Decimal
+    ) -> None:
+        snap = make_snapshot(bid_price=value)
+        with pytest.raises(QuoteNonPositivePriceError) as exc_info:
+            validator.validate(snap)
+        assert exc_info.value.field == "bid"
+        assert str(exc_info.value.value) == str(value)
+        assert str(exc_info.value) == f"Quote bid price must be finite and greater than 0: {value}"
 
 
 class TestOutOfSession:
@@ -133,6 +148,7 @@ class TestOutOfSession:
         with pytest.raises(QuoteOutOfSessionError) as exc_info:
             validator.validate(snap)
         assert exc_info.value.quote_time == MON_859
+        assert str(exc_info.value) == f"Quote time {MON_859.isoformat()} is outside regular session"
 
     def test_at_close_excluded(self, validator: QuoteValidator) -> None:
         # session window is [09:00, 13:30); 13:30:00 is excluded.
@@ -152,6 +168,7 @@ class TestInsufficientPrices:
         with pytest.raises(QuoteInsufficientPricesError) as exc_info:
             validator.validate(snap)
         assert exc_info.value.symbol == "2330"
+        assert str(exc_info.value) == "Quote for 2330 must include at least one of bid, ask, or last price"
 
 
 class TestNaiveDatetime:
