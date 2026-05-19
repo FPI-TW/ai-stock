@@ -184,6 +184,27 @@ def test_list_terminal_keyset_pagination(repo: IntentRepository) -> None:
 
 
 @pytest.mark.integration
+def test_list_mixed_statuses_uses_active_sort_order(repo: IntentRepository) -> None:
+    """?status=active&status=cancelled → is_terminal_only=False → sorted by created_at DESC.
+
+    If terminal sort (updated_at DESC) were used instead, the cancelled intent (i1, cancelled
+    last) would appear first. The active sort (created_at DESC) puts i2 (created later) first,
+    making the two paths observably different.
+    """
+    owner = uuid4()
+    i1 = _create(repo, owner_user_id=owner, target_price="100.0000")
+    i2 = _create(repo, owner_user_id=owner, target_price="200.0000")
+    repo.cancel(i1.id, owner)  # i1.updated_at is now the most recent
+
+    results, _ = repo.list_by_owner(owner, statuses=["active", "cancelled"], cursor=None, page_size=10)
+
+    assert {r.id for r in results} == {i1.id, i2.id}
+    # active sort: created_at DESC → i2 (created later) first
+    assert results[0].id == i2.id
+    assert results[1].id == i1.id
+
+
+@pytest.mark.integration
 def test_cursor_from_other_owner_raises_invalid_cursor(repo: IntentRepository) -> None:
     owner_a = uuid4()
     owner_b = uuid4()
