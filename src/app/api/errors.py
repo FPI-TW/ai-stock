@@ -9,7 +9,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
 from app.domain.symbol_errors import SymbolError, SymbolNotTradableError, UnknownSymbolError
-from app.domain.trade_intent import CancelNotAllowedError, DuplicateIntentError, ForbiddenError, IntentNotFoundError
+from app.domain.trade_intent import (
+    CancelNotAllowedError,
+    DuplicateIntentError,
+    ForbiddenError,
+    IntentNotFoundError,
+    InvalidCursorError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +34,7 @@ class ErrorCode(StrEnum):
     FORBIDDEN = "FORBIDDEN"
     NOT_FOUND = "NOT_FOUND"
     CANCEL_NOT_ALLOWED = "CANCEL_NOT_ALLOWED"
+    INVALID_CURSOR = "INVALID_CURSOR"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -44,6 +51,7 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.FORBIDDEN: "無權限存取此資源",
     ErrorCode.NOT_FOUND: "找不到此資源",
     ErrorCode.CANCEL_NOT_ALLOWED: "此委託狀態不允許取消",
+    ErrorCode.INVALID_CURSOR: "Cursor 已失效或不存在",
 }
 
 
@@ -187,6 +195,14 @@ def register_exception_handlers(app: FastAPI) -> None:
             request=request,
             status_code=status.HTTP_404_NOT_FOUND,
             code=ErrorCode.NOT_FOUND,
+        )
+
+    @app.exception_handler(InvalidCursorError)
+    async def invalid_cursor_handler(request: Request, exc: InvalidCursorError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code=ErrorCode.INVALID_CURSOR,
         )
 
     @app.exception_handler(CancelNotAllowedError)

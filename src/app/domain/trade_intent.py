@@ -39,6 +39,12 @@ class CancelNotAllowedError(IntentError):
         super().__init__(f"Cannot cancel intent {intent_id!r} with status {current_status!r}")
 
 
+class InvalidCursorError(IntentError):
+    def __init__(self, cursor_id: UUID) -> None:
+        self.cursor_id = cursor_id
+        super().__init__(f"Cursor not found or expired: {cursor_id}")
+
+
 @dataclass(frozen=True)
 class TradeIntentData:
     id: UUID

@@ -13,6 +13,7 @@ from app.domain.trade_intent import (
     CancelNotAllowedError,
     DuplicateIntentError,
     IntentNotFoundError,
+    InvalidCursorError,
     TradeIntentData,
 )
 
@@ -135,41 +136,37 @@ class IntentRepository:
             )
 
         if cursor:
-            try:
-                cursor_id = UUID(cursor)
-            except ValueError:
-                cursor_id = None
-
-            if cursor_id is not None:
-                anchor = self._db.execute(
-                    select(TradeIntent).where(
-                        TradeIntent.id == cursor_id,
-                        TradeIntent.owner_user_id == owner_user_id,
+            cursor_id = UUID(cursor)  # format already validated by route layer
+            anchor = self._db.execute(
+                select(TradeIntent).where(
+                    TradeIntent.id == cursor_id,
+                    TradeIntent.owner_user_id == owner_user_id,
+                )
+            ).scalar_one_or_none()
+            if anchor is None:
+                raise InvalidCursorError(cursor_id)
+            if is_terminal_only:
+                stmt = stmt.where(
+                    or_(
+                        TradeIntent.updated_at < anchor.updated_at,
+                        and_(TradeIntent.updated_at == anchor.updated_at, TradeIntent.id > anchor.id),
                     )
-                ).scalar_one_or_none()
-                if anchor is not None:
-                    if is_terminal_only:
-                        stmt = stmt.where(
-                            or_(
-                                TradeIntent.updated_at < anchor.updated_at,
-                                and_(TradeIntent.updated_at == anchor.updated_at, TradeIntent.id > anchor.id),
-                            )
-                        )
-                    else:
-                        stmt = stmt.where(
-                            or_(
-                                TradeIntent.trading_date > anchor.trading_date,
-                                and_(
-                                    TradeIntent.trading_date == anchor.trading_date,
-                                    TradeIntent.created_at < anchor.created_at,
-                                ),
-                                and_(
-                                    TradeIntent.trading_date == anchor.trading_date,
-                                    TradeIntent.created_at == anchor.created_at,
-                                    TradeIntent.id > anchor.id,
-                                ),
-                            )
-                        )
+                )
+            else:
+                stmt = stmt.where(
+                    or_(
+                        TradeIntent.trading_date > anchor.trading_date,
+                        and_(
+                            TradeIntent.trading_date == anchor.trading_date,
+                            TradeIntent.created_at < anchor.created_at,
+                        ),
+                        and_(
+                            TradeIntent.trading_date == anchor.trading_date,
+                            TradeIntent.created_at == anchor.created_at,
+                            TradeIntent.id > anchor.id,
+                        ),
+                    )
+                )
 
         rows = list(self._db.execute(stmt.limit(page_size + 1)).scalars().all())
         has_more = len(rows) > page_size

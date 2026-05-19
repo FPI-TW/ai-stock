@@ -213,11 +213,23 @@ def test_list_intents_invalid_status_returns_422(api_client: TestClient) -> None
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
-def test_list_intents_invalid_cursor_returns_400(api_client: TestClient) -> None:
+def test_list_intents_invalid_cursor_format_returns_400(api_client: TestClient) -> None:
     response = api_client.get("/trade-intents?cursor=not-a-uuid")
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_list_intents_expired_cursor_returns_400(api_client: TestClient, mock_repo: MagicMock) -> None:
+    from app.domain.trade_intent import InvalidCursorError
+
+    stale_id = uuid4()
+    mock_repo.list_by_owner.side_effect = InvalidCursorError(stale_id)
+
+    response = api_client.get(f"/trade-intents?cursor={stale_id}")
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json()["error"]["code"] == "INVALID_CURSOR"
 
 
 # ------------------------------------------------------------------
