@@ -227,6 +227,63 @@ class TestUpsertDevQuoteStrictPriceTypes:
         assert get_dev_quote_store().get("2330") is None
 
 
+class TestGetDevQuote:
+    def test_get_dev_quote_returns_404_when_symbol_absent(
+        self, client: TestClient, mock_symbol_service: MagicMock
+    ) -> None:
+        response = client.get("/dev/quotes/UNKNOWN")
+
+        assert response.status_code == 404
+        body = response.json()
+        assert body["error"]["code"] == "QUOTE_NOT_FOUND"
+        assert "requestId" in body["error"]
+
+    def test_get_dev_quote_returns_snapshot_after_upsert(
+        self, client: TestClient, mock_symbol_service: MagicMock
+    ) -> None:
+        mock_symbol_service.get_tradable_symbol.return_value = MagicMock()
+        upsert = client.post(
+            "/dev/quotes",
+            json={
+                "symbol": "2330",
+                "bidPrice": "590.0000",
+                "askPrice": "591.0000",
+                "lastPrice": "590.5000",
+                "quoteTime": "2026-05-19T02:14:33+00:00",
+            },
+        )
+        assert upsert.status_code == 200
+
+        response = client.get("/dev/quotes/2330")
+
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["symbol"] == "2330"
+        assert data["bidPrice"] == "590.0000"
+        assert data["askPrice"] == "591.0000"
+        assert data["lastPrice"] == "590.5000"
+        # Pydantic AwareDatetime 序列化 UTC 可能輸出 "Z" 或 "+00:00"，兩者語意相同
+        assert data["quoteTime"] in ("2026-05-19T02:14:33+00:00", "2026-05-19T02:14:33Z")
+
+    def test_get_dev_quote_serializes_decimal_as_string(
+        self, client: TestClient, mock_symbol_service: MagicMock
+    ) -> None:
+        mock_symbol_service.get_tradable_symbol.return_value = MagicMock()
+        client.post(
+            "/dev/quotes",
+            json={
+                "symbol": "2330",
+                "lastPrice": "590.5",
+                "quoteTime": "2026-05-19T02:14:33+00:00",
+            },
+        )
+
+        response = client.get("/dev/quotes/2330")
+
+        data = response.json()["data"]
+        assert isinstance(data["lastPrice"], str), f"lastPrice must be string, got {type(data['lastPrice']).__name__}"
+
+
 class TestUpsertDevQuoteLocalModeOff:
     def test_endpoint_not_registered_when_local_mode_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("LOCAL_MODE", "false")

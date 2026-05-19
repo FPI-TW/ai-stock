@@ -31,6 +31,7 @@ class ErrorCode(StrEnum):
     INVALID_TICK_SIZE = "INVALID_TICK_SIZE"
     INVALID_AMOUNT = "INVALID_AMOUNT"
     INVALID_TYPE = "INVALID_TYPE"
+    QUOTE_NOT_FOUND = "QUOTE_NOT_FOUND"
     QUOTE_OUT_OF_SESSION = "QUOTE_OUT_OF_SESSION"
     QUOTE_CROSSED = "QUOTE_CROSSED"
     QUOTE_NON_POSITIVE_PRICE = "QUOTE_NON_POSITIVE_PRICE"
@@ -47,6 +48,7 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INVALID_TICK_SIZE: "價格不符合升降單位規定",
     ErrorCode.INVALID_AMOUNT: "數量不合法",
     ErrorCode.INVALID_TYPE: "證券類型不合法",
+    ErrorCode.QUOTE_NOT_FOUND: "找不到指定 symbol 的 quote snapshot",
     ErrorCode.QUOTE_OUT_OF_SESSION: "Quote 時間不在交易時段內",
     ErrorCode.QUOTE_CROSSED: "Quote bid 大於 ask",
     ErrorCode.QUOTE_NON_POSITIVE_PRICE: "Quote 價格必須大於 0",

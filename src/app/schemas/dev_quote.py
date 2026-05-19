@@ -1,6 +1,6 @@
-"""Request / response schema for POST /dev/quotes (BE-V0.5-08).
+"""Request / response schema for /dev/quotes endpoints (BE-V0.5-08).
 
-Endpoint is registered only when LOCAL_MODE=true. Request payload uses camelCase
+Endpoints are registered only when LOCAL_MODE=true. Request payload uses camelCase
 via Pydantic alias; extra fields are rejected. Decimal price fields require
 string input — bool / int / float are rejected to prevent silent precision loss
 or `True → Decimal(1)` coercion.
@@ -37,3 +37,17 @@ class DevQuoteUpsertResponseData(BaseModel):
 
 class DevQuoteUpsertResponse(BaseModel):
     data: DevQuoteUpsertResponseData
+
+
+class DevQuoteFetchResponseData(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    symbol: str
+    bid_price: Decimal | None = Field(default=None, serialization_alias="bidPrice")
+    ask_price: Decimal | None = Field(default=None, serialization_alias="askPrice")
+    last_price: Decimal | None = Field(default=None, serialization_alias="lastPrice")
+    quote_time: AwareDatetime = Field(serialization_alias="quoteTime")
+
+
+class DevQuoteFetchResponse(BaseModel):
+    data: DevQuoteFetchResponseData
