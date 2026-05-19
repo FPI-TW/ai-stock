@@ -177,6 +177,41 @@ def test_list_intents_invalid_status_returns_422(api_client: TestClient) -> None
 
 
 # ------------------------------------------------------------------
+# GET /trade-intents/{id}
+# ------------------------------------------------------------------
+
+
+def test_get_intent_success(api_client: TestClient, mock_repo: MagicMock) -> None:
+    mock_repo.find_by_id.return_value = _make_intent()
+
+    response = api_client.get(f"/trade-intents/{_INTENT_ID}")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["data"]["id"] == str(_INTENT_ID)
+    mock_repo.find_by_id.assert_called_once_with(_INTENT_ID, _OWNER_ID)
+
+
+def test_get_intent_not_found_returns_404(api_client: TestClient, mock_repo: MagicMock) -> None:
+    mock_repo.find_by_id.side_effect = IntentNotFoundError(_INTENT_ID)
+
+    response = api_client.get(f"/trade-intents/{_INTENT_ID}")
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_get_intent_forbidden_returns_403(api_client: TestClient, mock_repo: MagicMock) -> None:
+    from app.domain.trade_intent import ForbiddenError
+
+    mock_repo.find_by_id.side_effect = ForbiddenError(_INTENT_ID)
+
+    response = api_client.get(f"/trade-intents/{_INTENT_ID}")
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+# ------------------------------------------------------------------
 # POST /trade-intents/{id}/cancel
 # ------------------------------------------------------------------
 
