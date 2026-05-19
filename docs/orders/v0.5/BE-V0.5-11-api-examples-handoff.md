@@ -45,7 +45,10 @@ docs/api/v0.5-local-flow.md
 - V0.5 無 auth。
 - 不部署、不公開。
 - `/dev/*` endpoints 僅 local mode 可用。
-- Development quote adapter 不是正式行情功能。
+- Quote 來源為 Shioaji 即時行情訂閱（BE-V0.5-13），demo 等級最多同時訂閱 **5 檔**；超出會回 `QUOTE_SUBSCRIPTION_LIMIT_EXCEEDED`。
+- Shioaji demo 期間**可選標的固定為白名單**：`2330` / `2317` / `0050` / `00878` / `9999`（9999 為測試停牌用），其他 symbol 一律回 `SYMBOL_NOT_AVAILABLE_IN_DEMO`。白名單詳見 BE-V0.5-13；V1 licensed vendor 上線後解除。
+- Shioaji 為展示用 quote 來源，非正式行情產品；V1 才會評估換 licensed vendor。
+- 需設定 `SHIOAJI_API_KEY` / `SHIOAJI_SECRET_KEY`，本地測試可改用 `QUOTE_PROVIDER=in_memory`。
 
 ### Main Flow
 
@@ -53,13 +56,12 @@ docs/api/v0.5-local-flow.md
 
 1. Health check。
 2. Symbol lookup。
-3. Create buy alert。
-4. Set dev quote。
-5. Evaluate quotes。
-6. Get trade intent list/detail。
-7. Get notifications。
-8. Mark notification read。
-9. Cancel active alert。
+3. Create buy alert（盤中 quote 由 Shioaji 自動推送，無需手動 set quote step）。
+4. Manual evaluate（`POST /dev/evaluate-quotes`，僅 local mode；用於測試或在 in-memory provider 場景驅動 evaluator）。
+5. Get trade intent list/detail。
+6. Get notifications。
+7. Mark notification read。
+8. Cancel active alert。
 
 ### Error Examples
 
@@ -69,12 +71,17 @@ docs/api/v0.5-local-flow.md
 - `INVALID_TICK_SIZE`
 - `DUPLICATE_INTENT`
 - `QUOTE_UNAVAILABLE`
+- `QUOTE_SUBSCRIPTION_LIMIT_EXCEEDED`
+- `QUOTE_PROVIDER_UNAVAILABLE`
+- `SYMBOL_NOT_AVAILABLE_IN_DEMO`
 
 ## 驗收條件
 
-- [ ] Examples 覆蓋 create、quote update、evaluate、cancel、list、notification list/read。
-- [ ] Error envelope examples 包含 V0.5 核心 error codes。
+- [ ] Examples 覆蓋 create、manual evaluate、cancel、list、notification list/read。
+- [ ] Error envelope examples 包含 V0.5 核心 error codes（含 `QUOTE_SUBSCRIPTION_LIMIT_EXCEEDED`、`QUOTE_PROVIDER_UNAVAILABLE`）。
 - [ ] 文件清楚標示 V0.5 無 auth、不部署、不公開。
+- [ ] 文件說明 Shioaji 5 檔訂閱上限與 `QUOTE_PROVIDER` 切換方式。
+- [ ] 文件**不**出現 `POST /dev/quotes`（V0.5 不再提供本地 set quote endpoint）。
 - [ ] 前端可用 examples 跑通本地主流程。
 
 ## 測試要求
@@ -88,3 +95,4 @@ docs/api/v0.5-local-flow.md
 - 欄位命名需與實作一致，例如 `quantityLots`、`targetPrice`。
 - Price examples 用 string。
 - 不要在 handoff 文件承諾 V1 才有的 CSV/Telegram/OCO。
+- 不要把 Shioaji credentials 寫進文件，僅標記為 env var 名稱。

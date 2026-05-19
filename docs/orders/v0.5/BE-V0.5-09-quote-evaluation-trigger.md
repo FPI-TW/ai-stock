@@ -5,7 +5,7 @@
 - 類型：AFK
 - 優先序：P0
 - 預估：32h
-- 依賴：BE-V0.5-07, BE-V0.5-08
+- 依賴：BE-V0.5-07, BE-V0.5-13
 - 交付版本：V0.5
 
 ## 背景
@@ -17,10 +17,11 @@ V0.5 不做 outbox，不做 delivery retry，不做 worker scaling。這是刻�
 ## 目標
 
 - 實作 buy/sell price alert evaluation。
-- 支援 manual evaluate endpoint 或 local evaluator command。
+- 由 Shioaji quote provider（BE-V0.5-13）的 quote 更新驅動 evaluation。
+- 提供 manual evaluate endpoint / command 作為測試與 debug 入口（in-memory provider 場景必用）。
 - 實作 trigger transaction。
 - 建立 minimal notification。
-- 支援 create 時 immediate trigger。
+- 支援 create 時 immediate trigger（讀 provider 當前 snapshot）。
 
 ## 非目標
 
@@ -64,7 +65,16 @@ V0.5 不做 outbox，不做 delivery retry，不做 worker scaling。這是刻�
 - `trigger_records.trade_intent_id` unique。
 - Intent update 使用 status guard，例如 `where status = 'active'`。
 
-## Dev Evaluate API
+## Evaluation Driving
+
+Demo runtime（`QUOTE_PROVIDER=shioaji_demo`）：
+
+- Shioaji callback 收到 quote 更新後，呼叫 evaluator 評估該 symbol 的 active intents。
+- Callback 在 Shioaji 自己的 thread；evaluator 內部以 short-lived SQLAlchemy session 處理，避免跨 thread 共用 session。
+- 不需要 background worker；callback 即是觸發點。
+- Evaluator 不可 import `shioaji_demo` 任何 symbol；callback dispatch 走 base interface（見 BE-V0.5-13 模組切分）。
+
+Manual evaluate（測試 / debug 用，integration test 必用）：
 
 ### `POST /dev/evaluate-quotes`
 
@@ -89,7 +99,7 @@ Response：
 }
 ```
 
-若未傳 symbols，可評估所有 active symbols。實作可依簡單路徑，不需優化大批量。
+若未傳 symbols，可評估所有 active symbols。實作可依簡單路徑，不需優化大批量。Endpoint 使用 service 層相同的 evaluator，不複製邏輯。
 
 ## Notification Content
 
@@ -105,7 +115,8 @@ V0.5 minimal title/body：
 
 ## 驗收條件
 
-- [ ] Evaluator 可依 development quote adapter 評估 active intents。
+- [ ] Evaluator 可依 quote provider（Shioaji 或 in-memory）的 snapshot 評估 active intents。
+- [ ] Shioaji callback 觸發 evaluator，盤中真實價格可驅動 trigger。
 - [ ] `buy_price_alert` 使用 ask <= target，必要時 fallback last。
 - [ ] `sell_price_alert` 使用 bid >= target，必要時 fallback last。
 - [ ] Trigger transaction atomic 更新 intent、保存 trigger metadata、建立 notification。
@@ -114,6 +125,8 @@ V0.5 minimal title/body：
 
 ## 測試要求
 
+Integration tests 一律使用 `InMemoryQuoteProvider`（BE-V0.5-13），避免測試打 Shioaji 網路：
+
 - Integration：buy ask below target triggers。
 - Integration：sell bid above target triggers。
 - Integration：last fallback triggers and records fallback。
@@ -121,9 +134,11 @@ V0.5 minimal title/body：
 - Integration：duplicate evaluate does not create duplicate trigger/notification。
 - Integration：immediate trigger on create。
 - Integration：cancelled intent does not trigger。
+- Unit：Shioaji callback 進來後會呼叫 evaluator（以 fake callback 注入，不打網路）。
 
 ## 工程注意事項
 
 - 不要把 notification rendering 分散在 evaluator 內，可使用小型 template function。
-- 不要為 V0.5 引入 background worker 必要性；dev endpoint 或 command 可接受。
+- 不要為 V0.5 引入額外 background worker；Shioaji callback 即觸發點，dev endpoint 供測試補位。
+- Callback thread 與 request thread 共用 evaluator 時，DB session 必須各自開，不可共用。
 - V1 要升級 outbox，因此 trigger transaction 的邊界要清楚。
