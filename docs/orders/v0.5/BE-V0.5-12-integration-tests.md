@@ -41,6 +41,8 @@ V0.5 是要提供本地可展示的主流程。Integration tests 必須固定這
 - Test DB 可透過 env var 設定。
 - Tests 可重跑且互不污染。
 - 可用 transaction rollback、schema recreate 或 isolated database。
+- Quote provider 一律以 `QUOTE_PROVIDER=in_memory` 注入 `InMemoryQuoteProvider`（見 BE-V0.5-13），整合測試不得呼叫 Shioaji 真實網路或要求 Shioaji credentials。
+- 不可在測試中啟動真實 Shioaji websocket session；改以 fixture 直接寫入 in-memory snapshot。
 
 ## 必備 Test Cases
 
@@ -48,8 +50,8 @@ V0.5 是要提供本地可展示的主流程。Integration tests 必須固定這
 
 1. Seed symbol `2330`。
 2. Create `buy_price_alert` target `600.00`。
-3. Set quote ask `599.00`。
-4. Evaluate quote。
+3. 經 `InMemoryQuoteProvider` 注入 quote ask `599.00`。
+4. 呼叫 evaluator（manual evaluate endpoint 或直接 service call）。
 5. Assert intent status is `triggered`。
 6. Assert trigger record exists。
 7. Assert notification exists。
@@ -57,12 +59,12 @@ V0.5 是要提供本地可展示的主流程。Integration tests 必須固定這
 ### Sell Flow
 
 - Create `sell_price_alert` target `600.00`。
-- Set quote bid `601.00`。
+- 經 `InMemoryQuoteProvider` 注入 quote bid `601.00`。
 - Assert triggered。
 
 ### Immediate Trigger
 
-- Set quote first。
+- 先以 `InMemoryQuoteProvider` 注入 quote。
 - Create intent whose condition is already true。
 - Assert create response returns triggered status or subsequent detail shows triggered.
 - Assert only one trigger record exists.
@@ -92,8 +94,14 @@ V0.5 是要提供本地可展示的主流程。Integration tests 必須固定這
 ### Fallback
 
 - Create buy intent。
-- Quote has no ask, last <= target。
+- Quote has no ask, last <= target（透過 `InMemoryQuoteProvider` 注入）。
 - Assert triggered with `fallback_used = true`。
+
+### Quote Subscription Limit
+
+- Create 5 個分屬不同 symbol 的 active intent，第 6 個 symbol 觸發 subscribe。
+- Assert 第 6 個 create 回 `QUOTE_SUBSCRIPTION_LIMIT_EXCEEDED`。
+- Cancel 其中一個，再 create 同 symbol 之新 intent 應成功（配額釋放）。
 
 ## 驗收條件
 
@@ -101,7 +109,8 @@ V0.5 是要提供本地可展示的主流程。Integration tests 必須固定這
 - [ ] Tests 覆蓋 immediate trigger。
 - [ ] Tests 覆蓋 cancel active intent。
 - [ ] Tests 覆蓋 invalid tick 與 unknown symbol。
-- [ ] Tests 可在 PostgreSQL 測試環境穩定執行。
+- [ ] Tests 覆蓋 quote subscription 5 檔上限與配額釋放。
+- [ ] Tests 可在 PostgreSQL 測試環境穩定執行，不依賴 Shioaji 網路或 credentials。
 
 ## 工程注意事項
 
