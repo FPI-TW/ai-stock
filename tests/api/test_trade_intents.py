@@ -11,7 +11,13 @@ from fastapi import status
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_cancel_trade_intent_command, get_create_trade_intent_command, get_intent_repository
-from app.domain.trade_intent import CancelNotAllowedError, DuplicateIntentError, IntentNotFoundError, TradeIntentData
+from app.domain.trade_intent import (
+    CancelNotAllowedError,
+    DuplicateIntentError,
+    ForbiddenError,
+    IntentNotFoundError,
+    TradeIntentData,
+)
 from app.main import create_app
 
 _OWNER_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -201,8 +207,6 @@ def test_get_intent_not_found_returns_404(api_client: TestClient, mock_repo: Mag
 
 
 def test_get_intent_forbidden_returns_403(api_client: TestClient, mock_repo: MagicMock) -> None:
-    from app.domain.trade_intent import ForbiddenError
-
     mock_repo.find_by_id.side_effect = ForbiddenError(_INTENT_ID)
 
     response = api_client.get(f"/trade-intents/{_INTENT_ID}")
