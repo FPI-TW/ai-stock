@@ -26,12 +26,6 @@ class IntentNotFoundError(IntentError):
         super().__init__(f"Intent not found: {intent_id}")
 
 
-class ForbiddenError(IntentError):
-    def __init__(self, intent_id: UUID) -> None:
-        self.intent_id = intent_id
-        super().__init__(f"Access forbidden for intent {intent_id}")
-
-
 class CancelNotAllowedError(IntentError):
     def __init__(self, intent_id: UUID, current_status: str) -> None:
         self.intent_id = intent_id

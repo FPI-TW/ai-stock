@@ -17,9 +17,6 @@ from app.domain.trade_intent import (
     TradeIntentData,
 )
 
-# ForbiddenError is intentionally not used here: ownership mismatch is surfaced as
-# IntentNotFoundError to avoid leaking whether the intent_id exists at all.
-
 
 def _to_domain(row: TradeIntent) -> TradeIntentData:
     return TradeIntentData(
