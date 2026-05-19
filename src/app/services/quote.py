@@ -144,6 +144,10 @@ class DevQuoteIngestService:
         self._provider.store(validated.snapshot)
         return validated
 
+    def get_snapshot(self, symbol: str) -> QuoteSnapshot | None:
+        """讀取目前 in-memory store 的 snapshot，無資料回 None。"""
+        return self._provider._store.get(symbol)
+
 
 @lru_cache
 def get_dev_quote_store() -> InMemoryQuoteStore:
