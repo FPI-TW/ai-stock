@@ -11,7 +11,7 @@ from app.api.deps import (
 )
 from app.api.errors import ApiError, ErrorCode
 from app.commands.trade_intent import CancelTradeIntentInput, CreateTradeIntentInput
-from app.repositories.intent_repository import VALID_STATUSES
+from app.domain.trade_intent import VALID_STATUSES
 from app.schemas.intent import (
     IntentCreateRequest,
     IntentCreateResponse,
@@ -45,6 +45,19 @@ def _validate_statuses(statuses: list[str] | None) -> None:
         )
 
 
+def _validate_cursor(cursor: str | None) -> None:
+    if cursor is None:
+        return
+    try:
+        UUID(cursor)
+    except ValueError as exc:
+        raise ApiError(
+            code=ErrorCode.VALIDATION_ERROR,
+            status_code=status.HTTP_400_BAD_REQUEST,
+            details={"cursor": "must be a valid UUID"},
+        ) from exc
+
+
 @router.post("", response_model=IntentCreateResponse, status_code=status.HTTP_201_CREATED)
 def create_intent(
     request: IntentCreateRequest,
@@ -69,21 +82,22 @@ def list_intents(
     intent_repo: IntentRepoDep,
     status_filter: Annotated[list[str] | None, Query(alias="status")] = None,
     cursor: str | None = None,
-    pageSize: int = Query(default=50, ge=1, le=100),
+    page_size: int = Query(default=50, ge=1, le=100, alias="pageSize"),
 ) -> IntentListResponse:
     statuses = _parse_status_list(status_filter)
     _validate_statuses(statuses)
+    _validate_cursor(cursor)
 
     items, next_cursor = intent_repo.list_by_owner(
         owner_user_id=user.user_id,
         statuses=statuses,
         cursor=cursor,
-        page_size=pageSize,
+        page_size=page_size,
     )
     return IntentListResponse(
         data=[map_to_response_data(i) for i in items],
         nextCursor=next_cursor,
-        pageSize=pageSize,
+        pageSize=page_size,
     )
 
 

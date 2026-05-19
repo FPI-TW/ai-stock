@@ -14,7 +14,6 @@ from app.api.deps import get_cancel_trade_intent_command, get_create_trade_inten
 from app.domain.trade_intent import (
     CancelNotAllowedError,
     DuplicateIntentError,
-    ForbiddenError,
     IntentNotFoundError,
     TradeIntentData,
 )
@@ -44,6 +43,7 @@ def _make_intent(
     symbol: str = "2330",
     quantity_lots: int = 1,
     price: str = "600",
+    cancelled_at: datetime | None = None,
 ) -> TradeIntentData:
     now = datetime.now(tz=UTC)
     return TradeIntentData(
@@ -61,6 +61,7 @@ def _make_intent(
         status=status,
         created_at=now,
         updated_at=now,
+        cancelled_at=cancelled_at,
     )
 
 
@@ -108,6 +109,7 @@ def test_create_buy_alert_success(api_client: TestClient, mock_create_command: M
     assert data["timeInForce"] == "day"
     assert data["executionMode"] == "notify_only"
     assert data["status"] == "active"
+    assert "createdAt" in data
 
 
 def test_create_sell_alert_success(api_client: TestClient, mock_create_command: MagicMock) -> None:
@@ -125,6 +127,13 @@ def test_create_intent_rejects_owner_user_id_in_payload(api_client: TestClient) 
     payload = {**_BUY_PAYLOAD, "ownerUserId": str(_OWNER_ID)}
 
     response = api_client.post("/trade-intents", json=payload)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_create_intent_zero_quantity_returns_422(api_client: TestClient) -> None:
+    response = api_client.post("/trade-intents", json={**_BUY_PAYLOAD, "quantityLots": 0})
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
@@ -152,16 +161,37 @@ def test_list_intents_returns_only_owner_resources(api_client: TestClient, mock_
     assert response.status_code == status.HTTP_200_OK
     body = response.json()
     assert len(body["data"]) == 1
-    # verify owner filter was applied with the local user id
     call_kwargs = mock_repo.list_by_owner.call_args
     assert call_kwargs.kwargs["owner_user_id"] == _OWNER_ID
+
+
+def test_list_intents_empty_returns_200(api_client: TestClient, mock_repo: MagicMock) -> None:
+    mock_repo.list_by_owner.return_value = ([], None)
+
+    response = api_client.get("/trade-intents")
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["data"] == []
+    assert body["nextCursor"] is None
+
+
+def test_list_intents_returns_next_cursor(api_client: TestClient, mock_repo: MagicMock) -> None:
+    next_id = str(uuid4())
+    mock_repo.list_by_owner.return_value = ([_make_intent()], next_id)
+
+    response = api_client.get("/trade-intents")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["nextCursor"] == next_id
 
 
 def test_list_intents_status_filter(api_client: TestClient, mock_repo: MagicMock) -> None:
     mock_repo.list_by_owner.return_value = ([], None)
 
-    api_client.get("/trade-intents?status=active&status=scheduled")
+    response = api_client.get("/trade-intents?status=active&status=scheduled")
 
+    assert response.status_code == status.HTTP_200_OK
     call_kwargs = mock_repo.list_by_owner.call_args.kwargs
     assert set(call_kwargs["statuses"]) == {"active", "scheduled"}
 
@@ -169,8 +199,9 @@ def test_list_intents_status_filter(api_client: TestClient, mock_repo: MagicMock
 def test_list_intents_comma_separated_status(api_client: TestClient, mock_repo: MagicMock) -> None:
     mock_repo.list_by_owner.return_value = ([], None)
 
-    api_client.get("/trade-intents?status=active,scheduled")
+    response = api_client.get("/trade-intents?status=active,scheduled")
 
+    assert response.status_code == status.HTTP_200_OK
     call_kwargs = mock_repo.list_by_owner.call_args.kwargs
     assert set(call_kwargs["statuses"]) == {"active", "scheduled"}
 
@@ -179,6 +210,13 @@ def test_list_intents_invalid_status_returns_422(api_client: TestClient) -> None
     response = api_client.get("/trade-intents?status=INVALID")
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_list_intents_invalid_cursor_returns_400(api_client: TestClient) -> None:
+    response = api_client.get("/trade-intents?cursor=not-a-uuid")
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
@@ -193,7 +231,9 @@ def test_get_intent_success(api_client: TestClient, mock_repo: MagicMock) -> Non
     response = api_client.get(f"/trade-intents/{_INTENT_ID}")
 
     assert response.status_code == status.HTTP_200_OK
-    assert response.json()["data"]["id"] == str(_INTENT_ID)
+    data = response.json()["data"]
+    assert data["id"] == str(_INTENT_ID)
+    assert "createdAt" in data
     mock_repo.find_by_id.assert_called_once_with(_INTENT_ID, _OWNER_ID)
 
 
@@ -206,13 +246,14 @@ def test_get_intent_not_found_returns_404(api_client: TestClient, mock_repo: Mag
     assert response.json()["error"]["code"] == "NOT_FOUND"
 
 
-def test_get_intent_forbidden_returns_403(api_client: TestClient, mock_repo: MagicMock) -> None:
-    mock_repo.find_by_id.side_effect = ForbiddenError(_INTENT_ID)
+def test_get_intent_by_other_owner_returns_404(api_client: TestClient, mock_repo: MagicMock) -> None:
+    """Ownership mismatch is surfaced as 404 to avoid leaking intent existence."""
+    mock_repo.find_by_id.side_effect = IntentNotFoundError(_INTENT_ID)
 
     response = api_client.get(f"/trade-intents/{_INTENT_ID}")
 
-    assert response.status_code == status.HTTP_403_FORBIDDEN
-    assert response.json()["error"]["code"] == "FORBIDDEN"
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json()["error"]["code"] == "NOT_FOUND"
 
 
 # ------------------------------------------------------------------
@@ -221,7 +262,21 @@ def test_get_intent_forbidden_returns_403(api_client: TestClient, mock_repo: Mag
 
 
 def test_cancel_active_intent_success(api_client: TestClient, mock_cancel_command: MagicMock) -> None:
-    mock_cancel_command.execute.return_value = _make_intent(status="cancelled")
+    now = datetime.now(tz=UTC)
+    mock_cancel_command.execute.return_value = _make_intent(status="cancelled", cancelled_at=now)
+
+    response = api_client.post(f"/trade-intents/{_INTENT_ID}/cancel")
+
+    assert response.status_code == status.HTTP_200_OK
+    data = response.json()["data"]
+    assert data["status"] == "cancelled"
+    assert data["cancelledAt"] is not None
+
+
+def test_cancel_already_cancelled_is_idempotent(api_client: TestClient, mock_cancel_command: MagicMock) -> None:
+    """Re-cancelling an already-cancelled intent returns 200 (idempotent)."""
+    now = datetime.now(tz=UTC)
+    mock_cancel_command.execute.return_value = _make_intent(status="cancelled", cancelled_at=now)
 
     response = api_client.post(f"/trade-intents/{_INTENT_ID}/cancel")
 

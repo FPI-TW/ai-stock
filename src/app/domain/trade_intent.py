@@ -3,6 +3,10 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
+CANCELLABLE_STATUSES = frozenset({"active", "scheduled"})
+TERMINAL_STATUSES = frozenset({"triggered", "cancelled"})
+VALID_STATUSES = frozenset({"active", "scheduled", "triggered", "cancelled"})
+
 
 class IntentError(Exception):
     pass
@@ -35,7 +39,7 @@ class CancelNotAllowedError(IntentError):
         super().__init__(f"Cannot cancel intent {intent_id!r} with status {current_status!r}")
 
 
-@dataclass
+@dataclass(frozen=True)
 class TradeIntentData:
     id: UUID
     owner_user_id: UUID

@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from app.api.schemas.base import OwnerScopedRequestModel
 from app.domain.trade_intent import TradeIntentData
@@ -17,9 +18,7 @@ class IntentCreateRequest(OwnerScopedRequestModel):
     targetPrice: str
 
 
-class IntentResponseData(OwnerScopedRequestModel):
-    model_config = OwnerScopedRequestModel.model_config  # type: ignore[assignment]
-
+class IntentResponseData(BaseModel):
     id: UUID
     symbol: str
     strategy: str
@@ -30,24 +29,26 @@ class IntentResponseData(OwnerScopedRequestModel):
     timeInForce: str
     executionMode: str
     status: str
+    createdAt: datetime
+    cancelledAt: datetime | None = None
 
 
-class IntentCreateResponse(OwnerScopedRequestModel):
+class IntentCreateResponse(BaseModel):
     data: IntentResponseData
 
 
-class IntentListResponse(OwnerScopedRequestModel):
+class IntentListResponse(BaseModel):
     data: list[IntentResponseData]
     nextCursor: str | None = None
     pageSize: int
 
 
-class IntentDetailResponse(OwnerScopedRequestModel):
+class IntentDetailResponse(BaseModel):
     data: IntentResponseData
 
 
-def _decimal_str(value: object) -> str:
-    s = format(value, "f")  # type: ignore[call-overload]
+def _decimal_str(value: Decimal) -> str:
+    s = format(value, "f")
     if "." in s:
         s = s.rstrip("0").rstrip(".")
     return s
@@ -65,4 +66,6 @@ def map_to_response_data(intent: TradeIntentData) -> IntentResponseData:
         timeInForce=intent.time_in_force,
         executionMode=intent.execution_mode,
         status=intent.status,
+        createdAt=intent.created_at,
+        cancelledAt=intent.cancelled_at,
     )

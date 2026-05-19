@@ -64,6 +64,10 @@ class CreateTradeIntentCommand:
         initial_status = self._session_service.get_initial_day_intent_status(now)
 
         # 4. persist
+        trigger_ref = _TRIGGER_REF.get(inp.strategy)
+        if trigger_ref is None:
+            raise ValueError(f"Unknown strategy: {inp.strategy!r}")
+
         return self._intent_repo.create(
             owner_user_id=inp.owner_user_id,
             symbol=inp.symbol,
@@ -71,7 +75,7 @@ class CreateTradeIntentCommand:
             quantity_lots=inp.quantity_lots,
             target_price_original=effective_price,
             target_price_effective=effective_price,
-            trigger_reference_price_type=_TRIGGER_REF[inp.strategy],
+            trigger_reference_price_type=trigger_ref,
             trading_date=trading_date,
             time_in_force=_TIME_IN_FORCE,
             execution_mode=_EXECUTION_MODE,

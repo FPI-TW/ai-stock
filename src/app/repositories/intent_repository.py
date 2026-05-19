@@ -8,16 +8,16 @@ from sqlalchemy.orm import Session
 
 from app.db.models.core import TradeIntent
 from app.domain.trade_intent import (
+    CANCELLABLE_STATUSES,
+    TERMINAL_STATUSES,
     CancelNotAllowedError,
     DuplicateIntentError,
-    ForbiddenError,
     IntentNotFoundError,
     TradeIntentData,
 )
 
-CANCELLABLE_STATUSES = frozenset({"active", "scheduled"})
-TERMINAL_STATUSES = frozenset({"triggered", "cancelled"})
-VALID_STATUSES = frozenset({"active", "scheduled", "triggered", "cancelled"})
+# ForbiddenError is intentionally not used here: ownership mismatch is surfaced as
+# IntentNotFoundError to avoid leaking whether the intent_id exists at all.
 
 
 def _to_domain(row: TradeIntent) -> TradeIntentData:
@@ -107,10 +107,8 @@ class IntentRepository:
 
     def find_by_id(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
         row = self._db.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one_or_none()
-        if row is None:
+        if row is None or row.owner_user_id != owner_user_id:
             raise IntentNotFoundError(intent_id)
-        if row.owner_user_id != owner_user_id:
-            raise ForbiddenError(intent_id)
         return _to_domain(row)
 
     def list_by_owner(
@@ -177,10 +175,9 @@ class IntentRepository:
 
     def cancel(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
         row = self._db.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one_or_none()
-        if row is None:
+        if row is None or row.owner_user_id != owner_user_id:
             raise IntentNotFoundError(intent_id)
-        if row.owner_user_id != owner_user_id:
-            raise ForbiddenError(intent_id)
+        # already cancelled: idempotent — return current state without error
         if row.status == "cancelled":
             return _to_domain(row)
         if row.status not in CANCELLABLE_STATUSES:
