@@ -67,7 +67,9 @@ class CreateTradeIntentCommand:
         initial_status = self._session_service.get_initial_day_intent_status(now)
 
         # 4. persist
-        trigger_ref = _TRIGGER_REF[inp.strategy]
+        trigger_ref = _TRIGGER_REF.get(inp.strategy)
+        if trigger_ref is None:
+            raise ValueError(f"Unsupported strategy: {inp.strategy}")
 
         return self._intent_repo.create(
             owner_user_id=inp.owner_user_id,
