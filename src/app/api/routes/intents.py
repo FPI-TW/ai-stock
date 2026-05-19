@@ -68,8 +68,8 @@ def create_intent(
         CreateTradeIntentInput(
             symbol=request.symbol,
             strategy=request.strategy,
-            quantity_lots=request.quantityLots,
-            target_price=request.targetPrice,
+            quantity_lots=request.quantity_lots,
+            target_price=request.target_price,
             owner_user_id=user.user_id,
         )
     )
@@ -96,8 +96,8 @@ def list_intents(
     )
     return IntentListResponse(
         data=[map_to_response_data(i) for i in items],
-        nextCursor=next_cursor,
-        pageSize=page_size,
+        next_cursor=next_cursor,
+        page_size=page_size,
     )
 
 

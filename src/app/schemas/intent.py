@@ -14,23 +14,23 @@ class IntentCreateRequest(OwnerScopedRequestModel):
 
     symbol: str
     strategy: Literal["buy_price_alert", "sell_price_alert"]
-    quantityLots: int = Field(ge=1)
-    targetPrice: str
+    quantity_lots: int = Field(validation_alias="quantityLots", ge=1)
+    target_price: str = Field(validation_alias="targetPrice")
 
 
 class IntentResponseData(BaseModel):
     id: UUID
     symbol: str
     strategy: str
-    quantityLots: int
-    targetPriceOriginal: str
-    targetPriceEffective: str
-    tradingDate: date
-    timeInForce: str
-    executionMode: str
+    quantity_lots: int = Field(serialization_alias="quantityLots")
+    target_price_original: str = Field(serialization_alias="targetPriceOriginal")
+    target_price_effective: str = Field(serialization_alias="targetPriceEffective")
+    trading_date: date = Field(serialization_alias="tradingDate")
+    time_in_force: str = Field(serialization_alias="timeInForce")
+    execution_mode: str = Field(serialization_alias="executionMode")
     status: str
-    createdAt: datetime
-    cancelledAt: datetime | None = None
+    created_at: datetime = Field(serialization_alias="createdAt")
+    cancelled_at: datetime | None = Field(default=None, serialization_alias="cancelledAt")
 
 
 class IntentCreateResponse(BaseModel):
@@ -39,8 +39,8 @@ class IntentCreateResponse(BaseModel):
 
 class IntentListResponse(BaseModel):
     data: list[IntentResponseData]
-    nextCursor: str | None = None
-    pageSize: int
+    next_cursor: str | None = Field(default=None, serialization_alias="nextCursor")
+    page_size: int = Field(serialization_alias="pageSize")
 
 
 class IntentDetailResponse(BaseModel):
@@ -59,13 +59,13 @@ def map_to_response_data(intent: TradeIntentData) -> IntentResponseData:
         id=intent.id,
         symbol=intent.symbol,
         strategy=intent.strategy,
-        quantityLots=intent.quantity_lots,
-        targetPriceOriginal=_decimal_str(intent.target_price_original),
-        targetPriceEffective=_decimal_str(intent.target_price_effective),
-        tradingDate=intent.trading_date,
-        timeInForce=intent.time_in_force,
-        executionMode=intent.execution_mode,
+        quantity_lots=intent.quantity_lots,
+        target_price_original=_decimal_str(intent.target_price_original),
+        target_price_effective=_decimal_str(intent.target_price_effective),
+        trading_date=intent.trading_date,
+        time_in_force=intent.time_in_force,
+        execution_mode=intent.execution_mode,
         status=intent.status,
-        createdAt=intent.created_at,
-        cancelledAt=intent.cancelled_at,
+        created_at=intent.created_at,
+        cancelled_at=intent.cancelled_at,
     )
