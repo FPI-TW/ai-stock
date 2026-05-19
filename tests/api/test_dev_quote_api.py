@@ -200,6 +200,33 @@ class TestUpsertDevQuoteMultiUpsert:
         mock_symbol_service.get_tradable_symbol.assert_not_called()
 
 
+class TestUpsertDevQuoteStrictPriceTypes:
+    @pytest.mark.parametrize(
+        ("alias", "value"),
+        [
+            ("bidPrice", True),
+            ("askPrice", False),
+            ("lastPrice", True),
+            ("bidPrice", 599),
+            ("askPrice", 600),
+            ("lastPrice", 599.5),
+        ],
+    )
+    def test_non_string_price_rejected(
+        self,
+        client: TestClient,
+        mock_symbol_service: MagicMock,
+        alias: str,
+        value: object,
+    ) -> None:
+        mock_symbol_service.get_tradable_symbol.return_value = MagicMock()
+        payload = {**VALID_QUOTE_PAYLOAD, alias: value}
+        response = client.post("/dev/quotes", json=payload)
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+        assert get_dev_quote_store().get("2330") is None
+
+
 class TestUpsertDevQuoteLocalModeOff:
     def test_endpoint_not_registered_when_local_mode_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("LOCAL_MODE", "false")

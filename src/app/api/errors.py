@@ -3,6 +3,7 @@ from enum import StrEnum
 from typing import Any
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -208,11 +209,13 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # Pydantic v2 將 field_validator 拋出的 ValueError 放進 ctx["error"]，
+        # 該物件無法被 json.dumps 序列化；用 jsonable_encoder 遞迴轉成安全格式。
         return build_error_response(
             request=request,
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.VALIDATION_ERROR,
-            details={"errors": exc.errors()},
+            details={"errors": jsonable_encoder(exc.errors())},
         )
 
     @app.exception_handler(StarletteHTTPException)
