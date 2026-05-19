@@ -4,3 +4,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.py[cod]
+
+# agent 工作日誌（本地）
+PROJECT_HISTORY.md
+TASK_TRACKER.md

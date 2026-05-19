@@ -9,6 +9,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
 from app.domain.symbol_errors import SymbolError, SymbolNotTradableError, UnknownSymbolError
+from app.domain.trade_intent import (
+    CancelNotAllowedError,
+    DuplicateIntentError,
+    IntentNotFoundError,
+    InvalidCursorError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +29,10 @@ class ErrorCode(StrEnum):
     INVALID_TICK_SIZE = "INVALID_TICK_SIZE"
     INVALID_AMOUNT = "INVALID_AMOUNT"
     INVALID_TYPE = "INVALID_TYPE"
+    DUPLICATE_INTENT = "DUPLICATE_INTENT"
+    NOT_FOUND = "NOT_FOUND"
+    CANCEL_NOT_ALLOWED = "CANCEL_NOT_ALLOWED"
+    INVALID_CURSOR = "INVALID_CURSOR"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -35,6 +45,10 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INVALID_TICK_SIZE: "價格不符合升降單位規定",
     ErrorCode.INVALID_AMOUNT: "數量不合法",
     ErrorCode.INVALID_TYPE: "證券類型不合法",
+    ErrorCode.DUPLICATE_INTENT: "已存在相同的委託",
+    ErrorCode.NOT_FOUND: "找不到此資源",
+    ErrorCode.CANCEL_NOT_ALLOWED: "此委託狀態不允許取消",
+    ErrorCode.INVALID_CURSOR: "Cursor 已失效或不存在",
 }
 
 
@@ -153,6 +167,60 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.INVALID_TYPE,
             details={"value": str(exc.value)},
+        )
+
+    @app.exception_handler(DuplicateIntentError)
+    async def duplicate_intent_handler(request: Request, exc: DuplicateIntentError) -> JSONResponse:
+        logger.warning(
+            "Duplicate intent rejected",
+            extra={"request_id": get_request_id(request), "symbol": exc.symbol, "strategy": exc.strategy},
+        )
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_409_CONFLICT,
+            code=ErrorCode.DUPLICATE_INTENT,
+            details={"symbol": exc.symbol, "strategy": exc.strategy},
+        )
+
+    @app.exception_handler(IntentNotFoundError)
+    async def intent_not_found_handler(request: Request, exc: IntentNotFoundError) -> JSONResponse:
+        logger.warning(
+            "Intent not found",
+            extra={"request_id": get_request_id(request), "intent_id": str(exc.intent_id)},
+        )
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_404_NOT_FOUND,
+            code=ErrorCode.NOT_FOUND,
+        )
+
+    @app.exception_handler(InvalidCursorError)
+    async def invalid_cursor_handler(request: Request, exc: InvalidCursorError) -> JSONResponse:
+        logger.warning(
+            "Invalid or expired cursor",
+            extra={"request_id": get_request_id(request), "cursor_id": str(exc.cursor_id)},
+        )
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code=ErrorCode.INVALID_CURSOR,
+        )
+
+    @app.exception_handler(CancelNotAllowedError)
+    async def cancel_not_allowed_handler(request: Request, exc: CancelNotAllowedError) -> JSONResponse:
+        logger.warning(
+            "Cancel not allowed",
+            extra={
+                "request_id": get_request_id(request),
+                "intent_id": str(exc.intent_id),
+                "current_status": exc.current_status,
+            },
+        )
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_409_CONFLICT,
+            code=ErrorCode.CANCEL_NOT_ALLOWED,
+            details={"currentStatus": exc.current_status},
         )
 
     @app.exception_handler(RequestValidationError)

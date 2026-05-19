@@ -1,20 +1,79 @@
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.api.schemas.base import OwnerScopedRequestModel
+from app.domain.trade_intent import TradeIntentData
 
-class IntentCreateRequest(BaseModel):
+
+class IntentCreateRequest(OwnerScopedRequestModel):
+    """extra='forbid' inherited — ownerUserId and unknown fields are rejected."""
+
     symbol: str
-    side: Literal["buy", "sell"]
-    quantity: int = Field(ge=1)
+    strategy: Literal["buy_price_alert", "sell_price_alert"]
+    quantity_lots: int = Field(validation_alias="quantityLots", ge=1)
+    target_price: str = Field(validation_alias="targetPrice")
 
 
 class IntentResponseData(BaseModel):
+    """Response shape for a single trade intent.
+
+    Note: ``triggered_at`` (present on ``TradeIntentData``) is intentionally omitted.
+    V0.5 uses notify-only mode; the trigger flow and its timestamp are not yet exposed
+    to clients. Add it here when the trigger detail endpoint is introduced.
+    """
+
+    id: UUID
     symbol: str
-    side: Literal["buy", "sell"]
-    quantity: int
-    status: str = "pending"
+    strategy: str
+    quantity_lots: int = Field(serialization_alias="quantityLots")
+    target_price_original: str = Field(serialization_alias="targetPriceOriginal")
+    target_price_effective: str = Field(serialization_alias="targetPriceEffective")
+    trading_date: date = Field(serialization_alias="tradingDate")
+    time_in_force: str = Field(serialization_alias="timeInForce")
+    execution_mode: str = Field(serialization_alias="executionMode")
+    status: str
+    created_at: datetime = Field(serialization_alias="createdAt")
+    cancelled_at: datetime | None = Field(default=None, serialization_alias="cancelledAt")
 
 
 class IntentCreateResponse(BaseModel):
     data: IntentResponseData
+
+
+class IntentListResponse(BaseModel):
+    data: list[IntentResponseData]
+    next_cursor: str | None = Field(default=None, serialization_alias="nextCursor")
+    page_size: int = Field(serialization_alias="pageSize")
+
+
+class IntentDetailResponse(BaseModel):
+    data: IntentResponseData
+
+
+# If other schemas (e.g. notifications) need the same formatting, move this to a shared utility.
+def _decimal_str(value: Decimal) -> str:
+    s = format(value, "f")
+    integer_part, _, decimal_part = s.partition(".")
+    decimal_part = (decimal_part or "").rstrip("0").ljust(2, "0")
+    return f"{integer_part}.{decimal_part}"
+
+
+def map_to_response_data(intent: TradeIntentData) -> IntentResponseData:
+    return IntentResponseData(
+        id=intent.id,
+        symbol=intent.symbol,
+        strategy=intent.strategy,
+        quantity_lots=intent.quantity_lots,
+        target_price_original=_decimal_str(intent.target_price_original),
+        target_price_effective=_decimal_str(intent.target_price_effective),
+        trading_date=intent.trading_date,
+        time_in_force=intent.time_in_force,
+        execution_mode=intent.execution_mode,
+        status=intent.status,
+        created_at=intent.created_at,
+        cancelled_at=intent.cancelled_at,
+    )
