@@ -19,6 +19,13 @@ class IntentCreateRequest(OwnerScopedRequestModel):
 
 
 class IntentResponseData(BaseModel):
+    """Response shape for a single trade intent.
+
+    Note: ``triggered_at`` (present on ``TradeIntentData``) is intentionally omitted.
+    V0.5 uses notify-only mode; the trigger flow and its timestamp are not yet exposed
+    to clients. Add it here when the trigger detail endpoint is introduced.
+    """
+
     id: UUID
     symbol: str
     strategy: str
