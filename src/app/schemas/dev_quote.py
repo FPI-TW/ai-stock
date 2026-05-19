@@ -40,8 +40,6 @@ class DevQuoteUpsertResponse(BaseModel):
 
 
 class DevQuoteFetchResponseData(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
     symbol: str
     bid_price: Decimal | None = Field(default=None, serialization_alias="bidPrice")
     ask_price: Decimal | None = Field(default=None, serialization_alias="askPrice")

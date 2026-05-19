@@ -262,8 +262,8 @@ class TestGetDevQuote:
         assert data["bidPrice"] == "590.0000"
         assert data["askPrice"] == "591.0000"
         assert data["lastPrice"] == "590.5000"
-        # Pydantic AwareDatetime 序列化 UTC 可能輸出 "Z" 或 "+00:00"，兩者語意相同
-        assert data["quoteTime"] in ("2026-05-19T02:14:33+00:00", "2026-05-19T02:14:33Z")
+        # Pydantic v2 對 UTC AwareDatetime 固定輸出 Z 格式
+        assert data["quoteTime"] == "2026-05-19T02:14:33Z"
 
     def test_get_dev_quote_serializes_decimal_as_string(
         self, client: TestClient, mock_symbol_service: MagicMock
@@ -282,6 +282,7 @@ class TestGetDevQuote:
 
         data = response.json()["data"]
         assert isinstance(data["lastPrice"], str), f"lastPrice must be string, got {type(data['lastPrice']).__name__}"
+        assert data["lastPrice"] == "590.5", f"expected '590.5' verbatim, got {data['lastPrice']!r}"
 
 
 class TestUpsertDevQuoteLocalModeOff:
