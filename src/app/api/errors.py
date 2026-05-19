@@ -9,6 +9,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
 from app.domain.symbol_errors import SymbolError, SymbolNotTradableError, UnknownSymbolError
+from app.domain.trade_intent import CancelNotAllowedError, DuplicateIntentError, ForbiddenError, IntentNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +20,15 @@ class ErrorCode(StrEnum):
     DATABASE_UNAVAILABLE = "DATABASE_UNAVAILABLE"
     UNKNOWN_SYMBOL = "UNKNOWN_SYMBOL"
     SYMBOL_NOT_TRADABLE = "SYMBOL_NOT_TRADABLE"
+    UNSUPPORTED_INSTRUMENT = "UNSUPPORTED_INSTRUMENT"
     INVALID_PRICE = "INVALID_PRICE"
     INVALID_TICK_SIZE = "INVALID_TICK_SIZE"
     INVALID_AMOUNT = "INVALID_AMOUNT"
     INVALID_TYPE = "INVALID_TYPE"
+    DUPLICATE_INTENT = "DUPLICATE_INTENT"
+    FORBIDDEN = "FORBIDDEN"
+    NOT_FOUND = "NOT_FOUND"
+    CANCEL_NOT_ALLOWED = "CANCEL_NOT_ALLOWED"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -31,10 +37,15 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.DATABASE_UNAVAILABLE: "資料庫暫時無法使用",
     ErrorCode.UNKNOWN_SYMBOL: "找不到標的代號",
     ErrorCode.SYMBOL_NOT_TRADABLE: "標的目前不可交易",
+    ErrorCode.UNSUPPORTED_INSTRUMENT: "不支援此標的的交易",
     ErrorCode.INVALID_PRICE: "價格格式不合法",
     ErrorCode.INVALID_TICK_SIZE: "價格不符合升降單位規定",
     ErrorCode.INVALID_AMOUNT: "數量不合法",
     ErrorCode.INVALID_TYPE: "證券類型不合法",
+    ErrorCode.DUPLICATE_INTENT: "已存在相同的委託",
+    ErrorCode.FORBIDDEN: "無權限存取此資源",
+    ErrorCode.NOT_FOUND: "找不到此資源",
+    ErrorCode.CANCEL_NOT_ALLOWED: "此委託狀態不允許取消",
 }
 
 
@@ -153,6 +164,40 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.INVALID_TYPE,
             details={"value": str(exc.value)},
+        )
+
+    @app.exception_handler(DuplicateIntentError)
+    async def duplicate_intent_handler(request: Request, exc: DuplicateIntentError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_409_CONFLICT,
+            code=ErrorCode.DUPLICATE_INTENT,
+            details={"symbol": exc.symbol, "strategy": exc.strategy},
+        )
+
+    @app.exception_handler(ForbiddenError)
+    async def forbidden_handler(request: Request, exc: ForbiddenError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_403_FORBIDDEN,
+            code=ErrorCode.FORBIDDEN,
+        )
+
+    @app.exception_handler(IntentNotFoundError)
+    async def intent_not_found_handler(request: Request, exc: IntentNotFoundError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_404_NOT_FOUND,
+            code=ErrorCode.NOT_FOUND,
+        )
+
+    @app.exception_handler(CancelNotAllowedError)
+    async def cancel_not_allowed_handler(request: Request, exc: CancelNotAllowedError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_409_CONFLICT,
+            code=ErrorCode.CANCEL_NOT_ALLOWED,
+            details={"currentStatus": exc.current_status},
         )
 
     @app.exception_handler(RequestValidationError)

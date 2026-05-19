@@ -16,7 +16,7 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(symbols_router, prefix="/symbols", tags=["symbols"])
-    app.include_router(intents_router, prefix="/intents", tags=["intents"])
+    app.include_router(intents_router, prefix="/trade-intents", tags=["trade-intents"])
     return app
 
 
