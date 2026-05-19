@@ -54,6 +54,7 @@ class IntentDetailResponse(BaseModel):
     data: IntentResponseData
 
 
+# If other schemas (e.g. notifications) need the same formatting, move this to a shared utility.
 def _decimal_str(value: Decimal) -> str:
     s = format(value, "f")
     integer_part, _, decimal_part = s.partition(".")
