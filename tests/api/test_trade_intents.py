@@ -206,6 +206,16 @@ def test_list_intents_comma_separated_status(api_client: TestClient, mock_repo: 
     assert set(call_kwargs["statuses"]) == {"active", "scheduled"}
 
 
+def test_list_intents_comma_separated_status_with_spaces(api_client: TestClient, mock_repo: MagicMock) -> None:
+    mock_repo.list_by_owner.return_value = ([], None)
+
+    response = api_client.get("/trade-intents?status=active,%20scheduled")
+
+    assert response.status_code == status.HTTP_200_OK
+    call_kwargs = mock_repo.list_by_owner.call_args.kwargs
+    assert set(call_kwargs["statuses"]) == {"active", "scheduled"}
+
+
 def test_list_intents_invalid_status_returns_422(api_client: TestClient) -> None:
     response = api_client.get("/trade-intents?status=INVALID")
 
