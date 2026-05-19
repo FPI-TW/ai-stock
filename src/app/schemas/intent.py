@@ -49,9 +49,9 @@ class IntentDetailResponse(BaseModel):
 
 def _decimal_str(value: Decimal) -> str:
     s = format(value, "f")
-    if "." in s:
-        s = s.rstrip("0").rstrip(".")
-    return s
+    integer_part, _, decimal_part = s.partition(".")
+    decimal_part = (decimal_part or "").rstrip("0").ljust(2, "0")
+    return f"{integer_part}.{decimal_part}"
 
 
 def map_to_response_data(intent: TradeIntentData) -> IntentResponseData:
