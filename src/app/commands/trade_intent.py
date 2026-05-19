@@ -1,11 +1,7 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from fastapi import status as http_status
-
-from app.api.errors import ApiError, ErrorCode
 from app.domain.price import PriceRequest, PriceService, SecurityType
-from app.domain.symbol_errors import SymbolNotTradableError
 from app.domain.trade_intent import TradeIntentData
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
@@ -50,14 +46,7 @@ class CreateTradeIntentCommand:
 
     def execute(self, inp: CreateTradeIntentInput) -> TradeIntentData:
         # 1. validate symbol existence and tradability
-        try:
-            symbol_obj = self._symbol_service.get_tradable_symbol(inp.symbol)
-        except SymbolNotTradableError as exc:
-            raise ApiError(
-                code=ErrorCode.UNSUPPORTED_INSTRUMENT,
-                status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
-                details={"symbol": exc.symbol},
-            ) from exc
+        symbol_obj = self._symbol_service.get_tradable_symbol(inp.symbol)
 
         # 2. validate price and tick size via PriceService
         security_type = SecurityType(symbol_obj.instrument_type)

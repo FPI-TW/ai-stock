@@ -61,4 +61,4 @@ def test_create_intent_unsupported_symbol(client: TestClient, mock_symbol_servic
     response = client.post("/trade-intents", json={**_VALID_PAYLOAD, "symbol": "9999"})
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert response.json()["error"]["code"] == "UNSUPPORTED_INSTRUMENT"
+    assert response.json()["error"]["code"] == "SYMBOL_NOT_TRADABLE"
