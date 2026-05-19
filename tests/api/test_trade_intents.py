@@ -258,16 +258,6 @@ def test_get_intent_not_found_returns_404(api_client: TestClient, mock_repo: Mag
     assert response.json()["error"]["code"] == "NOT_FOUND"
 
 
-def test_get_intent_by_other_owner_returns_404(api_client: TestClient, mock_repo: MagicMock) -> None:
-    """Ownership mismatch is surfaced as 404 to avoid leaking intent existence."""
-    mock_repo.find_by_id.side_effect = IntentNotFoundError(_INTENT_ID)
-
-    response = api_client.get(f"/trade-intents/{_INTENT_ID}")
-
-    assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert response.json()["error"]["code"] == "NOT_FOUND"
-
-
 # ------------------------------------------------------------------
 # POST /trade-intents/{id}/cancel
 # ------------------------------------------------------------------
