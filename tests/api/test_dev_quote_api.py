@@ -158,6 +158,48 @@ class TestUpsertDevQuoteSchemaErrors:
         assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
+class TestUpsertDevQuoteMultiUpsert:
+    def test_repeated_upsert_keeps_latest_quote(self, client: TestClient, mock_symbol_service: MagicMock) -> None:
+        mock_symbol_service.get_tradable_symbol.return_value = MagicMock()
+        first = client.post("/dev/quotes", json=VALID_QUOTE_PAYLOAD)
+        assert first.status_code == 200
+        second = client.post("/dev/quotes", json={**VALID_QUOTE_PAYLOAD, "lastPrice": "650.00"})
+        assert second.status_code == 200
+        snap = get_dev_quote_store().get("2330")
+        assert snap is not None
+        assert snap.last_price == Decimal("650.00")
+
+    def test_different_symbols_are_stored_independently(
+        self, client: TestClient, mock_symbol_service: MagicMock
+    ) -> None:
+        mock_symbol_service.get_tradable_symbol.return_value = MagicMock()
+        r1 = client.post("/dev/quotes", json=VALID_QUOTE_PAYLOAD)
+        assert r1.status_code == 200
+        r2 = client.post(
+            "/dev/quotes",
+            json={**VALID_QUOTE_PAYLOAD, "symbol": "0050", "lastPrice": "200.00"},
+        )
+        assert r2.status_code == 200
+        snap_2330 = get_dev_quote_store().get("2330")
+        snap_0050 = get_dev_quote_store().get("0050")
+        assert snap_2330 is not None and snap_2330.last_price == Decimal("599.50")
+        assert snap_0050 is not None and snap_0050.last_price == Decimal("200.00")
+
+    def test_snake_case_keys_rejected(self, client: TestClient, mock_symbol_service: MagicMock) -> None:
+        # Schema 採 alias-only camelCase；snake_case 變成未知欄位，extra="forbid" 應拒絕
+        payload = {
+            "symbol": "2330",
+            "bid_price": "599.00",
+            "askPrice": "600.00",
+            "lastPrice": "599.50",
+            "quoteTime": "2026-05-18T10:00:00+08:00",
+        }
+        response = client.post("/dev/quotes", json=payload)
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+        mock_symbol_service.get_tradable_symbol.assert_not_called()
+
+
 class TestUpsertDevQuoteLocalModeOff:
     def test_endpoint_not_registered_when_local_mode_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("LOCAL_MODE", "false")

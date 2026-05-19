@@ -85,6 +85,25 @@ class TestInMemoryQuoteStore:
         assert store.get("2330") is None
         assert store.get("0050") is None
 
+    def test_upsert_different_symbols_do_not_interfere(self) -> None:
+        store = InMemoryQuoteStore()
+        snap_a = make_snapshot(symbol="2330", last_price=Decimal("599.00"))
+        snap_b = make_snapshot(symbol="0050", last_price=Decimal("200.00"))
+        store.upsert(snap_a)
+        store.upsert(snap_b)
+        assert store.get("2330") == snap_a
+        assert store.get("0050") == snap_b
+
+    def test_updating_one_symbol_keeps_others_intact(self) -> None:
+        store = InMemoryQuoteStore()
+        store.upsert(make_snapshot(symbol="2330", last_price=Decimal("599.00")))
+        store.upsert(make_snapshot(symbol="0050", last_price=Decimal("200.00")))
+        store.upsert(make_snapshot(symbol="0050", last_price=Decimal("250.00")))
+        snap_2330 = store.get("2330")
+        snap_0050 = store.get("0050")
+        assert snap_2330 is not None and snap_2330.last_price == Decimal("599.00")
+        assert snap_0050 is not None and snap_0050.last_price == Decimal("250.00")
+
 
 class TestDevelopmentQuoteProvider:
     def test_build_snapshot_uses_injected_clock(self) -> None:

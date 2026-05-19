@@ -1,9 +1,17 @@
+from datetime import datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, status
 from fastapi.testclient import TestClient
 
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
+from app.domain.quote_errors import (
+    QuoteCrossedError,
+    QuoteInsufficientPricesError,
+    QuoteNonPositivePriceError,
+    QuoteOutOfSessionError,
+)
 from app.main import create_app
 
 
@@ -103,3 +111,61 @@ def test_invalid_tick_size_not_caught_by_invalid_price_handler() -> None:
     response = client.get("/tick2")
 
     assert response.json()["error"]["code"] == "INVALID_TICK_SIZE"
+
+
+def test_quote_out_of_session_returns_422() -> None:
+    quote_time = datetime(2026, 5, 23, 10, 0, tzinfo=ZoneInfo("Asia/Taipei"))
+    client = _client_with_route("/quote-session", QuoteOutOfSessionError(quote_time=quote_time))
+    response = client.get("/quote-session", headers={"X-Request-Id": "req-q-session"})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    body = response.json()
+    assert body["error"]["code"] == "QUOTE_OUT_OF_SESSION"
+    assert body["error"]["message"] == "Quote 時間不在交易時段內"
+    assert body["error"]["details"] == {"quote_time": quote_time.isoformat()}
+    assert body["error"]["requestId"] == "req-q-session"
+
+
+def test_quote_crossed_returns_422() -> None:
+    client = _client_with_route(
+        "/quote-crossed",
+        QuoteCrossedError(bid=Decimal("601.00"), ask=Decimal("600.00")),
+    )
+    response = client.get("/quote-crossed", headers={"X-Request-Id": "req-q-crossed"})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    body = response.json()
+    assert body["error"]["code"] == "QUOTE_CROSSED"
+    assert body["error"]["message"] == "Quote bid 大於 ask"
+    assert body["error"]["details"] == {"bid": "601.00", "ask": "600.00"}
+    assert body["error"]["requestId"] == "req-q-crossed"
+
+
+def test_quote_non_positive_price_returns_422() -> None:
+    client = _client_with_route(
+        "/quote-nonpos",
+        QuoteNonPositivePriceError(field="bid", value=Decimal("-0.01")),
+    )
+    response = client.get("/quote-nonpos", headers={"X-Request-Id": "req-q-nonpos"})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    body = response.json()
+    assert body["error"]["code"] == "QUOTE_NON_POSITIVE_PRICE"
+    assert body["error"]["message"] == "Quote 價格必須大於 0"
+    assert body["error"]["details"] == {"field": "bid", "value": "-0.01"}
+    assert body["error"]["requestId"] == "req-q-nonpos"
+
+
+def test_quote_insufficient_prices_returns_422() -> None:
+    client = _client_with_route(
+        "/quote-insufficient",
+        QuoteInsufficientPricesError(symbol="2330"),
+    )
+    response = client.get("/quote-insufficient", headers={"X-Request-Id": "req-q-insufficient"})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    body = response.json()
+    assert body["error"]["code"] == "QUOTE_INSUFFICIENT_PRICES"
+    assert body["error"]["message"] == "Quote 需至少提供 bid/ask/last 其中一項"
+    assert body["error"]["details"] == {"symbol": "2330"}
+    assert body["error"]["requestId"] == "req-q-insufficient"
