@@ -185,6 +185,8 @@ class IntentRepository:
             .values(status="cancelled", updated_at=func.now(), cancelled_at=func.now()),
             execution_options={"synchronize_session": False},
         )
-        self._db.commit()
+        # refresh within the same transaction so func.now() values are read back
+        # atomically — no window for concurrent writes between commit and reload
         self._db.refresh(row)
+        self._db.commit()
         return _to_domain(row)
