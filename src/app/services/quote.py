@@ -104,6 +104,10 @@ class DevelopmentQuoteProvider:
     def store(self, snapshot: QuoteSnapshot) -> None:
         self._store.upsert(snapshot)
 
+    def get_snapshot(self, symbol: str) -> QuoteSnapshot | None:
+        """回傳指定 symbol 的最新 snapshot；無資料回 None。"""
+        return self._store.get(symbol)
+
 
 class DevQuoteIngestService:
     """Orchestrate the dev quote ingest path.
@@ -146,7 +150,7 @@ class DevQuoteIngestService:
 
     def get_snapshot(self, symbol: str) -> QuoteSnapshot | None:
         """讀取目前 in-memory store 的 snapshot，無資料回 None。"""
-        return self._provider._store.get(symbol)
+        return self._provider.get_snapshot(symbol)
 
 
 @lru_cache
