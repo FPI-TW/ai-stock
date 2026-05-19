@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.domain.price import PriceRequest, PriceService, SecurityType
+from app.domain.price import InvalidTypeError, PriceRequest, PriceService, SecurityType
 from app.domain.trade_intent import TradeIntentData
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
@@ -49,7 +49,10 @@ class CreateTradeIntentCommand:
         symbol_obj = self._symbol_service.get_tradable_symbol(inp.symbol)
 
         # 2. validate price and tick size via PriceService
-        security_type = SecurityType(symbol_obj.instrument_type)
+        try:
+            security_type = SecurityType(symbol_obj.instrument_type)
+        except ValueError:
+            raise InvalidTypeError(symbol_obj.instrument_type, "must be stock or etf") from None
         effective_price = PriceService.validate(
             PriceRequest(
                 type=security_type,
@@ -64,9 +67,7 @@ class CreateTradeIntentCommand:
         initial_status = self._session_service.get_initial_day_intent_status(now)
 
         # 4. persist
-        trigger_ref = _TRIGGER_REF.get(inp.strategy)
-        if trigger_ref is None:
-            raise ValueError(f"Unknown strategy: {inp.strategy!r}")
+        trigger_ref = _TRIGGER_REF[inp.strategy]
 
         return self._intent_repo.create(
             owner_user_id=inp.owner_user_id,
