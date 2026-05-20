@@ -5,9 +5,11 @@ from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand
+from app.commands.trigger_intent import TriggerIntentCommand
 from app.core.config import Settings, get_settings
 from app.core.security import RequestUser, build_local_user
 from app.db.session import check_database_connectivity, get_session_factory
+from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.symbol_repository import SymbolRepository
@@ -102,3 +104,17 @@ def get_cancel_trade_intent_command(
 
 
 CancelTradeIntentCommandDep = Annotated[CancelTradeIntentCommand, Depends(get_cancel_trade_intent_command)]
+
+
+def get_trigger_intent_command(db: DatabaseDep) -> TriggerIntentCommand:
+    return TriggerIntentCommand(db)
+
+
+TriggerIntentCommandDep = Annotated[TriggerIntentCommand, Depends(get_trigger_intent_command)]
+
+
+def get_quote_evaluator(session_service: TradingSessionServiceDep) -> QuoteEvaluator:
+    return QuoteEvaluator(session_service)
+
+
+QuoteEvaluatorDep = Annotated[QuoteEvaluator, Depends(get_quote_evaluator)]

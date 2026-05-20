@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.errors import register_exception_handlers
+from app.api.routes.dev import router as dev_router
 from app.api.routes.health import router as health_router
 from app.api.routes.intents import router as intents_router
 from app.api.routes.symbols import router as symbols_router
@@ -63,6 +64,8 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(symbols_router, prefix="/symbols", tags=["symbols"])
     app.include_router(intents_router, prefix="/trade-intents", tags=["trade-intents"])
+    if settings.local_mode:
+        app.include_router(dev_router, prefix="/dev", tags=["dev"])
     return app
 
 

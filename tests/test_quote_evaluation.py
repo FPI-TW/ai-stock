@@ -7,14 +7,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.domain.quote_evaluation import (
-    EvaluationResult,
-    Quote,
-    QuoteEvaluator,
-    SkipReason,
-)
+from app.domain.quote_evaluation import EvaluationResult, QuoteEvaluator, SkipReason
 from app.domain.trade_intent import TradeIntentData
 from app.domain.trading_session import TradingSessionService
+from app.services.quote.base import QuoteSnapshot
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
@@ -45,6 +41,25 @@ def make_intent(
     )
 
 
+def _snapshot(
+    *,
+    quote_time: datetime = SESSION_QUOTE_TIME,
+    bid_price: Decimal | None = None,
+    ask_price: Decimal | None = None,
+    last_price: Decimal | None = None,
+) -> QuoteSnapshot:
+    # received_at defaults to quote_time — the evaluator never inspects it,
+    # so tests only differentiate when a specific value matters.
+    return QuoteSnapshot(
+        symbol="2330",
+        quote_time=quote_time,
+        received_at=quote_time,
+        bid_price=bid_price,
+        ask_price=ask_price,
+        last_price=last_price,
+    )
+
+
 @pytest.fixture
 def evaluator() -> QuoteEvaluator:
     return QuoteEvaluator(TradingSessionService())
@@ -52,8 +67,7 @@ def evaluator() -> QuoteEvaluator:
 
 class TestBuyPriceAlert:
     def test_ask_at_target_triggers(self, evaluator: QuoteEvaluator) -> None:
-        quote = Quote(symbol="2330", quote_time=SESSION_QUOTE_TIME, ask_price=Decimal("100"))
-        result = evaluator.evaluate(quote, make_intent(), SESSION_NOW)
+        result = evaluator.evaluate(_snapshot(ask_price=Decimal("100")), make_intent(), SESSION_NOW)
         assert result == EvaluationResult(
             should_trigger=True,
             trigger_price=Decimal("100"),
@@ -62,22 +76,19 @@ class TestBuyPriceAlert:
         )
 
     def test_ask_below_target_triggers(self, evaluator: QuoteEvaluator) -> None:
-        quote = Quote(symbol="2330", quote_time=SESSION_QUOTE_TIME, ask_price=Decimal("99"))
-        result = evaluator.evaluate(quote, make_intent(), SESSION_NOW)
+        result = evaluator.evaluate(_snapshot(ask_price=Decimal("99")), make_intent(), SESSION_NOW)
         assert result.should_trigger
         assert result.trigger_price == Decimal("99")
         assert result.trigger_reference_price_type == "ask"
         assert result.fallback_used is False
 
     def test_ask_above_target_does_not_trigger(self, evaluator: QuoteEvaluator) -> None:
-        quote = Quote(symbol="2330", quote_time=SESSION_QUOTE_TIME, ask_price=Decimal("101"))
-        result = evaluator.evaluate(quote, make_intent(), SESSION_NOW)
+        result = evaluator.evaluate(_snapshot(ask_price=Decimal("101")), make_intent(), SESSION_NOW)
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.CONDITION_NOT_MET
 
     def test_missing_ask_falls_back_to_last(self, evaluator: QuoteEvaluator) -> None:
-        quote = Quote(symbol="2330", quote_time=SESSION_QUOTE_TIME, last_price=Decimal("99"))
-        result = evaluator.evaluate(quote, make_intent(), SESSION_NOW)
+        result = evaluator.evaluate(_snapshot(last_price=Decimal("99")), make_intent(), SESSION_NOW)
         assert result.should_trigger
         assert result.trigger_price == Decimal("99")
         assert result.trigger_reference_price_type == "last_fallback"
@@ -85,61 +96,68 @@ class TestBuyPriceAlert:
 
     def test_ask_present_does_not_fall_back_even_when_last_would_meet(self, evaluator: QuoteEvaluator) -> None:
         # ask=101 fails; last=99 would meet but spec §4 forbids falling back when ask is present.
-        quote = Quote(
-            symbol="2330",
-            quote_time=SESSION_QUOTE_TIME,
-            ask_price=Decimal("101"),
-            last_price=Decimal("99"),
+        result = evaluator.evaluate(
+            _snapshot(ask_price=Decimal("101"), last_price=Decimal("99")),
+            make_intent(),
+            SESSION_NOW,
         )
-        result = evaluator.evaluate(quote, make_intent(), SESSION_NOW)
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.CONDITION_NOT_MET
 
     def test_missing_ask_last_above_target_does_not_trigger(self, evaluator: QuoteEvaluator) -> None:
-        quote = Quote(symbol="2330", quote_time=SESSION_QUOTE_TIME, last_price=Decimal("101"))
-        result = evaluator.evaluate(quote, make_intent(), SESSION_NOW)
+        result = evaluator.evaluate(_snapshot(last_price=Decimal("101")), make_intent(), SESSION_NOW)
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.CONDITION_NOT_MET
 
 
 class TestSellPriceAlert:
     def test_bid_at_target_triggers(self, evaluator: QuoteEvaluator) -> None:
-        quote = Quote(symbol="2330", quote_time=SESSION_QUOTE_TIME, bid_price=Decimal("100"))
-        result = evaluator.evaluate(quote, make_intent("sell_price_alert"), SESSION_NOW)
+        result = evaluator.evaluate(
+            _snapshot(bid_price=Decimal("100")),
+            make_intent("sell_price_alert"),
+            SESSION_NOW,
+        )
         assert result.should_trigger
         assert result.trigger_price == Decimal("100")
         assert result.trigger_reference_price_type == "bid"
         assert result.fallback_used is False
 
     def test_bid_above_target_triggers(self, evaluator: QuoteEvaluator) -> None:
-        quote = Quote(symbol="2330", quote_time=SESSION_QUOTE_TIME, bid_price=Decimal("101"))
-        result = evaluator.evaluate(quote, make_intent("sell_price_alert"), SESSION_NOW)
+        result = evaluator.evaluate(
+            _snapshot(bid_price=Decimal("101")),
+            make_intent("sell_price_alert"),
+            SESSION_NOW,
+        )
         assert result.should_trigger
         assert result.trigger_price == Decimal("101")
         assert result.trigger_reference_price_type == "bid"
 
     def test_bid_below_target_does_not_trigger(self, evaluator: QuoteEvaluator) -> None:
-        quote = Quote(symbol="2330", quote_time=SESSION_QUOTE_TIME, bid_price=Decimal("99"))
-        result = evaluator.evaluate(quote, make_intent("sell_price_alert"), SESSION_NOW)
+        result = evaluator.evaluate(
+            _snapshot(bid_price=Decimal("99")),
+            make_intent("sell_price_alert"),
+            SESSION_NOW,
+        )
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.CONDITION_NOT_MET
 
     def test_missing_bid_falls_back_to_last(self, evaluator: QuoteEvaluator) -> None:
-        quote = Quote(symbol="2330", quote_time=SESSION_QUOTE_TIME, last_price=Decimal("101"))
-        result = evaluator.evaluate(quote, make_intent("sell_price_alert"), SESSION_NOW)
+        result = evaluator.evaluate(
+            _snapshot(last_price=Decimal("101")),
+            make_intent("sell_price_alert"),
+            SESSION_NOW,
+        )
         assert result.should_trigger
         assert result.trigger_price == Decimal("101")
         assert result.trigger_reference_price_type == "last_fallback"
         assert result.fallback_used is True
 
     def test_bid_present_does_not_fall_back_even_when_last_would_meet(self, evaluator: QuoteEvaluator) -> None:
-        quote = Quote(
-            symbol="2330",
-            quote_time=SESSION_QUOTE_TIME,
-            bid_price=Decimal("99"),
-            last_price=Decimal("101"),
+        result = evaluator.evaluate(
+            _snapshot(bid_price=Decimal("99"), last_price=Decimal("101")),
+            make_intent("sell_price_alert"),
+            SESSION_NOW,
         )
-        result = evaluator.evaluate(quote, make_intent("sell_price_alert"), SESSION_NOW)
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.CONDITION_NOT_MET
 
@@ -147,55 +165,55 @@ class TestSellPriceAlert:
 class TestSessionGuard:
     def test_now_outside_session_skips(self, evaluator: QuoteEvaluator) -> None:
         weekend = datetime(2026, 5, 16, 10, 0, tzinfo=TAIPEI)  # Saturday
-        quote = Quote(symbol="2330", quote_time=weekend, ask_price=Decimal("99"))
-        result = evaluator.evaluate(quote, make_intent(), weekend)
+        result = evaluator.evaluate(
+            _snapshot(quote_time=weekend, ask_price=Decimal("99")),
+            make_intent(),
+            weekend,
+        )
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.OUTSIDE_SESSION
 
     def test_quote_time_outside_session_skips(self, evaluator: QuoteEvaluator) -> None:
         # now is in session but quote_time is before market open.
         pre_open = datetime(2026, 5, 11, 8, 59, tzinfo=TAIPEI)
-        quote = Quote(symbol="2330", quote_time=pre_open, ask_price=Decimal("99"))
-        result = evaluator.evaluate(quote, make_intent(), SESSION_NOW)
+        result = evaluator.evaluate(
+            _snapshot(quote_time=pre_open, ask_price=Decimal("99")),
+            make_intent(),
+            SESSION_NOW,
+        )
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.OUTSIDE_SESSION
 
 
 class TestQuoteValidation:
     def test_stale_quote_skips(self, evaluator: QuoteEvaluator) -> None:
-        stale_quote_time = SESSION_NOW - timedelta(seconds=11)
-        quote = Quote(symbol="2330", quote_time=stale_quote_time, ask_price=Decimal("99"))
-        result = evaluator.evaluate(quote, make_intent(), SESSION_NOW)
+        stale = SESSION_NOW - timedelta(seconds=11)
+        result = evaluator.evaluate(_snapshot(quote_time=stale, ask_price=Decimal("99")), make_intent(), SESSION_NOW)
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.QUOTE_STALE
 
     def test_quote_exactly_at_freshness_boundary_passes(self, evaluator: QuoteEvaluator) -> None:
         # 10s old — threshold is inclusive.
         boundary = SESSION_NOW - timedelta(seconds=10)
-        quote = Quote(symbol="2330", quote_time=boundary, ask_price=Decimal("99"))
-        result = evaluator.evaluate(quote, make_intent(), SESSION_NOW)
+        result = evaluator.evaluate(_snapshot(quote_time=boundary, ask_price=Decimal("99")), make_intent(), SESSION_NOW)
         assert result.should_trigger
 
     def test_bid_greater_than_ask_skips(self, evaluator: QuoteEvaluator) -> None:
-        quote = Quote(
-            symbol="2330",
-            quote_time=SESSION_QUOTE_TIME,
-            bid_price=Decimal("101"),
-            ask_price=Decimal("100"),
+        result = evaluator.evaluate(
+            _snapshot(bid_price=Decimal("101"), ask_price=Decimal("100")),
+            make_intent(),
+            SESSION_NOW,
         )
-        result = evaluator.evaluate(quote, make_intent(), SESSION_NOW)
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.QUOTE_BID_GT_ASK
 
     def test_zero_price_skips(self, evaluator: QuoteEvaluator) -> None:
-        quote = Quote(symbol="2330", quote_time=SESSION_QUOTE_TIME, ask_price=Decimal("0"))
-        result = evaluator.evaluate(quote, make_intent(), SESSION_NOW)
+        result = evaluator.evaluate(_snapshot(ask_price=Decimal("0")), make_intent(), SESSION_NOW)
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.QUOTE_NONPOSITIVE_PRICE
 
     def test_all_prices_missing_skips(self, evaluator: QuoteEvaluator) -> None:
-        quote = Quote(symbol="2330", quote_time=SESSION_QUOTE_TIME)
-        result = evaluator.evaluate(quote, make_intent(), SESSION_NOW)
+        result = evaluator.evaluate(_snapshot(), make_intent(), SESSION_NOW)
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.QUOTE_MISSING_ALL_PRICES
 
@@ -203,7 +221,6 @@ class TestQuoteValidation:
 class TestUnsupportedStrategy:
     def test_unknown_strategy_skips(self, evaluator: QuoteEvaluator) -> None:
         intent = make_intent(strategy="take_profit_alert")
-        quote = Quote(symbol="2330", quote_time=SESSION_QUOTE_TIME, ask_price=Decimal("99"))
-        result = evaluator.evaluate(quote, intent, SESSION_NOW)
+        result = evaluator.evaluate(_snapshot(ask_price=Decimal("99")), intent, SESSION_NOW)
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.UNSUPPORTED_STRATEGY
