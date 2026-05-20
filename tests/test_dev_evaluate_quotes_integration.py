@@ -196,6 +196,37 @@ def test_evaluate_buys_at_target_triggers_intent_and_writes_three_rows(
 
 
 @pytest.mark.integration
+def test_evaluate_sell_bid_above_target_triggers_intent(
+    db_session: Session,
+    client: TestClient,
+    repo: IntentRepository,
+    quote_provider: InMemoryQuoteProvider,
+) -> None:
+    owner = uuid4()
+    intent_id = _create_active_intent(
+        repo,
+        owner_user_id=owner,
+        target_price="100.0000",
+        strategy="sell_price_alert",
+    )
+    quote_provider.set_quote(_snapshot("2330", bid="101.0000"))  # bid > target
+
+    response = client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["triggeredIntentIds"] == [str(intent_id)]
+
+    intent_after = repo.find_by_id(intent_id, owner)
+    assert intent_after.status == "triggered"
+
+    trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
+    assert trigger_row.trigger_price == Decimal("101.0000")
+    assert trigger_row.trigger_reference_price_type == "bid"
+    assert trigger_row.fallback_used is False
+    assert trigger_row.quote_snapshot["bid_price"] == "101.0000"
+
+
+@pytest.mark.integration
 def test_evaluate_with_no_symbols_evaluates_all_actives(
     client: TestClient,
     repo: IntentRepository,
