@@ -1,11 +1,11 @@
 from datetime import date, datetime
-from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 from app.api.schemas.base import OwnerScopedRequestModel
+from app.domain.price import format_price_str
 from app.domain.trade_intent import TradeIntentData
 
 
@@ -54,22 +54,14 @@ class IntentDetailResponse(BaseModel):
     data: IntentResponseData
 
 
-# If other schemas (e.g. notifications) need the same formatting, move this to a shared utility.
-def _decimal_str(value: Decimal) -> str:
-    s = format(value, "f")
-    integer_part, _, decimal_part = s.partition(".")
-    decimal_part = (decimal_part or "").rstrip("0").ljust(2, "0")
-    return f"{integer_part}.{decimal_part}"
-
-
 def map_to_response_data(intent: TradeIntentData) -> IntentResponseData:
     return IntentResponseData(
         id=intent.id,
         symbol=intent.symbol,
         strategy=intent.strategy,
         quantity_lots=intent.quantity_lots,
-        target_price_original=_decimal_str(intent.target_price_original),
-        target_price_effective=_decimal_str(intent.target_price_effective),
+        target_price_original=format_price_str(intent.target_price_original),
+        target_price_effective=format_price_str(intent.target_price_effective),
         trading_date=intent.trading_date,
         time_in_force=intent.time_in_force,
         execution_mode=intent.execution_mode,
