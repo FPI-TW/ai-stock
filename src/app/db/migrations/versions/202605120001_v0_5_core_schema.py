@@ -107,7 +107,7 @@ def upgrade() -> None:
         sa.Column("trigger_price", sa.Numeric(9, 4), nullable=False),
         sa.Column("trigger_reference_price_type", sa.Text(), nullable=False),
         sa.Column("fallback_used", sa.Boolean(), server_default="false", nullable=False),
-        sa.Column("triggered_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("triggered_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.CheckConstraint("target_price_effective > 0", name="ck_trigger_events_target_price_effective"),
         sa.CheckConstraint("trigger_price > 0", name="ck_trigger_events_trigger_price"),

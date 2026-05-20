@@ -20,7 +20,7 @@ ripple back into the evaluator.
 """
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -113,7 +113,11 @@ class TriggerIntentCommand:
             quote_time=inp.quote_time,
         )
 
-        triggered_at = datetime.now(UTC)
+        # `triggered_at` left unset on both rows / UPDATE values — the DB fills
+        # it via `func.now()` (server_default on trigger_events, explicit on
+        # the UPDATE). In a single PostgreSQL transaction every NOW() call
+        # returns the transaction-start timestamp, so the two columns end up
+        # with identical values without us tracking them in Python.
         trigger_row = TriggerEventRow(
             id=uuid4(),
             trade_intent_id=intent.id,
@@ -124,7 +128,6 @@ class TriggerIntentCommand:
             trigger_price=inp.trigger_price,
             trigger_reference_price_type=inp.trigger_reference_price_type,
             fallback_used=inp.fallback_used,
-            triggered_at=triggered_at,
         )
         notification_row = NotificationRow(
             id=uuid4(),
@@ -143,7 +146,7 @@ class TriggerIntentCommand:
             self._db.execute(
                 update(TradeIntent)
                 .where(TradeIntent.id == intent.id, TradeIntent.status == "active")
-                .values(status="triggered", triggered_at=triggered_at, updated_at=func.now()),
+                .values(status="triggered", triggered_at=func.now(), updated_at=func.now()),
             )
             self._db.add(notification_row)
             self._db.commit()
