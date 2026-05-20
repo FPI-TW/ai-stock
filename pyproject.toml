@@ -13,6 +13,12 @@ dependencies = [
     "alembic>=1.18.4",
 ]
 
+[project.optional-dependencies]
+# Demo-only quote provider; required when QUOTE_PROVIDER=shioaji_demo.
+# Install locally with `uv sync --extra shioaji_demo`. CI / unit tests
+# (QUOTE_PROVIDER=in_memory) never import shioaji and don't need this.
+shioaji_demo = ["shioaji>=1.2"]
+
 [dependency-groups]
 dev = [
     "httpx>=0.28.0",
@@ -42,6 +48,13 @@ ignore = [
     "ANN201",
 ]
 
+# Shioaji SDK is untyped and its callbacks deliver dynamic payloads. Restrict
+# `Any` to the SDK glue + normalisation helpers — every other module still
+# requires explicit types.
+[tool.ruff.lint.per-file-ignores]
+"src/app/services/quote/shioaji_demo/client.py" = ["ANN401"]
+"src/app/services/quote/shioaji_demo/normalize.py" = ["ANN401"]
+
 [tool.mypy]
 python_version = "3.13"
 mypy_path = "src"
@@ -50,3 +63,10 @@ files = ["src", "tests"]
 warn_unused_configs = true
 disallow_untyped_defs = true
 check_untyped_defs = true
+
+# Shioaji SDK is an optional dependency (only installed when QUOTE_PROVIDER=shioaji_demo)
+# and ships without type stubs. Suppress missing-stub errors so CI passes without the
+# extras installed; runtime correctness is covered by tests against a mocked SDK.
+[[tool.mypy.overrides]]
+module = "shioaji.*"
+ignore_missing_imports = true

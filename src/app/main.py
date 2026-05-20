@@ -1,3 +1,7 @@
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.api.errors import register_exception_handlers
@@ -6,12 +10,54 @@ from app.api.routes.intents import router as intents_router
 from app.api.routes.symbols import router as symbols_router
 from app.core.config import get_settings
 from app.core.ids import RequestIdMiddleware
+from app.repositories.intent_repository import IntentRepository
+from app.services.quote import build_quote_provider
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Bring the quote provider online and reconcile subscriptions on startup.
+
+    The provider itself is already built in `create_app()` (so DI works without
+    waiting for the lifespan to fire — important for tests that don't use
+    `with TestClient(app)`). This lifespan covers the side-effectful parts:
+
+    1. `provider.startup()` — broker session setup; no-op for `InMemoryQuoteProvider`.
+    2. Initial reconcile — read every active/scheduled intent from DB and
+       `subscribe()` its symbol. Skipped when no DATABASE_URL is configured
+       (e.g. lightweight unit-test runs).
+    3. `provider.shutdown()` on exit — broker logout, clear local state.
+    """
+
+    settings = get_settings()
+    provider = app.state.quote_provider
+    provider.startup()
+
+    if settings.database_url:
+        from app.db.session import get_session_factory
+
+        session_factory = get_session_factory()
+        with session_factory() as db:
+            for symbol in IntentRepository(db).active_or_scheduled_symbols():
+                provider.subscribe(symbol)
+        logger.info(
+            "quote provider startup reconcile complete",
+            extra={"active_subscriptions": sorted(provider.active_subscriptions())},
+        )
+
+    try:
+        yield
+    finally:
+        provider.shutdown()
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title=settings.app_name, version=settings.app_version)
+    app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
     app.state.request_id_header = settings.request_id_header
+    app.state.quote_provider = build_quote_provider(settings)
     app.add_middleware(RequestIdMiddleware, header_name=settings.request_id_header)
     register_exception_handlers(app)
     app.include_router(health_router)

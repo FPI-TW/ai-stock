@@ -41,9 +41,17 @@ repos:
         always_run: true
         stages: [pre-commit]
 
+      - id: check-shioaji-isolation
+        name: check shioaji_demo isolation
+        entry: make check-shioaji-isolation
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
       - id: pytest
         name: pytest
-        entry: uv run pytest
+        entry: uv run pytest -s
         language: system
         pass_filenames: false
         always_run: true

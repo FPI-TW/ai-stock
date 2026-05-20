@@ -15,6 +15,7 @@ from app.domain.trade_intent import (
     IntentNotFoundError,
     InvalidCursorError,
 )
+from app.services.quote.base import QuoteProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,8 @@ class ErrorCode(StrEnum):
     NOT_FOUND = "NOT_FOUND"
     CANCEL_NOT_ALLOWED = "CANCEL_NOT_ALLOWED"
     INVALID_CURSOR = "INVALID_CURSOR"
+    QUOTE_PROVIDER_UNAVAILABLE = "QUOTE_PROVIDER_UNAVAILABLE"
+    QUOTE_UNAVAILABLE = "QUOTE_UNAVAILABLE"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -49,21 +52,33 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.NOT_FOUND: "找不到此資源",
     ErrorCode.CANCEL_NOT_ALLOWED: "此委託狀態不允許取消",
     ErrorCode.INVALID_CURSOR: "Cursor 已失效或不存在",
+    ErrorCode.QUOTE_PROVIDER_UNAVAILABLE: "行情服務暫時無法使用",
+    ErrorCode.QUOTE_UNAVAILABLE: "尚未收到該標的的行情報價",
 }
 
 
 class ApiError(Exception):
     def __init__(
         self,
-        code: ErrorCode,
+        code: ErrorCode | str,
         status_code: int,
         message: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         self.code = code
         self.status_code = status_code
-        self.message = message or DEFAULT_MESSAGES[code]
+        self.message = message or _default_message(code)
         self.details = details or {}
+
+
+def _code_value(code: ErrorCode | str) -> str:
+    return code.value if isinstance(code, ErrorCode) else code
+
+
+def _default_message(code: ErrorCode | str) -> str:
+    if isinstance(code, ErrorCode):
+        return DEFAULT_MESSAGES[code]
+    return "行情服務發生錯誤"
 
 
 def get_request_id(request: Request) -> str:
@@ -73,7 +88,7 @@ def get_request_id(request: Request) -> str:
 def build_error_response(
     request: Request,
     status_code: int,
-    code: ErrorCode,
+    code: ErrorCode | str,
     message: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> JSONResponse:
@@ -81,8 +96,8 @@ def build_error_response(
     header_name = getattr(request.app.state, "request_id_header", "X-Request-Id")
     payload = {
         "error": {
-            "code": code.value,
-            "message": message or DEFAULT_MESSAGES[code],
+            "code": _code_value(code),
+            "message": message or _default_message(code),
             "details": details or {},
             "requestId": request_id,
         }
@@ -221,6 +236,31 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=status.HTTP_409_CONFLICT,
             code=ErrorCode.CANCEL_NOT_ALLOWED,
             details={"currentStatus": exc.current_status},
+        )
+
+    @app.exception_handler(QuoteProviderError)
+    async def quote_provider_error_handler(request: Request, exc: QuoteProviderError) -> JSONResponse:
+        # Provider-specific subclasses provide stable envelope fields through
+        # class attributes, without this API layer importing concrete providers.
+        code: ErrorCode | str
+        try:
+            code = ErrorCode(exc.error_code)
+        except ValueError:
+            code = exc.error_code
+        logger.warning(
+            "Quote provider error",
+            extra={
+                "request_id": get_request_id(request),
+                "error_code": exc.error_code,
+                "exception_class": type(exc).__name__,
+            },
+        )
+        return build_error_response(
+            request=request,
+            status_code=exc.http_status,
+            code=code,
+            message=exc.default_message,
+            details=exc.details(),
         )
 
     @app.exception_handler(RequestValidationError)
