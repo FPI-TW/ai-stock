@@ -60,10 +60,14 @@ class ShioajiQuoteProvider(QuoteProvider):
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "ShioajiQuoteProvider":
-        # `Settings._enforce_shioaji_credentials` guarantees these are present when
-        # quote_provider == "shioaji_demo"; assert for mypy / runtime defence.
-        assert settings.shioaji_api_key, "SHIOAJI_API_KEY is required for shioaji_demo"
-        assert settings.shioaji_secret_key, "SHIOAJI_SECRET_KEY is required for shioaji_demo"
+        # `Settings._enforce_shioaji_credentials` guarantees these are non-None when
+        # quote_provider == "shioaji_demo"; the raise below is defence-in-depth that
+        # survives `python -O` (which strips `assert`).
+        if not settings.shioaji_api_key or not settings.shioaji_secret_key:
+            raise RuntimeError(
+                "SHIOAJI_API_KEY / SHIOAJI_SECRET_KEY missing for quote_provider=shioaji_demo; "
+                "Settings validation should have caught this — please check config wiring."
+            )
 
         from app.services.quote.shioaji_demo.client import ShioajiClient
 
@@ -104,6 +108,15 @@ class ShioajiQuoteProvider(QuoteProvider):
             self._started = False
             logger.info("shioaji logout ok")
 
+    def mark_started_for_tests(self) -> None:
+        """Test-only escape hatch to skip the real `startup()` (which would call
+        shioaji login). Tests construct the provider with a duck-typed mock client
+        and call this to flip into the "started" state without going through the
+        SDK login path. Do NOT use in production code.
+        """
+        with self._lock:
+            self._started = True
+
     # ------------------------------------------------------------------
     # QuoteProvider protocol
     # ------------------------------------------------------------------
@@ -123,14 +136,17 @@ class ShioajiQuoteProvider(QuoteProvider):
         with self._lock:
             if symbol in self._subscribed:
                 return
+            # "provider not started" is a more fundamental failure than "quota
+            # full"; surface it first so callers don't get a misleading 409
+            # when the real cause is an unstarted provider.
+            if not self._started:
+                raise QuoteProviderUnavailableError("shioaji", "provider not started; call startup() first")
             if len(self._subscribed) >= self._max:
                 raise QuoteSubscriptionLimitExceeded(
                     symbol=symbol,
                     current=len(self._subscribed),
                     limit=self._max,
                 )
-            if not self._started:
-                raise QuoteProviderUnavailableError("shioaji", "provider not started; call startup() first")
             try:
                 self._client.subscribe(symbol)
             except QuoteProviderError:

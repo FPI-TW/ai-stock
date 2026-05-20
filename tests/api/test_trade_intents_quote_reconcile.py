@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.deps import get_db, get_intent_repository, get_quote_provider, get_symbol_service
 from app.domain.trade_intent import TradeIntentData
@@ -66,7 +67,7 @@ def shioaji_provider() -> ShioajiQuoteProvider:
         allowed_symbols=frozenset({"2330", "2317", "0050", "00878", "9999"}),
         max_subscriptions=5,
     )
-    provider._started = True  # skip the SDK login path  # noqa: SLF001
+    provider.mark_started_for_tests()  # skip the SDK login path
     return provider
 
 
@@ -116,7 +117,9 @@ def test_create_intent_with_non_demo_symbol_returns_422(
     shioaji_provider: ShioajiQuoteProvider,
 ) -> None:
     mock_symbol_service.get_tradable_symbol.return_value = _tradable_symbol("1101")
-    mock_intent_repo.create.return_value = _intent("1101")
+    intent_1101 = _intent("1101")
+    mock_intent_repo.create.return_value = intent_1101.id
+    mock_intent_repo.find_by_id.return_value = intent_1101
 
     response = client.post("/trade-intents", json=_payload(symbol="1101"))
 
@@ -148,7 +151,9 @@ def test_create_intent_beyond_5_subscriptions_returns_409(
         {"2330", "2317", "0050", "00878", "9999", "6505"}
     )
     mock_symbol_service.get_tradable_symbol.return_value = _tradable_symbol("6505")
-    mock_intent_repo.create.return_value = _intent("6505")
+    intent_6505 = _intent("6505")
+    mock_intent_repo.create.return_value = intent_6505.id
+    mock_intent_repo.find_by_id.return_value = intent_6505
 
     response = client.post("/trade-intents", json=_payload(symbol="6505"))
 
@@ -195,4 +200,27 @@ def test_cancel_intent_keeps_subscription_when_peers_still_active(
 
     assert response.status_code == status.HTTP_200_OK
     # Peers still want the symbol; the broker subscription stays put.
+    assert "2330" in shioaji_provider.active_subscriptions()
+
+
+def test_cancel_intent_returns_200_when_post_cancel_count_query_fails(
+    client: TestClient,
+    mock_intent_repo: MagicMock,
+    shioaji_provider: ShioajiQuoteProvider,
+) -> None:
+    """Regression for PR #12 r3272105995.
+
+    Cancel SQL has already committed when the residual-count query blows up.
+    The cancel API must still return 200 — any stale broker subscription will
+    be reaped by the next startup reconcile, not by a 500 to the client.
+    """
+    intent_id = uuid4()
+    shioaji_provider.subscribe("2330")
+    mock_intent_repo.cancel.return_value = _intent("2330", id=intent_id)
+    mock_intent_repo.count_active_or_scheduled_for_symbol.side_effect = SQLAlchemyError("boom")
+
+    response = client.post(f"/trade-intents/{intent_id}/cancel")
+
+    assert response.status_code == status.HTTP_200_OK
+    # Cleanup deferred to startup reconciler; the subscription stays put for now.
     assert "2330" in shioaji_provider.active_subscriptions()

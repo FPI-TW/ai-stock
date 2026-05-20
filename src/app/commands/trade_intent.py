@@ -8,7 +8,7 @@ from app.domain.price import InvalidTypeError, PriceRequest, PriceService, Secur
 from app.domain.trade_intent import TradeIntentData
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
-from app.services.quote.base import QuoteProvider, QuoteProviderError
+from app.services.quote.base import QuoteProvider
 from app.services.quote.intent_reconciler import reconcile_after_terminal_transition, reconcile_on_create
 from app.services.symbol import SymbolService
 
@@ -44,9 +44,13 @@ class CreateTradeIntentCommand:
     """Create a trade intent and reconcile its quote subscription atomically.
 
     Transaction shape: validate → insert (flushed, not committed) → reconcile
-    subscription → commit. If reconcile raises (allowlist / quota), the entire
-    transaction rolls back so the DB never contains an intent with no upstream
-    quote subscription.
+    subscription → commit → materialise server-side values via `find_by_id`.
+
+    The `find_by_id` happens *after* commit, so any failure between insert and
+    commit (reconcile rejecting on allowlist / quota, etc.) rolls back the
+    whole transaction without exposing a half-materialised domain object. The
+    final SELECT is a pure read — failing there cannot leave the DB and the
+    quote provider out of sync.
     """
 
     def __init__(
@@ -86,12 +90,13 @@ class CreateTradeIntentCommand:
             trading_date = self._session_service.get_day_intent_trading_date(now)
             initial_status = self._session_service.get_initial_day_intent_status(now)
 
-            # 4. persist (flush only — commit happens below after reconcile)
+            # 4. persist (flush only — no refresh; the domain object is
+            #    materialised after the final commit via `find_by_id`)
             trigger_ref = _TRIGGER_REF.get(inp.strategy)
             if trigger_ref is None:
                 raise ValueError(f"Unsupported strategy: {inp.strategy}")
 
-            intent = self._intent_repo.create(
+            intent_id = self._intent_repo.create(
                 owner_user_id=inp.owner_user_id,
                 symbol=inp.symbol,
                 strategy=inp.strategy,
@@ -106,17 +111,27 @@ class CreateTradeIntentCommand:
             )
 
             # 5. reconcile subscription before commit — fail here rolls back the intent
-            reconcile_on_create(self._quote_provider, intent.symbol)
+            reconcile_on_create(self._quote_provider, inp.symbol)
 
             self._db.commit()
-            return intent
         except Exception:
             self._db.rollback()
             raise
 
+        # 6. materialise server-side values (created_at / updated_at). Done
+        #    after commit so a SELECT hiccup here can't corrupt a half-written
+        #    write — the row is already durable.
+        return self._intent_repo.find_by_id(intent_id, inp.owner_user_id)
+
 
 class CancelTradeIntentCommand:
-    """Cancel an intent and release its quote subscription when nothing else needs it."""
+    """Cancel an intent and release its quote subscription when nothing else needs it.
+
+    Transaction shape: cancel-flush → commit (Phase A, required); then
+    best-effort subscription cleanup (Phase B). Any failure in Phase B leaves a
+    stale subscription that the next startup reconcile sweeps up — the API call
+    must still report cancel success because the DB write has already landed.
+    """
 
     def __init__(
         self,
@@ -129,19 +144,25 @@ class CancelTradeIntentCommand:
         self._db = db
 
     def execute(self, inp: CancelTradeIntentInput) -> TradeIntentData:
+        # Phase A: cancel SQL — must commit even if reconcile later fails.
         try:
             intent = self._intent_repo.cancel(inp.intent_id, inp.owner_user_id)
-            try:
-                reconcile_after_terminal_transition(self._quote_provider, self._intent_repo, intent.symbol)
-            except QuoteProviderError:
-                # The cancel itself succeeded; a stale subscription leak will be
-                # cleaned up on next startup reconcile. Don't fail the API call.
-                logger.warning(
-                    "unsubscribe failed during cancel reconcile",
-                    extra={"symbol": intent.symbol, "intent_id": str(intent.id)},
-                )
             self._db.commit()
-            return intent
         except Exception:
             self._db.rollback()
             raise
+
+        # Phase B: best-effort subscription cleanup. Catch broad Exception
+        # (covers SQLAlchemyError from the residual-count query *and* anything
+        # the provider unsubscribe path could raise) so the cancel API never
+        # 500s on cleanup failure — the next startup reconcile will sweep any
+        # stale broker subscription.
+        try:
+            reconcile_after_terminal_transition(self._quote_provider, self._intent_repo, intent.symbol)
+        except Exception:
+            logger.warning(
+                "post-cancel reconcile failed; leaving cleanup to startup reconciler",
+                extra={"symbol": intent.symbol, "intent_id": str(intent.id)},
+                exc_info=True,
+            )
+        return intent

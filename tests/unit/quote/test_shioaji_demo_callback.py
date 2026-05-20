@@ -24,7 +24,7 @@ def _make_provider() -> ShioajiQuoteProvider:
         allowed_symbols=frozenset({"2330"}),
         max_subscriptions=5,
     )
-    provider._started = True  # noqa: SLF001
+    provider.mark_started_for_tests()
     provider.subscribe("2330")
     return provider
 

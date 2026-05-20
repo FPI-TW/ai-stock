@@ -37,7 +37,9 @@ def test_create_intent_success(
     client: TestClient, mock_symbol_service: MagicMock, mock_intent_repository: MagicMock
 ) -> None:
     mock_symbol_service.get_tradable_symbol.return_value = MagicMock(instrument_type="stock")
-    mock_intent_repository.create.return_value = _make_intent_mock()
+    intent_mock = _make_intent_mock()
+    mock_intent_repository.create.return_value = intent_mock.id
+    mock_intent_repository.find_by_id.return_value = intent_mock
 
     response = client.post("/trade-intents", json=_VALID_PAYLOAD)
 

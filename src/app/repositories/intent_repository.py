@@ -60,14 +60,20 @@ class IntentRepository:
         time_in_force: str,
         execution_mode: str,
         status: str,
-    ) -> TradeIntentData:
-        """Add a new TradeIntent and flush.
+    ) -> UUID:
+        """Add a new TradeIntent and flush; return its id.
 
-        Transactional boundary: this repo no longer commits — the caller owns the
-        transaction so it can run additional operations (quote provider reconcile)
-        atomically with the insert. On `IntegrityError`, raise `DuplicateIntentError`
-        without rolling back; the caller's exception handler issues `rollback()` on
-        the session before the next operation.
+        Transactional boundary: this repo neither commits nor refreshes — the
+        caller owns the transaction and is responsible for materialising
+        server-managed values (`created_at` / `updated_at`) via `find_by_id`
+        after the final commit. Keeping refresh out of this method means the
+        failure shape is simple: any error between flush and final commit
+        (e.g. quote provider reconcile rejecting on allowlist / quota) rolls
+        back cleanly without ever exposing a half-materialised domain object.
+
+        On `IntegrityError`, raise `DuplicateIntentError` without rolling
+        back; the caller's exception handler issues `rollback()` on the
+        session before the next operation.
         """
 
         duplicate = self._db.execute(
@@ -105,8 +111,7 @@ class IntentRepository:
             self._db.flush()
         except IntegrityError as exc:
             raise DuplicateIntentError(owner_user_id, symbol, strategy) from exc
-        self._db.refresh(row)
-        return _to_domain(row)
+        return row.id
 
     def find_by_id(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
         row = self._db.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one_or_none()

@@ -86,7 +86,7 @@ def _create(
     trading_date: date | None = None,
     status: str = "active",
 ) -> TradeIntentData:
-    intent = repo.create(
+    intent_id = repo.create(
         owner_user_id=owner_user_id,
         symbol=symbol,
         strategy=strategy,
@@ -103,7 +103,8 @@ def _create(
     # values resolve per-statement instead of all sharing one transaction timestamp.
     # Tests that exercise ordering by `created_at` / `updated_at` rely on this.
     repo._db.commit()  # noqa: SLF001
-    return intent
+    # Materialise after commit, matching `CreateTradeIntentCommand.execute`.
+    return repo.find_by_id(intent_id, owner_user_id)
 
 
 @pytest.mark.integration

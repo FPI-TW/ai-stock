@@ -16,7 +16,7 @@ def _make_provider(*, max_subs: int = 5) -> tuple[ShioajiQuoteProvider, MagicMoc
         allowed_symbols=frozenset({"2330", "2317", "0050", "00878", "9999", "1101"}),
         max_subscriptions=max_subs,
     )
-    provider._started = True  # noqa: SLF001
+    provider.mark_started_for_tests()
     return provider, client
 
 

@@ -20,9 +20,9 @@ from app.services.quote.shioaji_demo.provider import ShioajiQuoteProvider
 def _make_provider(*, allowed: frozenset[str] = DEFAULT_DEMO_ALLOWED_SYMBOLS) -> tuple[ShioajiQuoteProvider, MagicMock]:
     client = MagicMock()
     provider = ShioajiQuoteProvider(client=client, allowed_symbols=allowed, max_subscriptions=5)
-    # Skip the real `startup()` path (which would call shioaji login); flip the
-    # internal flag so `subscribe` can proceed to the client call when warranted.
-    provider._started = True  # noqa: SLF001
+    # Skip the real `startup()` path (which would call shioaji login) so
+    # `subscribe` can proceed to the client call when warranted.
+    provider.mark_started_for_tests()
     return provider, client
 
 
