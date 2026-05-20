@@ -61,6 +61,15 @@ class IntentRepository:
         execution_mode: str,
         status: str,
     ) -> TradeIntentData:
+        """Add a new TradeIntent and flush.
+
+        Transactional boundary: this repo no longer commits — the caller owns the
+        transaction so it can run additional operations (quote provider reconcile)
+        atomically with the insert. On `IntegrityError`, raise `DuplicateIntentError`
+        without rolling back; the caller's exception handler issues `rollback()` on
+        the session before the next operation.
+        """
+
         duplicate = self._db.execute(
             select(TradeIntent).where(
                 and_(
@@ -93,11 +102,10 @@ class IntentRepository:
         )
         self._db.add(row)
         try:
-            self._db.commit()
-            self._db.refresh(row)
+            self._db.flush()
         except IntegrityError as exc:
-            self._db.rollback()
             raise DuplicateIntentError(owner_user_id, symbol, strategy) from exc
+        self._db.refresh(row)
         return _to_domain(row)
 
     def find_by_id(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
@@ -170,6 +178,12 @@ class IntentRepository:
         return [_to_domain(r) for r in page], next_cursor
 
     def cancel(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
+        """Set status='cancelled' and flush.
+
+        Like `create`, no commit happens here — the caller owns the transaction so
+        that subscription cleanup can run inside the same atomic unit.
+        """
+
         row = self._db.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one_or_none()
         if row is None or row.owner_user_id != owner_user_id:
             raise IntentNotFoundError(intent_id)
@@ -186,7 +200,36 @@ class IntentRepository:
             execution_options={"synchronize_session": False},
         )
         # refresh within the same transaction so func.now() values are read back
-        # atomically — no window for concurrent writes between commit and reload
+        # without a separate roundtrip after commit
         self._db.refresh(row)
-        self._db.commit()
         return _to_domain(row)
+
+    # ------------------------------------------------------------------
+    # quote subscription reconciliation helpers
+    # ------------------------------------------------------------------
+
+    def active_or_scheduled_symbols(self) -> set[str]:
+        """Distinct set of symbols across every non-terminal intent.
+
+        Called at app startup to seed the quote provider's subscription set.
+        """
+
+        stmt = select(TradeIntent.symbol).where(TradeIntent.status.in_(CANCELLABLE_STATUSES)).distinct()
+        return {row for (row,) in self._db.execute(stmt).all()}
+
+    def count_active_or_scheduled_for_symbol(self, symbol: str) -> int:
+        """Count non-terminal intents on `symbol` across all owners.
+
+        Subscriptions are broker-wide, not per-owner, so an unsubscribe must only
+        fire when **no** active intent (from any owner) still wants the symbol.
+        """
+
+        stmt = (
+            select(func.count())
+            .select_from(TradeIntent)
+            .where(
+                TradeIntent.symbol == symbol,
+                TradeIntent.status.in_(CANCELLABLE_STATUSES),
+            )
+        )
+        return int(self._db.execute(stmt).scalar_one())

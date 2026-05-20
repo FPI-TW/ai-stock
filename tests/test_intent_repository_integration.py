@@ -9,11 +9,11 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, delete
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models.core import Symbol
+from app.db.models.core import Symbol, TradeIntent
 from app.domain.trade_intent import (
     DuplicateIntentError,
     IntentNotFoundError,
@@ -58,8 +58,15 @@ def int_engine() -> Generator[Engine]:
 def db_session(int_engine: Engine) -> Generator[Session]:
     session = Session(int_engine)
     try:
+        # Each test starts with a clean intent table. `_create` now commits to give
+        # `func.now()` distinct timestamps per row, which means data persists across
+        # tests unless we wipe it here. Pre-existing per-owner tests are unaffected.
+        session.execute(delete(TradeIntent))
+        session.commit()
         yield session
     finally:
+        session.execute(delete(TradeIntent))
+        session.commit()
         session.close()
 
 
@@ -79,7 +86,7 @@ def _create(
     trading_date: date | None = None,
     status: str = "active",
 ) -> TradeIntentData:
-    return repo.create(
+    intent = repo.create(
         owner_user_id=owner_user_id,
         symbol=symbol,
         strategy=strategy,
@@ -92,6 +99,11 @@ def _create(
         execution_mode="notify_only",
         status=status,
     )
+    # Mimic the production command's commit boundary so server-side `func.now()`
+    # values resolve per-statement instead of all sharing one transaction timestamp.
+    # Tests that exercise ordering by `created_at` / `updated_at` rely on this.
+    repo._db.commit()  # noqa: SLF001
+    return intent
 
 
 @pytest.mark.integration
@@ -212,3 +224,56 @@ def test_cursor_from_other_owner_raises_invalid_cursor(repo: IntentRepository) -
 
     with pytest.raises(InvalidCursorError):
         repo.list_by_owner(owner_b, statuses=None, cursor=str(intent.id), page_size=10)
+
+
+# ----------------------------------------------------------------------
+# BE-V0.5-13 — repository helpers feeding the quote provider reconcile flow
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_active_or_scheduled_symbols_returns_distinct_symbols(repo: IntentRepository) -> None:
+    owner_a = uuid4()
+    owner_b = uuid4()
+    _create(repo, owner_user_id=owner_a, target_price="100.0000")
+    _create(repo, owner_user_id=owner_a, target_price="200.0000")  # same symbol, different price
+    _create(repo, owner_user_id=owner_b, target_price="100.0000")  # same symbol, different owner
+
+    symbols = repo.active_or_scheduled_symbols()
+
+    assert symbols == {"2330"}
+
+
+@pytest.mark.integration
+def test_active_or_scheduled_symbols_excludes_terminal_intents(repo: IntentRepository) -> None:
+    owner = uuid4()
+    intent = _create(repo, owner_user_id=owner)
+    repo.cancel(intent.id, owner)
+
+    symbols = repo.active_or_scheduled_symbols()
+
+    assert symbols == set()
+
+
+@pytest.mark.integration
+def test_count_active_or_scheduled_for_symbol_global(repo: IntentRepository) -> None:
+    """Quota / unsubscribe reconcile counts must be broker-global, not per-owner."""
+
+    owner_a = uuid4()
+    owner_b = uuid4()
+    _create(repo, owner_user_id=owner_a, target_price="100.0000")
+    _create(repo, owner_user_id=owner_b, target_price="200.0000")
+
+    assert repo.count_active_or_scheduled_for_symbol("2330") == 2
+    assert repo.count_active_or_scheduled_for_symbol("0050") == 0
+
+
+@pytest.mark.integration
+def test_count_drops_after_cancel(repo: IntentRepository) -> None:
+    owner = uuid4()
+    intent = _create(repo, owner_user_id=owner)
+    assert repo.count_active_or_scheduled_for_symbol("2330") == 1
+
+    repo.cancel(intent.id, owner)
+
+    assert repo.count_active_or_scheduled_for_symbol("2330") == 0

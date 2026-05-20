@@ -1,10 +1,12 @@
 import os
 
-# Module-level defaults — `app.main` 在 import 時建 FastAPI instance，會觸發 Settings 驗證；
-# 這裡 setdefault 保證 import 不爆，每個 test 仍由 `clear_settings_cache` autouse fixture
-# 重新覆蓋 env，需要負面 case 的 test 再透過自己的 monkeypatch.delenv 移除。
+# Module-level defaults — `app.main` 在 import 時建 FastAPI instance，會觸發 Settings 驗證
+# 與 `build_quote_provider(settings)`，所以這些 env 必須在 import app 之前就位。
+# `clear_settings_cache` autouse fixture 會在每個 test 之間重新覆蓋 env；需要負面 case
+# （例如測 QUOTE_PROVIDER 未知值）的 test 可自行透過 monkeypatch.setenv 改寫。
 os.environ.setdefault("LOCAL_USER_ID", "00000000-0000-0000-0000-000000000001")
 os.environ.setdefault("LOCAL_MODE", "true")
+os.environ.setdefault("QUOTE_PROVIDER", "in_memory")
 
 from collections.abc import Generator  # noqa: E402
 from typing import Protocol  # noqa: E402
@@ -24,10 +26,24 @@ class ClientFactory(Protocol):
 
 @pytest.fixture(autouse=True)
 def clear_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
-    for env_name in ("APP_ENV", "APP_NAME", "APP_VERSION", "LOCAL_USER_ID", "LOCAL_MODE", "REQUEST_ID_HEADER"):
+    for env_name in (
+        "APP_ENV",
+        "APP_NAME",
+        "APP_VERSION",
+        "LOCAL_USER_ID",
+        "LOCAL_MODE",
+        "REQUEST_ID_HEADER",
+        "QUOTE_PROVIDER",
+        "SHIOAJI_API_KEY",
+        "SHIOAJI_SECRET_KEY",
+        "SHIOAJI_MAX_SUBSCRIPTIONS",
+        "SHIOAJI_SIMULATION",
+        "SHIOAJI_DEMO_ALLOWED_SYMBOLS",
+    ):
         monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setenv("LOCAL_USER_ID", "00000000-0000-0000-0000-000000000001")
     monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("QUOTE_PROVIDER", "in_memory")
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()

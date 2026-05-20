@@ -1,7 +1,7 @@
 from collections.abc import Callable, Generator
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand
@@ -11,6 +11,7 @@ from app.db.session import check_database_connectivity, get_session_factory
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.symbol_repository import SymbolRepository
+from app.services.quote.base import QuoteProvider
 from app.services.symbol import SymbolService
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -59,19 +60,45 @@ def get_trading_session_service() -> TradingSessionService:
 TradingSessionServiceDep = Annotated[TradingSessionService, Depends(get_trading_session_service)]
 
 
+def get_quote_provider(request: Request) -> QuoteProvider:
+    """Return the process-wide quote provider stored on app.state.
+
+    `create_app()` instantiates the provider via the factory and stores it here
+    so every request shares the same in-memory subscription / snapshot state.
+    Tests substitute this dep with a `MagicMock` via `app.dependency_overrides`.
+    """
+
+    provider = getattr(request.app.state, "quote_provider", None)
+    if provider is None:
+        raise RuntimeError(
+            "quote_provider is not initialised on app.state; "
+            "check that create_app() ran and that QUOTE_PROVIDER is set."
+        )
+    return provider
+
+
+QuoteProviderDep = Annotated[QuoteProvider, Depends(get_quote_provider)]
+
+
 def get_create_trade_intent_command(
     symbol_service: SymbolServiceDep,
     session_service: TradingSessionServiceDep,
     intent_repo: IntentRepoDep,
+    quote_provider: QuoteProviderDep,
+    db: DatabaseDep,
 ) -> CreateTradeIntentCommand:
-    return CreateTradeIntentCommand(symbol_service, session_service, intent_repo)
+    return CreateTradeIntentCommand(symbol_service, session_service, intent_repo, quote_provider, db)
 
 
 CreateTradeIntentCommandDep = Annotated[CreateTradeIntentCommand, Depends(get_create_trade_intent_command)]
 
 
-def get_cancel_trade_intent_command(intent_repo: IntentRepoDep) -> CancelTradeIntentCommand:
-    return CancelTradeIntentCommand(intent_repo)
+def get_cancel_trade_intent_command(
+    intent_repo: IntentRepoDep,
+    quote_provider: QuoteProviderDep,
+    db: DatabaseDep,
+) -> CancelTradeIntentCommand:
+    return CancelTradeIntentCommand(intent_repo, quote_provider, db)
 
 
 CancelTradeIntentCommandDep = Annotated[CancelTradeIntentCommand, Depends(get_cancel_trade_intent_command)]
