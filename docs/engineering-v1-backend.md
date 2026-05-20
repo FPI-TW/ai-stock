@@ -30,7 +30,7 @@ V0.5 migration timestamp decision：
 
 - 所有 V0.5 tables 都有 `created_at`。
 - 狀態會變更的 tables 有 `updated_at`；V0.5 包含 `symbols`、`trade_intents`、`notifications`。
-- `trigger_records` 是 immutable trigger snapshot，只保留 `created_at` 與 domain event time `triggered_at`。
+- `trigger_events` 是 immutable trigger snapshot，只保留 `created_at` 與 domain event time `triggered_at`。
 - 不建立 DB trigger 自動更新 `updated_at`；更新 command/repository 必須顯式寫入 `updated_at`。
 
 V0.5 database baseline decision：
@@ -40,12 +40,12 @@ V0.5 database baseline decision：
 - Canonical symbol fields 使用 lowercase enum where applicable：`instrument_type = stock | etf`，`tradable_status = tradable | halted | unsupported`。
 - `market` canonical values 只允許 `TWSE | TPEx`，不加入 `TPEX` alias。
 - `symbols.symbol` 格式 normalize 留給 symbol service，不在 DB 層加 regex。
-- `trade_intents.symbol` 與 `trigger_records.symbol` 都 FK 到 `symbols(symbol)`。
-- `trigger_records.owner_user_id` 與 `notifications.owner_user_id` 不做 owner composite FK；後續 command transaction tests 驗證 copy/ownership 一致性。
+- `trade_intents.symbol` 與 `trigger_events.symbol` 都 FK 到 `symbols(symbol)`。
+- `trigger_events.owner_user_id` 與 `notifications.owner_user_id` 不做 owner composite FK；後續 command transaction tests 驗證 copy/ownership 一致性。
 - Duplicate intent DB invariant 只限制 active/scheduled user-facing duplicate；terminal `cancelled` / `triggered` 後允許重建。
 - Price columns 使用 `numeric(9, 4)`，DB 只限制正數；tick-size validation 留給 BE-V0.5-05。
 - `quote_snapshot` 只保證 non-null JSONB，不加 shape constraint。
-- `trigger_records` 要檢查 `last_fallback` 與 `fallback_used` 一致。
+- `trigger_events` 要檢查 `last_fallback` 與 `fallback_used` 一致。
 - `notifications.trade_intent_id` nullable 以保留 V1 擴充，但 `price_triggered` 必須有 `trade_intent_id`。
 - 不加 trade intent status 與 terminal timestamp 的 DB consistency check；BE-V0.5-07/09 command tests 驗證。
 

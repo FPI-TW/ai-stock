@@ -56,13 +56,13 @@ V0.5 不做 outbox，不做 delivery retry，不做 worker scaling。這是刻�
 
 1. Lock / reload intent。
 2. 確認 status 仍是 `active`。
-3. 寫入 `trigger_records`。
+3. 寫入 `trigger_events`。
 4. 更新 `trade_intents.status = triggered`、`triggered_at`。
 5. 建立 `notifications`。
 
 防重：
 
-- `trigger_records.trade_intent_id` unique。
+- `trigger_events.trade_intent_id` unique。
 - Intent update 使用 status guard，例如 `where status = 'active'`。
 
 ## Evaluation Driving

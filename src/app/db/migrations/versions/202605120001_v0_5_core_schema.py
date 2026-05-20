@@ -97,7 +97,7 @@ def upgrade() -> None:
     )
 
     op.create_table(
-        "trigger_records",
+        "trigger_events",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("trade_intent_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("owner_user_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -109,25 +109,25 @@ def upgrade() -> None:
         sa.Column("fallback_used", sa.Boolean(), server_default="false", nullable=False),
         sa.Column("triggered_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.CheckConstraint("target_price_effective > 0", name="ck_trigger_records_target_price_effective"),
-        sa.CheckConstraint("trigger_price > 0", name="ck_trigger_records_trigger_price"),
+        sa.CheckConstraint("target_price_effective > 0", name="ck_trigger_events_target_price_effective"),
+        sa.CheckConstraint("trigger_price > 0", name="ck_trigger_events_trigger_price"),
         sa.CheckConstraint(
             "trigger_reference_price_type IN ('ask', 'bid', 'last_fallback')",
-            name="ck_trigger_records_trigger_reference_price_type",
+            name="ck_trigger_events_trigger_reference_price_type",
         ),
         sa.CheckConstraint(
             "((trigger_reference_price_type = 'last_fallback' AND fallback_used = true) "
             "OR (trigger_reference_price_type IN ('ask', 'bid') AND fallback_used = false))",
-            name="ck_trigger_records_fallback_consistency",
+            name="ck_trigger_events_fallback_consistency",
         ),
         sa.ForeignKeyConstraint(
             ["trade_intent_id"],
             ["trade_intents.id"],
-            name="fk_trigger_records_trade_intent_id_trade_intents",
+            name="fk_trigger_events_trade_intent_id_trade_intents",
         ),
-        sa.ForeignKeyConstraint(["symbol"], ["symbols.symbol"], name="fk_trigger_records_symbol_symbols"),
-        sa.PrimaryKeyConstraint("id", name="pk_trigger_records"),
-        sa.UniqueConstraint("trade_intent_id", name="uq_trigger_records_trade_intent_id"),
+        sa.ForeignKeyConstraint(["symbol"], ["symbols.symbol"], name="fk_trigger_events_symbol_symbols"),
+        sa.PrimaryKeyConstraint("id", name="pk_trigger_events"),
+        sa.UniqueConstraint("trade_intent_id", name="uq_trigger_events_trade_intent_id"),
     )
 
     op.create_table(
@@ -166,7 +166,7 @@ def downgrade() -> None:
     op.drop_index("ix_notifications_owner_read_at", table_name="notifications")
     op.drop_index("ix_notifications_owner_created_at", table_name="notifications")
     op.drop_table("notifications")
-    op.drop_table("trigger_records")
+    op.drop_table("trigger_events")
     op.drop_index(
         "uq_trade_intents_active_duplicate",
         table_name="trade_intents",

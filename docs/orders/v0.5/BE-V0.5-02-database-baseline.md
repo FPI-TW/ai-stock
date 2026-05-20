@@ -98,7 +98,7 @@ Indexes：
 - 不加 `target_price_original = target_price_effective` DB constraint；V0.5 command 可測相等，V1 允許 effective price 擴充。
 - 不加 status 與 `cancelled_at` / `triggered_at` 的 DB consistency check；BE-V0.5-07/09 command tests 驗證狀態轉換。
 
-### `trigger_records`
+### `trigger_events`
 
 欄位：
 
@@ -121,7 +121,7 @@ Indexes：
 - 不加 `(trade_intent_id, owner_user_id)` composite FK；`owner_user_id` 是 denormalized query 欄位，BE-V0.5-09 transaction tests 驗證 copy 正確。
 - `quote_snapshot` 只保證 non-null JSONB，不加 shape constraint；BE-V0.5-08/09 定義與測試內容格式。
 - `trigger_reference_price_type = 'last_fallback'` 時 `fallback_used = true`；`ask` / `bid` 時 `fallback_used = false`。
-- `trigger_records` 是 immutable trigger snapshot，不需要 `updated_at`。
+- `trigger_events` 是 immutable trigger snapshot，不需要 `updated_at`。
 
 ### `notifications`
 
@@ -163,7 +163,7 @@ Indexes：
 - 所有 timestamp 使用 `timestamptz`。
 - 所有 table 有 `created_at`，狀態會變更的 table 有 `updated_at`。
 - V0.5 不建立 DB trigger 自動更新 `updated_at`；更新 command/repository 必須顯式寫入 `updated_at`。
-- `trigger_records` 是 immutable trigger snapshot，不需要 `updated_at`。
+- `trigger_events` 是 immutable trigger snapshot，不需要 `updated_at`。
 
 ## 驗收條件
 
@@ -180,7 +180,7 @@ Indexes：
 - Migration downgrade test。
 - Constraint test：`quantity_lots <= 0` 不可被寫入。
 - Constraint test：不合法 enum value 不可被寫入。
-- Unique test：同一 `trade_intent_id` 不可有兩筆 `trigger_records`。
+- Unique test：同一 `trade_intent_id` 不可有兩筆 `trigger_events`。
 - Type check：`make typecheck` 通過。
 
 ## 工程注意事項
