@@ -1,6 +1,6 @@
 """Provider-agnostic types shared by every quote provider.
 
-Concrete providers live in sibling modules (`in_memory.py`, `shioaji_demo/`).
+Concrete providers live in sibling modules.
 Upper layers (evaluator, intent service, API) should depend on this module
 and never reach into a specific provider's package.
 """
@@ -55,8 +55,7 @@ class QuoteProviderError(Exception):
 
     Subclasses declare class-level `error_code` and `http_status` so the FastAPI
     error handler can map them to envelopes without ever importing the concrete
-    subclass — that keeps demo-only error codes physically inside `shioaji_demo/`
-    while the handler stays in `api/errors.py`.
+    subclass — that keeps provider-specific error classes out of `api/errors.py`.
 
     The base defaults fall back to a generic 500 envelope when a subclass forgets
     to override; concrete subclasses must always override `error_code` /

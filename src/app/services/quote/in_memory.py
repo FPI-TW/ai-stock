@@ -17,8 +17,8 @@ class InMemoryQuoteProvider(QuoteProvider):
 
     `subscribe` / `unsubscribe` track a set so the reconciler can observe the
     active subscription state, matching the real provider's lifecycle without
-    any network IO. There is no quota — tests aren't constrained by the 5-symbol
-    demo limit since that's specific to Shioaji free tier.
+    any network IO. There is no quota — tests aren't constrained by broker demo
+    limits.
     """
 
     def __init__(self) -> None:

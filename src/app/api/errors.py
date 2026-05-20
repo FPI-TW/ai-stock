@@ -36,10 +36,6 @@ class ErrorCode(StrEnum):
     INVALID_CURSOR = "INVALID_CURSOR"
     QUOTE_PROVIDER_UNAVAILABLE = "QUOTE_PROVIDER_UNAVAILABLE"
     QUOTE_UNAVAILABLE = "QUOTE_UNAVAILABLE"
-    # Demo-only error codes — remove from this enum together with the
-    # `shioaji_demo/` directory at V1 migration.
-    QUOTE_SUBSCRIPTION_LIMIT_EXCEEDED = "QUOTE_SUBSCRIPTION_LIMIT_EXCEEDED"
-    SYMBOL_NOT_AVAILABLE_IN_DEMO = "SYMBOL_NOT_AVAILABLE_IN_DEMO"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -58,23 +54,31 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INVALID_CURSOR: "Cursor 已失效或不存在",
     ErrorCode.QUOTE_PROVIDER_UNAVAILABLE: "行情服務暫時無法使用",
     ErrorCode.QUOTE_UNAVAILABLE: "尚未收到該標的的行情報價",
-    ErrorCode.QUOTE_SUBSCRIPTION_LIMIT_EXCEEDED: "目前訂閱數已達 Shioaji demo 上限",
-    ErrorCode.SYMBOL_NOT_AVAILABLE_IN_DEMO: "此標的不在 Shioaji demo 白名單，無法訂閱",
 }
 
 
 class ApiError(Exception):
     def __init__(
         self,
-        code: ErrorCode,
+        code: ErrorCode | str,
         status_code: int,
         message: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
         self.code = code
         self.status_code = status_code
-        self.message = message or DEFAULT_MESSAGES[code]
+        self.message = message or _default_message(code)
         self.details = details or {}
+
+
+def _code_value(code: ErrorCode | str) -> str:
+    return code.value if isinstance(code, ErrorCode) else code
+
+
+def _default_message(code: ErrorCode | str) -> str:
+    if isinstance(code, ErrorCode):
+        return DEFAULT_MESSAGES[code]
+    return "行情服務發生錯誤"
 
 
 def get_request_id(request: Request) -> str:
@@ -84,7 +88,7 @@ def get_request_id(request: Request) -> str:
 def build_error_response(
     request: Request,
     status_code: int,
-    code: ErrorCode,
+    code: ErrorCode | str,
     message: str | None = None,
     details: dict[str, Any] | None = None,
 ) -> JSONResponse:
@@ -92,8 +96,8 @@ def build_error_response(
     header_name = getattr(request.app.state, "request_id_header", "X-Request-Id")
     payload = {
         "error": {
-            "code": code.value,
-            "message": message or DEFAULT_MESSAGES[code],
+            "code": _code_value(code),
+            "message": message or _default_message(code),
             "details": details or {},
             "requestId": request_id,
         }
@@ -236,14 +240,13 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(QuoteProviderError)
     async def quote_provider_error_handler(request: Request, exc: QuoteProviderError) -> JSONResponse:
-        # The handler is intentionally agnostic about concrete subclasses — demo-only
-        # error classes live in `app.services.quote.shioaji_demo` and are mapped here
-        # via the class-level `error_code` / `http_status` attributes they declare.
-        # V1 migration removes `shioaji_demo/` without touching this file.
+        # Provider-specific subclasses provide stable envelope fields through
+        # class attributes, without this API layer importing concrete providers.
+        code: ErrorCode | str
         try:
             code = ErrorCode(exc.error_code)
         except ValueError:
-            code = ErrorCode.INTERNAL_ERROR
+            code = exc.error_code
         logger.warning(
             "Quote provider error",
             extra={

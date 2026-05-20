@@ -31,17 +31,13 @@ pre-push-check: test
 
 check: lint format-check typecheck check-shioaji-isolation test
 
-# Fail the build if a demo-only quote symbol leaks outside its quarantined
-# subpackage. BE-V0.5-13 requires every Shioaji-specific concern to live in
-# `app/services/quote/shioaji_demo/` so V1 migration can `rm -rf` it in one
-# shot. We grep for the truly load-bearing identifiers — the SDK import, the
-# concrete provider / error class names — rather than the bare word "shioaji",
-# which legitimately appears in env aliases, factory dispatch, error messages
-# and docstrings that explain the isolation rule.
+# Fail the build if demo-provider details leak outside the quarantined
+# subpackage. The only app-layer exceptions are the provider factory switch and
+# settings env aliases.
 check-shioaji-isolation:
-	@LEAKS=$$(grep -RInE 'ShioajiQuoteProvider|ShioajiClient|SymbolNotAvailableInDemo|QuoteSubscriptionLimitExceeded|^import shioaji|^from shioaji|from app\.services\.quote\.shioaji_demo' \
-		src/app --include='*.py' --exclude-dir=shioaji_demo \
-		--exclude='factory.py' || true); \
+	@LEAKS=$$(grep -RInE 'shioaji|Shioaji|SHIOAJI|SymbolNotAvailableInDemo|QuoteSubscriptionLimitExceeded|from app\.services\.quote\.shioaji_demo' \
+			src/app --include='*.py' --exclude-dir=shioaji_demo \
+			--exclude='factory.py' --exclude='config.py' || true); \
 	if [ -n "$$LEAKS" ]; then \
 		echo "ERROR: demo-only symbol leaked outside src/app/services/quote/shioaji_demo/:"; \
 		echo "$$LEAKS"; \
@@ -55,7 +51,7 @@ downgrade:
 	DATABASE_URL=$(DATABASE_URL) uv run alembic downgrade base
 
 test:
-	uv run pytest
+	uv run pytest -s
 
 test-integration:
-	DATABASE_URL=$(DATABASE_URL) uv run pytest -m integration
+	DATABASE_URL=$(DATABASE_URL) uv run pytest -m integration -s

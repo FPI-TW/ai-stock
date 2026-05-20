@@ -24,12 +24,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     waiting for the lifespan to fire — important for tests that don't use
     `with TestClient(app)`). This lifespan covers the side-effectful parts:
 
-    1. `provider.startup()` — Shioaji `login()`, callback registration; no-op for
-       `InMemoryQuoteProvider`.
+    1. `provider.startup()` — broker session setup; no-op for `InMemoryQuoteProvider`.
     2. Initial reconcile — read every active/scheduled intent from DB and
        `subscribe()` its symbol. Skipped when no DATABASE_URL is configured
        (e.g. lightweight unit-test runs).
-    3. `provider.shutdown()` on exit — Shioaji `logout()`, clear local state.
+    3. `provider.shutdown()` on exit — broker logout, clear local state.
     """
 
     settings = get_settings()
