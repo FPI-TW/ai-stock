@@ -23,9 +23,9 @@ def test_to_decimal_handles_str_and_int() -> None:
     assert to_decimal(100) == Decimal("100")
 
 
-def test_to_decimal_returns_none_for_zero_and_negative() -> None:
-    assert to_decimal(0) is None
-    assert to_decimal("-1") is None
+def test_to_decimal_preserves_zero_and_negative_for_validation() -> None:
+    assert to_decimal(0) == Decimal("0")
+    assert to_decimal("-1") == Decimal("-1")
     assert to_decimal(None) is None
 
 
@@ -75,4 +75,24 @@ def test_build_snapshot_keeps_previous_fields_on_partial_update() -> None:
     assert result.last_price == Decimal("590.5")
     assert result.bid_price == Decimal("589")  # carried over from previous
     assert result.ask_price == Decimal("591")  # carried over from previous
+    assert result.quote_time == later
+
+
+def test_build_snapshot_clears_bidask_when_bidask_channel_reports_missing_values() -> None:
+    quote_time = datetime(2026, 5, 11, 10, 30, tzinfo=TAIPEI)
+    previous = QuoteSnapshot(
+        symbol="2330",
+        bid_price=Decimal("589"),
+        ask_price=Decimal("591"),
+        last_price=Decimal("590"),
+        quote_time=quote_time,
+        received_at=datetime.now(tz=UTC),
+    )
+    later = datetime(2026, 5, 11, 10, 31, tzinfo=TAIPEI)
+
+    result = build_snapshot(symbol="2330", previous=previous, bid_price=None, ask_price=None, quote_time=later)
+
+    assert result.bid_price is None
+    assert result.ask_price is None
+    assert result.last_price == Decimal("590")
     assert result.quote_time == later

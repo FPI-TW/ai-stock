@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from app.services.quote.base import QuoteProviderUnavailableError
 from app.services.quote.shioaji_demo.provider import ShioajiQuoteProvider
 from app.services.quote.shioaji_demo.quota import QuoteSubscriptionLimitExceeded
 
@@ -60,3 +61,14 @@ def test_resubscribing_same_symbol_is_idempotent() -> None:
     assert provider.active_subscriptions() == {"2330"}
     # Real broker subscribe should only be called once per unique symbol.
     client.subscribe.assert_called_once()
+
+
+def test_failed_subscribe_attempt_cleans_up_remote_partial_subscription() -> None:
+    provider, client = _make_provider()
+    client.subscribe.side_effect = QuoteProviderUnavailableError("quote", "partial subscribe failed")
+
+    with pytest.raises(QuoteProviderUnavailableError):
+        provider.subscribe("2330")
+
+    assert provider.active_subscriptions() == set()
+    client.unsubscribe.assert_called_once_with("2330")

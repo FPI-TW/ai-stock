@@ -102,3 +102,34 @@ def test_later_bidask_updates_overwrite_earlier() -> None:
     assert snap.bid_price == Decimal("590")
     assert snap.ask_price == Decimal("592")
     assert snap.quote_time == later
+
+
+def test_missing_bidask_update_clears_previous_bidask_and_keeps_last() -> None:
+    provider = _make_provider()
+    earlier = datetime(2026, 5, 11, 10, 30, tzinfo=TAIPEI)
+    later = datetime(2026, 5, 11, 10, 31, tzinfo=TAIPEI)
+    provider._on_tick(TickPayload(symbol="2330", last_price=Decimal("590.5"), quote_time=earlier))  # noqa: SLF001
+    provider._on_bidask(  # noqa: SLF001
+        BidAskPayload(symbol="2330", bid_price=Decimal("589"), ask_price=Decimal("591"), quote_time=earlier)
+    )
+
+    provider._on_bidask(BidAskPayload(symbol="2330", bid_price=None, ask_price=None, quote_time=later))  # noqa: SLF001
+
+    [snap] = provider.get_quotes(["2330"])
+    assert snap.bid_price is None
+    assert snap.ask_price is None
+    assert snap.last_price == Decimal("590.5")
+    assert snap.quote_time == later
+
+
+def test_non_positive_bidask_update_is_preserved_for_validation() -> None:
+    provider = _make_provider()
+    quote_time = datetime(2026, 5, 11, 10, 30, tzinfo=TAIPEI)
+
+    provider._on_bidask(  # noqa: SLF001
+        BidAskPayload(symbol="2330", bid_price=Decimal("0"), ask_price=Decimal("-1"), quote_time=quote_time)
+    )
+
+    [snap] = provider.get_quotes(["2330"])
+    assert snap.bid_price == Decimal("0")
+    assert snap.ask_price == Decimal("-1")

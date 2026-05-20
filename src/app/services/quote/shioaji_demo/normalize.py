@@ -9,13 +9,14 @@ callbacks operate on, regardless of how it's produced.
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Final, cast
 from zoneinfo import ZoneInfo
 
 from app.services.quote.base import QuoteProviderUnavailableError, QuoteSnapshot
 
 _TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 _UTC = ZoneInfo("UTC")
+_UNSET: Final = object()
 
 
 @dataclass(frozen=True)
@@ -43,8 +44,6 @@ def to_decimal(value: Any) -> Decimal | None:
     try:
         decimal_value = Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError):
-        return None
-    if decimal_value <= Decimal(0):
         return None
     return decimal_value
 
@@ -75,13 +74,19 @@ def now_utc() -> datetime:
     return datetime.now(tz=_UTC)
 
 
+def _merge_field(value: Decimal | None | object, previous: Decimal | None) -> Decimal | None:
+    if value is _UNSET:
+        return previous
+    return cast(Decimal | None, value)
+
+
 def build_snapshot(
     *,
     symbol: str,
     previous: QuoteSnapshot | None,
-    bid_price: Decimal | None = None,
-    ask_price: Decimal | None = None,
-    last_price: Decimal | None = None,
+    bid_price: Decimal | None | object = _UNSET,
+    ask_price: Decimal | None | object = _UNSET,
+    last_price: Decimal | None | object = _UNSET,
     quote_time: datetime,
 ) -> QuoteSnapshot:
     """Merge an incoming partial update with the previous snapshot.
@@ -93,9 +98,9 @@ def build_snapshot(
 
     return QuoteSnapshot(
         symbol=symbol,
-        bid_price=bid_price if bid_price is not None else (previous.bid_price if previous else None),
-        ask_price=ask_price if ask_price is not None else (previous.ask_price if previous else None),
-        last_price=last_price if last_price is not None else (previous.last_price if previous else None),
+        bid_price=_merge_field(bid_price, previous.bid_price if previous else None),
+        ask_price=_merge_field(ask_price, previous.ask_price if previous else None),
+        last_price=_merge_field(last_price, previous.last_price if previous else None),
         quote_time=quote_time,
         received_at=now_utc(),
     )

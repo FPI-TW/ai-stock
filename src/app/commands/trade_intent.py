@@ -9,7 +9,7 @@ from app.domain.trade_intent import TradeIntentData
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
 from app.services.quote.base import QuoteProvider, QuoteProviderError
-from app.services.quote.intent_reconciler import reconcile_on_create, reconcile_on_terminal
+from app.services.quote.intent_reconciler import reconcile_after_terminal_transition, reconcile_on_create
 from app.services.symbol import SymbolService
 
 logger = logging.getLogger(__name__)
@@ -131,15 +131,8 @@ class CancelTradeIntentCommand:
     def execute(self, inp: CancelTradeIntentInput) -> TradeIntentData:
         try:
             intent = self._intent_repo.cancel(inp.intent_id, inp.owner_user_id)
-            # Count peers AFTER the UPDATE has flushed — the cancelled intent is no
-            # longer in active/scheduled set, so any remaining count is "others".
-            remaining = self._intent_repo.count_active_or_scheduled_for_symbol(intent.symbol)
             try:
-                reconcile_on_terminal(
-                    self._quote_provider,
-                    intent.symbol,
-                    other_active_count=remaining,
-                )
+                reconcile_after_terminal_transition(self._quote_provider, self._intent_repo, intent.symbol)
             except QuoteProviderError:
                 # The cancel itself succeeded; a stale subscription leak will be
                 # cleaned up on next startup reconcile. Don't fail the API call.

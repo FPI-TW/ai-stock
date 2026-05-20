@@ -131,7 +131,11 @@ class ShioajiQuoteProvider(QuoteProvider):
                 )
             if not self._started:
                 raise QuoteProviderUnavailableError("shioaji", "provider not started; call startup() first")
-            self._client.subscribe(symbol)
+            try:
+                self._client.subscribe(symbol)
+            except QuoteProviderError:
+                self._client.unsubscribe(symbol)
+                raise
             self._subscribed.add(symbol)
 
     def unsubscribe(self, symbol: str) -> None:
