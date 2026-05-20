@@ -82,14 +82,38 @@ def get_quote_provider(request: Request) -> QuoteProvider:
 QuoteProviderDep = Annotated[QuoteProvider, Depends(get_quote_provider)]
 
 
+def get_trigger_intent_command(db: DatabaseDep) -> TriggerIntentCommand:
+    return TriggerIntentCommand(db)
+
+
+TriggerIntentCommandDep = Annotated[TriggerIntentCommand, Depends(get_trigger_intent_command)]
+
+
+def get_quote_evaluator(session_service: TradingSessionServiceDep) -> QuoteEvaluator:
+    return QuoteEvaluator(session_service)
+
+
+QuoteEvaluatorDep = Annotated[QuoteEvaluator, Depends(get_quote_evaluator)]
+
+
 def get_create_trade_intent_command(
     symbol_service: SymbolServiceDep,
     session_service: TradingSessionServiceDep,
     intent_repo: IntentRepoDep,
     quote_provider: QuoteProviderDep,
+    evaluator: QuoteEvaluatorDep,
+    trigger_cmd: TriggerIntentCommandDep,
     db: DatabaseDep,
 ) -> CreateTradeIntentCommand:
-    return CreateTradeIntentCommand(symbol_service, session_service, intent_repo, quote_provider, db)
+    return CreateTradeIntentCommand(
+        symbol_service,
+        session_service,
+        intent_repo,
+        quote_provider,
+        evaluator,
+        trigger_cmd,
+        db,
+    )
 
 
 CreateTradeIntentCommandDep = Annotated[CreateTradeIntentCommand, Depends(get_create_trade_intent_command)]
@@ -104,17 +128,3 @@ def get_cancel_trade_intent_command(
 
 
 CancelTradeIntentCommandDep = Annotated[CancelTradeIntentCommand, Depends(get_cancel_trade_intent_command)]
-
-
-def get_trigger_intent_command(db: DatabaseDep) -> TriggerIntentCommand:
-    return TriggerIntentCommand(db)
-
-
-TriggerIntentCommandDep = Annotated[TriggerIntentCommand, Depends(get_trigger_intent_command)]
-
-
-def get_quote_evaluator(session_service: TradingSessionServiceDep) -> QuoteEvaluator:
-    return QuoteEvaluator(session_service)
-
-
-QuoteEvaluatorDep = Annotated[QuoteEvaluator, Depends(get_quote_evaluator)]

@@ -1,12 +1,20 @@
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.commands.trigger_intent import (
+    IntentNotActiveError,
+    TriggerIntentCommand,
+    TriggerIntentInput,
+)
 from app.domain.price import InvalidTypeError, PriceRequest, PriceService, SecurityType
-from app.domain.trade_intent import TradeIntentData
+from app.domain.quote_evaluation import QuoteEvaluator
+from app.domain.trade_intent import IntentNotFoundError, TradeIntentData
 from app.domain.trading_session import TradingSessionService
+from app.domain.trigger_event import DuplicateTriggerError, quote_snapshot_to_jsonb
 from app.repositories.intent_repository import IntentRepository
 from app.services.quote.base import QuoteProvider
 from app.services.quote.intent_reconciler import reconcile_after_terminal_transition, reconcile_on_create
@@ -41,16 +49,22 @@ class CancelTradeIntentInput:
 
 
 class CreateTradeIntentCommand:
-    """Create a trade intent and reconcile its quote subscription atomically.
+    """Create a trade intent, reconcile its quote subscription, and optionally trigger.
 
-    Transaction shape: validate → insert (flushed, not committed) → reconcile
-    subscription → commit → materialise server-side values via `find_by_id`.
+    Transaction shape:
+    1. validate → flush intent (no commit)
+    2. `reconcile_on_create` — subscribe broker. Failure here rolls back the intent.
+    3. commit the create transaction.
+    4. `find_by_id` to materialise server-side timestamps.
+    5. If the intent landed `active` (spec §15: 盤中 create + 條件成立 → 立即觸發),
+       attempt an immediate trigger via `TriggerIntentCommand` in a separate
+       transaction. The brief "active but pre-trigger" window is the V0.5
+       trade-off; V1 outbox will collapse this to one tx.
 
-    The `find_by_id` happens *after* commit, so any failure between insert and
-    commit (reconcile rejecting on allowlist / quota, etc.) rolls back the
-    whole transaction without exposing a half-materialised domain object. The
-    final SELECT is a pure read — failing there cannot leave the DB and the
-    quote provider out of sync.
+    Immediate-trigger failures (no quote, race on status guard, duplicate
+    backstop) are downgraded to warning logs; the intent stays in whatever
+    state it ended up in, and callers can re-evaluate via
+    `/dev/evaluate-quotes` or a future scheduler.
     """
 
     def __init__(
@@ -59,12 +73,16 @@ class CreateTradeIntentCommand:
         session_service: TradingSessionService,
         intent_repo: IntentRepository,
         quote_provider: QuoteProvider,
+        evaluator: QuoteEvaluator,
+        trigger_cmd: TriggerIntentCommand,
         db: Session,
     ) -> None:
         self._symbol_service = symbol_service
         self._session_service = session_service
         self._intent_repo = intent_repo
         self._quote_provider = quote_provider
+        self._evaluator = evaluator
+        self._trigger_cmd = trigger_cmd
         self._db = db
 
     def execute(self, inp: CreateTradeIntentInput) -> TradeIntentData:
@@ -121,7 +139,63 @@ class CreateTradeIntentCommand:
         # 6. materialise server-side values (created_at / updated_at). Done
         #    after commit so a SELECT hiccup here can't corrupt a half-written
         #    write — the row is already durable.
-        return self._intent_repo.find_by_id(intent_id, inp.owner_user_id)
+        intent = self._intent_repo.find_by_id(intent_id, inp.owner_user_id)
+
+        # 7. immediate trigger if the intent is active and the current quote
+        #    already meets the strategy condition (spec §15). Scheduled
+        #    intents skip — they wait for the next-day activation path.
+        if intent.status == "active":
+            return self._maybe_immediate_trigger(intent, now)
+        return intent
+
+    def _maybe_immediate_trigger(self, intent: TradeIntentData, now: datetime) -> TradeIntentData:
+        # Quote unavailable is non-blocking per spec §15: intent stays active,
+        # next /dev/evaluate-quotes (or a scheduler in V1) will re-attempt.
+        try:
+            quotes = self._quote_provider.get_quotes([intent.symbol])
+        except Exception as exc:
+            logger.warning(
+                "create: quote provider lookup failed for %s, intent %s stays active: %s",
+                intent.symbol,
+                intent.id,
+                exc,
+            )
+            return intent
+        if not quotes:
+            logger.warning(
+                "create: quote unavailable for %s, intent %s stays active",
+                intent.symbol,
+                intent.id,
+            )
+            return intent
+
+        quote = quotes[0]
+        result = self._evaluator.evaluate(quote, intent, now)
+        if not result.should_trigger:
+            return intent
+
+        # evaluator guarantees these are populated when should_trigger is True
+        assert result.trigger_price is not None
+        assert result.trigger_reference_price_type is not None
+        try:
+            self._trigger_cmd.execute(
+                TriggerIntentInput(
+                    intent_id=intent.id,
+                    trigger_price=result.trigger_price,
+                    trigger_reference_price_type=result.trigger_reference_price_type,
+                    fallback_used=result.fallback_used,
+                    quote_snapshot=quote_snapshot_to_jsonb(quote),
+                    quote_time=quote.quote_time,
+                )
+            )
+        except (IntentNotActiveError, IntentNotFoundError, DuplicateTriggerError) as exc:
+            # Race between create-commit and trigger-lock; intent stays active
+            # in the response. Caller can re-evaluate via /dev/evaluate-quotes
+            # or a future scheduler. Logged for ops investigation.
+            logger.warning("create: immediate trigger race for intent %s: %s", intent.id, exc)
+            return intent
+
+        return self._intent_repo.find_by_id(intent.id, intent.owner_user_id)
 
 
 class CancelTradeIntentCommand:
