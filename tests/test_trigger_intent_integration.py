@@ -81,12 +81,15 @@ def trigger_cmd(db_session: Session) -> TriggerIntentCommand:
 
 def _create_active_intent(
     repo: IntentRepository,
+    db: Session,
     *,
     owner_user_id: UUID,
     target_price: str = "100.0000",
     strategy: str = "buy_price_alert",
 ) -> UUID:
-    intent = repo.create(
+    # PR #12 made IntentRepository.create flush-only and return UUID; commit
+    # explicitly so the trigger command's SELECT FOR UPDATE finds a row.
+    intent_id = repo.create(
         owner_user_id=owner_user_id,
         symbol="2330",
         strategy=strategy,
@@ -99,7 +102,8 @@ def _create_active_intent(
         execution_mode="notify_only",
         status="active",
     )
-    return intent.id
+    db.commit()
+    return intent_id
 
 
 def _input(
@@ -132,7 +136,7 @@ def test_trigger_active_intent_writes_three_rows_atomically(
     repo: IntentRepository,
 ) -> None:
     owner = uuid4()
-    intent_id = _create_active_intent(repo, owner_user_id=owner)
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner)
 
     result = trigger_cmd.execute(_input(intent_id))
 
@@ -162,11 +166,12 @@ def test_trigger_active_intent_writes_three_rows_atomically(
 
 @pytest.mark.integration
 def test_trigger_persists_fallback_metadata(
+    db_session: Session,
     trigger_cmd: TriggerIntentCommand,
     repo: IntentRepository,
 ) -> None:
     owner = uuid4()
-    intent_id = _create_active_intent(repo, owner_user_id=owner)
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner)
 
     result = trigger_cmd.execute(
         _input(
@@ -190,11 +195,12 @@ def test_intent_not_found_raises(trigger_cmd: TriggerIntentCommand) -> None:
 
 @pytest.mark.integration
 def test_already_triggered_intent_status_guard_raises(
+    db_session: Session,
     trigger_cmd: TriggerIntentCommand,
     repo: IntentRepository,
 ) -> None:
     owner = uuid4()
-    intent_id = _create_active_intent(repo, owner_user_id=owner)
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner)
     trigger_cmd.execute(_input(intent_id))
 
     with pytest.raises(IntentNotActiveError) as exc_info:
@@ -204,11 +210,12 @@ def test_already_triggered_intent_status_guard_raises(
 
 @pytest.mark.integration
 def test_cancelled_intent_status_guard_raises(
+    db_session: Session,
     trigger_cmd: TriggerIntentCommand,
     repo: IntentRepository,
 ) -> None:
     owner = uuid4()
-    intent_id = _create_active_intent(repo, owner_user_id=owner)
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner)
     repo.cancel(intent_id, owner)
 
     with pytest.raises(IntentNotActiveError) as exc_info:
@@ -229,7 +236,7 @@ def test_duplicate_trigger_via_unique_constraint_raises(
     the IntegrityError → DuplicateTriggerError translation.
     """
     owner = uuid4()
-    intent_id = _create_active_intent(repo, owner_user_id=owner)
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner)
 
     db_session.add(
         TriggerEvent(
@@ -258,7 +265,7 @@ def test_rollback_leaves_no_partial_state_on_duplicate(
     repo: IntentRepository,
 ) -> None:
     owner = uuid4()
-    intent_id = _create_active_intent(repo, owner_user_id=owner)
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner)
 
     db_session.add(
         TriggerEvent(

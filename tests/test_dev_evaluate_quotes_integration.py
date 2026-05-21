@@ -118,13 +118,16 @@ def weekend_client(quote_provider: InMemoryQuoteProvider) -> Generator[TestClien
 
 def _create_active_intent(
     repo: IntentRepository,
+    db: Session,
     *,
     owner_user_id: UUID,
     symbol: str = "2330",
     target_price: str = "100.0000",
     strategy: str = "buy_price_alert",
 ) -> UUID:
-    intent = repo.create(
+    # PR #12 made IntentRepository.create flush-only and return UUID;
+    # the test must commit so the HTTP endpoint (separate session) can see it.
+    intent_id = repo.create(
         owner_user_id=owner_user_id,
         symbol=symbol,
         strategy=strategy,
@@ -137,7 +140,8 @@ def _create_active_intent(
         execution_mode="notify_only",
         status="active",
     )
-    return intent.id
+    db.commit()
+    return intent_id
 
 
 def _snapshot(
@@ -165,8 +169,8 @@ def test_evaluate_buys_at_target_triggers_intent_and_writes_three_rows(
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     owner = uuid4()
-    intent_id = _create_active_intent(repo, owner_user_id=owner, target_price="100.0000")
-    quote_provider.set_quote(_snapshot("2330", ask="99.0000"))
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner, target_price="100.0000")
+    quote_provider.push_quote(_snapshot("2330", ask="99.0000"))
 
     response = client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
 
@@ -205,11 +209,12 @@ def test_evaluate_sell_bid_above_target_triggers_intent(
     owner = uuid4()
     intent_id = _create_active_intent(
         repo,
+        db_session,
         owner_user_id=owner,
         target_price="100.0000",
         strategy="sell_price_alert",
     )
-    quote_provider.set_quote(_snapshot("2330", bid="101.0000"))  # bid > target
+    quote_provider.push_quote(_snapshot("2330", bid="101.0000"))  # bid > target
 
     response = client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
 
@@ -228,15 +233,16 @@ def test_evaluate_sell_bid_above_target_triggers_intent(
 
 @pytest.mark.integration
 def test_evaluate_with_no_symbols_evaluates_all_actives(
+    db_session: Session,
     client: TestClient,
     repo: IntentRepository,
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     owner = uuid4()
-    intent_2330 = _create_active_intent(repo, owner_user_id=owner, symbol="2330", target_price="100.0000")
-    intent_2317 = _create_active_intent(repo, owner_user_id=owner, symbol="2317", target_price="50.0000")
-    quote_provider.set_quote(_snapshot("2330", ask="99.0000"))
-    quote_provider.set_quote(_snapshot("2317", ask="49.0000"))
+    intent_2330 = _create_active_intent(repo, db_session, owner_user_id=owner, symbol="2330", target_price="100.0000")
+    intent_2317 = _create_active_intent(repo, db_session, owner_user_id=owner, symbol="2317", target_price="50.0000")
+    quote_provider.push_quote(_snapshot("2330", ask="99.0000"))
+    quote_provider.push_quote(_snapshot("2317", ask="49.0000"))
 
     response = client.post("/dev/evaluate-quotes", json={})
 
@@ -254,7 +260,7 @@ def test_evaluate_quote_unavailable_skips_intent(
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     owner = uuid4()
-    intent_id = _create_active_intent(repo, owner_user_id=owner, symbol="2330", target_price="100.0000")
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner, symbol="2330", target_price="100.0000")
     # quote_provider intentionally empty — no quote for 2330
 
     response = client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
@@ -274,8 +280,8 @@ def test_evaluate_condition_not_met_does_not_trigger(
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     owner = uuid4()
-    intent_id = _create_active_intent(repo, owner_user_id=owner, symbol="2330", target_price="100.0000")
-    quote_provider.set_quote(_snapshot("2330", ask="101.0000"))  # above target
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner, symbol="2330", target_price="100.0000")
+    quote_provider.push_quote(_snapshot("2330", ask="101.0000"))  # above target
 
     response = client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
 
@@ -287,14 +293,16 @@ def test_evaluate_condition_not_met_does_not_trigger(
 
 @pytest.mark.integration
 def test_evaluate_cancelled_intent_is_not_loaded(
+    db_session: Session,
     client: TestClient,
     repo: IntentRepository,
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     owner = uuid4()
-    intent_id = _create_active_intent(repo, owner_user_id=owner, symbol="2330", target_price="100.0000")
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner, symbol="2330", target_price="100.0000")
     repo.cancel(intent_id, owner)
-    quote_provider.set_quote(_snapshot("2330", ask="99.0000"))
+    db_session.commit()
+    quote_provider.push_quote(_snapshot("2330", ask="99.0000"))
 
     response = client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
 
@@ -310,8 +318,8 @@ def test_evaluate_last_fallback_path_persists_metadata(
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     owner = uuid4()
-    intent_id = _create_active_intent(repo, owner_user_id=owner, symbol="2330", target_price="100.0000")
-    quote_provider.set_quote(_snapshot("2330", last="99.0000"))  # ask missing → fallback last
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner, symbol="2330", target_price="100.0000")
+    quote_provider.push_quote(_snapshot("2330", last="99.0000"))  # ask missing → fallback last
 
     response = client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
 
@@ -332,8 +340,8 @@ def test_evaluate_duplicate_call_does_not_create_second_trigger(
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     owner = uuid4()
-    intent_id = _create_active_intent(repo, owner_user_id=owner, symbol="2330", target_price="100.0000")
-    quote_provider.set_quote(_snapshot("2330", ask="99.0000"))
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner, symbol="2330", target_price="100.0000")
+    quote_provider.push_quote(_snapshot("2330", ask="99.0000"))
 
     first = client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
     second = client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
@@ -351,13 +359,14 @@ def test_evaluate_duplicate_call_does_not_create_second_trigger(
 
 @pytest.mark.integration
 def test_evaluate_outside_session_skips_all(
+    db_session: Session,
     weekend_client: TestClient,
     repo: IntentRepository,
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     owner = uuid4()
-    intent_id = _create_active_intent(repo, owner_user_id=owner, symbol="2330", target_price="100.0000")
-    quote_provider.set_quote(_snapshot("2330", ask="99.0000"))
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner, symbol="2330", target_price="100.0000")
+    quote_provider.push_quote(_snapshot("2330", ask="99.0000"))
 
     response = weekend_client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
 

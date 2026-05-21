@@ -21,9 +21,9 @@ from app.commands.trigger_intent import (
     TriggerIntentInput,
 )
 from app.domain.trade_intent import IntentNotFoundError
-from app.domain.trigger_event import DuplicateTriggerError
+from app.domain.trigger_event import DuplicateTriggerError, quote_snapshot_to_jsonb
 from app.schemas.dev import EvaluateQuotesData, EvaluateQuotesRequest, EvaluateQuotesResponse
-from app.services.quote.base import quote_snapshot_to_jsonb
+from app.services.quote.base import QuoteUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,17 @@ def evaluate_quotes(
     else:
         symbols = sorted(intent_repo.list_active_symbols())
 
-    quotes_by_symbol = {q.symbol: q for q in quote_provider.get_quotes(symbols)}
+    # InMemoryQuoteProvider.get_quotes raises QuoteUnavailableError on the first
+    # missing symbol (PR #12 contract); for dev-evaluate we want partial-set
+    # behaviour — symbols with no snapshot are simply skipped without aborting
+    # the rest of the batch. Loop per-symbol so a single missing quote doesn't
+    # short-circuit the whole evaluation.
+    quotes_by_symbol = {}
+    for symbol in symbols:
+        try:
+            quotes_by_symbol.update({q.symbol: q for q in quote_provider.get_quotes([symbol])})
+        except QuoteUnavailableError:
+            continue
     intents = intent_repo.list_active_by_symbols(symbols)
 
     now = session_service.now_taipei()

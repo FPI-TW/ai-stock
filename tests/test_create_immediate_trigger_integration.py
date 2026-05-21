@@ -138,7 +138,7 @@ def test_create_inside_session_with_condition_met_triggers_immediately(
     repo: IntentRepository,
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
-    quote_provider.set_quote(_snapshot(ask="99.5"))  # ask == target, condition met
+    quote_provider.push_quote(_snapshot(ask="99.5"))  # ask == target, condition met
 
     response = client.post("/trade-intents", json=_create_payload(target="99.5"))
 
@@ -166,7 +166,7 @@ def test_create_inside_session_with_condition_not_met_stays_active(
     repo: IntentRepository,
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
-    quote_provider.set_quote(_snapshot(ask="100.0"))  # above target 99.5
+    quote_provider.push_quote(_snapshot(ask="100.0"))  # above target 99.5
 
     response = client.post("/trade-intents", json=_create_payload(target="99.5"))
 
@@ -205,7 +205,7 @@ def test_create_outside_session_yields_scheduled_intent_without_trigger_attempt(
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     # Even if quote is set, scheduled intents must not consult the provider.
-    quote_provider.set_quote(_snapshot(ask="99.5"))
+    quote_provider.push_quote(_snapshot(ask="99.5"))
 
     response = weekend_client.post("/trade-intents", json=_create_payload(target="99.5"))
 
@@ -224,7 +224,7 @@ def test_create_with_last_fallback_triggers_and_records_metadata(
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     # ask absent → evaluator falls back to last_price.
-    quote_provider.set_quote(_snapshot(last="99.5"))
+    quote_provider.push_quote(_snapshot(last="99.5"))
 
     response = client.post("/trade-intents", json=_create_payload(target="99.5"))
 
