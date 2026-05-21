@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.py[cod]
+.DS_Store
+.coverage
 
 # agent 工作日誌（本地）
 PROJECT_HISTORY.md
