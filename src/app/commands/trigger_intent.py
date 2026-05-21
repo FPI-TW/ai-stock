@@ -31,10 +31,10 @@ ripple back into the evaluator.
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -148,11 +148,24 @@ def persist_trigger(
     )
 
     db.add(trigger_row)
-    db.execute(
-        update(TradeIntent)
-        .where(TradeIntent.id == intent.id, TradeIntent.status == "active")
-        .values(status="triggered", triggered_at=func.now(), updated_at=func.now()),
+    # `Session.execute(update_stmt)` returns a `CursorResult` at runtime, but
+    # SQLAlchemy's stubs widen the return type to `Result`, which lacks
+    # `.rowcount`. Cast to narrow rather than chase the wider API.
+    result = cast(
+        CursorResult[Any],
+        db.execute(
+            update(TradeIntent)
+            .where(TradeIntent.id == intent.id, TradeIntent.status == "active")
+            .values(status="triggered", triggered_at=func.now(), updated_at=func.now()),
+        ),
     )
+    # Defense-in-depth: if rowcount is 0 the status guard was bypassed
+    # (lock skipped, status changed underneath, or some future caller
+    # forgot the SELECT FOR UPDATE). Raise so the caller rolls back the
+    # already-staged trigger_event / notification rather than letting them
+    # commit against an intent whose status is no longer active.
+    if result.rowcount == 0:
+        raise IntentNotActiveError(intent.id, "stale")
     db.add(notification_row)
     return trigger_row, notification_row
 
@@ -181,6 +194,12 @@ class TriggerIntentCommand:
         except IntegrityError as exc:
             self._db.rollback()
             raise DuplicateTriggerError(inp.intent_id) from exc
+        except IntentNotActiveError:
+            # Defense-in-depth: persist_trigger detected rowcount==0 on the
+            # status-guarded UPDATE. Roll back the staged trigger_event /
+            # notification before re-raising so the session is left clean.
+            self._db.rollback()
+            raise
 
         return TriggerIntentOutput(
             trigger_event=_trigger_event_to_domain(trigger_row),
