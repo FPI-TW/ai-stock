@@ -11,8 +11,11 @@ from app.api.routes.intents import router as intents_router
 from app.api.routes.symbols import router as symbols_router
 from app.core.config import get_settings
 from app.core.ids import RequestIdMiddleware
+from app.domain.quote_evaluation import QuoteEvaluator
+from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
 from app.services.quote import build_quote_provider
+from app.services.quote_dispatcher import QuoteEvaluationDispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "quote provider startup reconcile complete",
             extra={"active_subscriptions": sorted(provider.active_subscriptions())},
         )
+
+        # Wire incoming quotes to the evaluator: every snapshot the provider
+        # observes (via broker callback or `push_quote`) now drives evaluation
+        # of that symbol's active intents on a fresh short-lived session.
+        # Without DATABASE_URL we have no intents to evaluate, so the listener
+        # is only useful when the DB is configured.
+        session_service = TradingSessionService()
+        dispatcher = QuoteEvaluationDispatcher(
+            session_factory=session_factory,
+            evaluator=QuoteEvaluator(session_service),
+            session_service=session_service,
+        )
+        provider.add_quote_listener(dispatcher.dispatch)
 
     try:
         yield

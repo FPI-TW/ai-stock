@@ -7,9 +7,12 @@ through `push_quote()`. The deprecated `POST /dev/quotes` from BE-V0.5-08 is not
 reintroduced here.
 """
 
+import logging
 import threading
 
-from app.services.quote.base import QuoteProvider, QuoteSnapshot, QuoteUnavailableError
+from app.services.quote.base import QuoteListener, QuoteProvider, QuoteSnapshot, QuoteUnavailableError
+
+logger = logging.getLogger(__name__)
 
 
 class InMemoryQuoteProvider(QuoteProvider):
@@ -24,6 +27,7 @@ class InMemoryQuoteProvider(QuoteProvider):
     def __init__(self) -> None:
         self._snapshots: dict[str, QuoteSnapshot] = {}
         self._subscribed: set[str] = set()
+        self._listeners: list[QuoteListener] = []
         self._lock = threading.RLock()
 
     def get_quotes(self, symbols: list[str]) -> list[QuoteSnapshot]:
@@ -62,3 +66,19 @@ class InMemoryQuoteProvider(QuoteProvider):
         with self._lock:
             self._subscribed.add(snapshot.symbol)
             self._snapshots[snapshot.symbol] = snapshot
+            listeners = list(self._listeners)
+        # fire outside the lock — listeners may do DB work and we don't want to
+        # serialise quote ingest behind dispatch latency
+        for listener in listeners:
+            try:
+                listener(snapshot)
+            except Exception:
+                logger.exception("quote listener raised on %s", snapshot.symbol)
+
+    # ------------------------------------------------------------------
+    # QuoteProvider protocol — listener support
+    # ------------------------------------------------------------------
+
+    def add_quote_listener(self, listener: QuoteListener) -> None:
+        with self._lock:
+            self._listeners.append(listener)
