@@ -10,3 +10,6 @@ __pycache__/
 # agent 工作日誌（本地）
 PROJECT_HISTORY.md
 TASK_TRACKER.md
+
+# Claude Code 個人 MCP server 設定（不強制全 team 安裝）
+.mcp.json
