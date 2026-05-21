@@ -3,6 +3,13 @@
 Registered conditionally from `main.py` when `LOCAL_MODE=true`. The endpoints
 here are operational tooling for demo / integration tests, not part of the
 user-facing API surface.
+
+Deployment assumption: the FastAPI app is bound to 127.0.0.1 (developer
+machine or Docker compose loopback). No auth gate sits in front of these
+routes — anyone able to reach the port can trigger active intents. If
+LOCAL_MODE is ever exposed beyond loopback (internal demo host, shared
+staging, etc.) this router must be gated behind an auth header before
+deployment. See PR #13 review issue #4.
 """
 
 import logging
@@ -42,7 +49,7 @@ def evaluate_quotes(
     if request.symbols:
         symbols = sorted(set(request.symbols))
     else:
-        symbols = sorted(intent_repo.list_active_symbols())
+        symbols = sorted(intent_repo.system_list_active_symbols())
 
     # InMemoryQuoteProvider.get_quotes raises QuoteUnavailableError on the first
     # missing symbol (PR #12 contract); for dev-evaluate we want partial-set
@@ -55,7 +62,7 @@ def evaluate_quotes(
             quotes_by_symbol.update({q.symbol: q for q in quote_provider.get_quotes([symbol])})
         except QuoteUnavailableError:
             continue
-    intents = intent_repo.list_active_by_symbols(symbols)
+    intents = intent_repo.system_list_active_by_symbols(symbols)
 
     now = session_service.now_taipei()
     triggered_ids: list[str] = []
@@ -66,8 +73,8 @@ def evaluate_quotes(
         result = evaluator.evaluate(quote, intent, now)
         if not result.should_trigger:
             continue
-        assert result.trigger_price is not None
-        assert result.trigger_reference_price_type is not None
+        if result.trigger_price is None or result.trigger_reference_price_type is None:
+            raise RuntimeError(f"Evaluator returned should_trigger=True but trigger fields are None: {result}")
         try:
             trigger_cmd.execute(
                 TriggerIntentInput(

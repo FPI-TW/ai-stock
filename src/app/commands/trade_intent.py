@@ -16,7 +16,7 @@ from app.domain.trade_intent import IntentNotFoundError, TradeIntentData
 from app.domain.trading_session import TradingSessionService
 from app.domain.trigger_event import DuplicateTriggerError, quote_snapshot_to_jsonb
 from app.repositories.intent_repository import IntentRepository
-from app.services.quote.base import QuoteProvider
+from app.services.quote.base import QuoteProvider, QuoteUnavailableError
 from app.services.quote.intent_reconciler import reconcile_after_terminal_transition, reconcile_on_create
 from app.services.symbol import SymbolService
 
@@ -151,11 +151,14 @@ class CreateTradeIntentCommand:
     def _maybe_immediate_trigger(self, intent: TradeIntentData, now: datetime) -> TradeIntentData:
         # Quote unavailable is non-blocking per spec §15: intent stays active,
         # next /dev/evaluate-quotes (or a scheduler in V1) will re-attempt.
+        # Other provider-layer errors (session down, etc.) propagate — they
+        # signal a degraded system that callers should see, not a per-symbol
+        # cache miss to silently absorb.
         try:
             quotes = self._quote_provider.get_quotes([intent.symbol])
-        except Exception as exc:
+        except QuoteUnavailableError as exc:
             logger.warning(
-                "create: quote provider lookup failed for %s, intent %s stays active: %s",
+                "create: quote unavailable for %s, intent %s stays active: %s",
                 intent.symbol,
                 intent.id,
                 exc,
@@ -174,9 +177,10 @@ class CreateTradeIntentCommand:
         if not result.should_trigger:
             return intent
 
-        # evaluator guarantees these are populated when should_trigger is True
-        assert result.trigger_price is not None
-        assert result.trigger_reference_price_type is not None
+        # evaluator guarantees these are populated when should_trigger is True;
+        # explicit check (not assert) so the invariant holds under `python -O`.
+        if result.trigger_price is None or result.trigger_reference_price_type is None:
+            raise RuntimeError(f"Evaluator returned should_trigger=True but trigger fields are None: {result}")
         try:
             self._trigger_cmd.execute(
                 TriggerIntentInput(

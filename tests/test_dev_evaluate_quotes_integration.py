@@ -348,7 +348,7 @@ def test_evaluate_duplicate_call_does_not_create_second_trigger(
 
     assert first.json()["data"]["triggeredIntentIds"] == [str(intent_id)]
     # status guard catches the second pass — intent already triggered, so
-    # repo.list_active_by_symbols won't even return it.
+    # repo.system_list_active_by_symbols won't even return it.
     assert second.json()["data"]["triggeredIntentIds"] == []
 
     trigger_count = (

@@ -198,3 +198,28 @@ def test_listener_exception_does_not_block_subsequent_listeners() -> None:
 
     boom.assert_called_once()
     survivor.assert_called_once()
+
+
+def test_remove_quote_listener_stops_further_notifications() -> None:
+    provider = _make_provider()
+    quote_time = datetime(2026, 5, 11, 10, 30, tzinfo=TAIPEI)
+    listener = MagicMock()
+    provider.add_quote_listener(listener)
+
+    provider._on_tick(  # noqa: SLF001
+        TickPayload(symbol="2330", last_price=Decimal("590.5"), quote_time=quote_time)
+    )
+    listener.assert_called_once()
+
+    provider.remove_quote_listener(listener)
+    provider._on_tick(  # noqa: SLF001
+        TickPayload(symbol="2330", last_price=Decimal("591"), quote_time=quote_time)
+    )
+    listener.assert_called_once()  # unchanged after removal
+
+
+def test_remove_unregistered_listener_is_silent() -> None:
+    provider = _make_provider()
+    stranger = MagicMock()
+    # Must not raise — idempotent per protocol contract.
+    provider.remove_quote_listener(stranger)

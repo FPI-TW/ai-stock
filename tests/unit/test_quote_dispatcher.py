@@ -83,7 +83,7 @@ def test_dispatch_triggers_intent_when_evaluator_says_should_trigger(
     """
     intent = _intent(symbol="2330")
     mock_repo = MagicMock()
-    mock_repo.list_active_by_symbols.return_value = [intent]
+    mock_repo.system_list_active_by_symbols.return_value = [intent]
     mock_cmd = MagicMock()
     monkeypatch.setattr("app.services.quote_dispatcher.IntentRepository", lambda db: mock_repo)
     monkeypatch.setattr("app.services.quote_dispatcher.TriggerIntentCommand", lambda db: mock_cmd)
@@ -99,7 +99,7 @@ def test_dispatch_triggers_intent_when_evaluator_says_should_trigger(
     dispatcher = _make_dispatcher(mock_session=mock_session, evaluator=evaluator)
     dispatcher.dispatch(_snapshot(symbol="2330"))
 
-    mock_repo.list_active_by_symbols.assert_called_once_with(["2330"])
+    mock_repo.system_list_active_by_symbols.assert_called_once_with(["2330"])
     evaluator.evaluate.assert_called_once()
     mock_cmd.execute.assert_called_once()
     trigger_input = mock_cmd.execute.call_args[0][0]
@@ -112,7 +112,7 @@ def test_dispatch_triggers_intent_when_evaluator_says_should_trigger(
 def test_dispatch_skips_when_no_active_intents(monkeypatch: pytest.MonkeyPatch, mock_session: MagicMock) -> None:
     """No active intent on this symbol → evaluator must not run, no trigger fires."""
     mock_repo = MagicMock()
-    mock_repo.list_active_by_symbols.return_value = []
+    mock_repo.system_list_active_by_symbols.return_value = []
     mock_cmd = MagicMock()
     monkeypatch.setattr("app.services.quote_dispatcher.IntentRepository", lambda db: mock_repo)
     monkeypatch.setattr("app.services.quote_dispatcher.TriggerIntentCommand", lambda db: mock_cmd)
@@ -130,7 +130,7 @@ def test_dispatch_does_not_trigger_when_condition_not_met(
 ) -> None:
     intent = _intent()
     mock_repo = MagicMock()
-    mock_repo.list_active_by_symbols.return_value = [intent]
+    mock_repo.system_list_active_by_symbols.return_value = [intent]
     mock_cmd = MagicMock()
     monkeypatch.setattr("app.services.quote_dispatcher.IntentRepository", lambda db: mock_repo)
     monkeypatch.setattr("app.services.quote_dispatcher.TriggerIntentCommand", lambda db: mock_cmd)
@@ -152,7 +152,7 @@ def test_dispatch_swallows_unexpected_exception(monkeypatch: pytest.MonkeyPatch,
 
     def raising_repo(db: object) -> MagicMock:
         repo = MagicMock()
-        repo.list_active_by_symbols.side_effect = RuntimeError("db went away")
+        repo.system_list_active_by_symbols.side_effect = RuntimeError("db went away")
         return repo
 
     monkeypatch.setattr("app.services.quote_dispatcher.IntentRepository", raising_repo)

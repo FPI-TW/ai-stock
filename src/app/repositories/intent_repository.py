@@ -182,11 +182,12 @@ class IntentRepository:
         next_cursor = str(page[-1].id) if has_more and page else None
         return [_to_domain(r) for r in page], next_cursor
 
-    def list_active_symbols(self) -> list[str]:
+    def system_list_active_symbols(self) -> list[str]:
         """Return distinct symbols with at least one active intent (owner-agnostic).
 
-        Intended for system evaluator paths (e.g. `/dev/evaluate-quotes`),
-        not for user-facing API.
+        `system_` prefix marks this as an evaluator / dispatcher path that
+        deliberately skips owner scoping. Never expose through user-facing API
+        — owner authz is the caller's responsibility.
         """
         rows = (
             self._db.execute(select(TradeIntent.symbol).where(TradeIntent.status == "active").distinct())
@@ -195,8 +196,11 @@ class IntentRepository:
         )
         return list(rows)
 
-    def list_active_by_symbols(self, symbols: list[str]) -> list[TradeIntentData]:
-        """Return all active intents whose symbol is in the given list (owner-agnostic)."""
+    def system_list_active_by_symbols(self, symbols: list[str]) -> list[TradeIntentData]:
+        """Return all active intents whose symbol is in the given list (owner-agnostic).
+
+        `system_` prefix — see `system_list_active_symbols` for the scoping caveat.
+        """
         if not symbols:
             return []
         rows = (

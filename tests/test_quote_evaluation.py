@@ -217,6 +217,20 @@ class TestQuoteValidation:
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.QUOTE_MISSING_ALL_PRICES
 
+    def test_nonpositive_price_takes_priority_over_bid_gt_ask(self, evaluator: QuoteEvaluator) -> None:
+        # bid=0 is both non-positive AND <= ask=100 (so no bid_gt_ask). The
+        # interesting overlap is bid=0 with ask>0: non-positive must win so
+        # downstream ops alerts surface the more specific reason. Pin the
+        # ordering so a future refactor of `_validate_quote` doesn't silently
+        # flip the signal.
+        result = evaluator.evaluate(
+            _snapshot(bid_price=Decimal("0"), ask_price=Decimal("100")),
+            make_intent(),
+            SESSION_NOW,
+        )
+        assert not result.should_trigger
+        assert result.skip_reason is SkipReason.QUOTE_NONPOSITIVE_PRICE
+
 
 class TestUnsupportedStrategy:
     def test_unknown_strategy_skips(self, evaluator: QuoteEvaluator) -> None:

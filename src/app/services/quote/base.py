@@ -51,9 +51,11 @@ class QuoteProvider(Protocol):
     by FastAPI's lifespan — pure providers (`InMemoryQuoteProvider`) treat them as
     no-ops.
 
-    `add_quote_listener` lets upper layers (the evaluation dispatcher) subscribe to
-    snapshot updates so the broker callback can drive evaluation without the
-    provider knowing what evaluator looks like.
+    `add_quote_listener` / `remove_quote_listener` let upper layers (the evaluation
+    dispatcher) subscribe to / unsubscribe from snapshot updates so the broker
+    callback can drive evaluation without the provider knowing what evaluator
+    looks like. `remove_quote_listener` is idempotent — unregistering a listener
+    that was never added is a no-op.
     """
 
     def get_quotes(self, symbols: list[str]) -> list[QuoteSnapshot]: ...
@@ -63,6 +65,7 @@ class QuoteProvider(Protocol):
     def startup(self) -> None: ...
     def shutdown(self) -> None: ...
     def add_quote_listener(self, listener: QuoteListener) -> None: ...
+    def remove_quote_listener(self, listener: QuoteListener) -> None: ...
 
 
 class QuoteProviderError(Exception):

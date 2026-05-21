@@ -79,7 +79,7 @@ class QuoteEvaluationDispatcher:
         now = self._session_service.now_taipei()
         with self._session_factory() as db:
             repo = IntentRepository(db)
-            intents = repo.list_active_by_symbols([snapshot.symbol])
+            intents = repo.system_list_active_by_symbols([snapshot.symbol])
             if not intents:
                 return
 
@@ -88,8 +88,8 @@ class QuoteEvaluationDispatcher:
                 result = self._evaluator.evaluate(snapshot, intent, now)
                 if not result.should_trigger:
                     continue
-                assert result.trigger_price is not None
-                assert result.trigger_reference_price_type is not None
+                if result.trigger_price is None or result.trigger_reference_price_type is None:
+                    raise RuntimeError(f"Evaluator returned should_trigger=True but trigger fields are None: {result}")
                 try:
                     trigger_cmd.execute(
                         TriggerIntentInput(

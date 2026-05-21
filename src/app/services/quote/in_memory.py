@@ -82,3 +82,10 @@ class InMemoryQuoteProvider(QuoteProvider):
     def add_quote_listener(self, listener: QuoteListener) -> None:
         with self._lock:
             self._listeners.append(listener)
+
+    def remove_quote_listener(self, listener: QuoteListener) -> None:
+        with self._lock:
+            try:
+                self._listeners.remove(listener)
+            except ValueError:
+                pass
