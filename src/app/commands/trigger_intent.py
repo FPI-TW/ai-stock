@@ -13,6 +13,15 @@ Concurrency safety (spec §6 trigger / cancel race):
   fires we surface `DuplicateTriggerError` so callers can distinguish
   contention from real bugs.
 
+Two callers share this module:
+
+- `TriggerIntentCommand` — self-contained transaction for dispatcher /
+  dev-evaluate paths where the intent already exists and may be raced.
+- `CreateTradeIntentCommand` — uses the lower-level `persist_trigger` helper
+  to fold an immediate trigger into the create transaction. The just-flushed
+  intent row is invisible to other sessions until commit, so no lock is
+  needed.
+
 V1 upgrade seam (spec §16): the inline `notifications` insert here will be
 replaced by an outbox row + worker. Keep notification rendering routed
 through `render_price_triggered` so swapping the persistence path does not
@@ -91,6 +100,63 @@ def _notification_to_domain(row: NotificationRow) -> NotificationData:
     )
 
 
+def persist_trigger(
+    db: Session,
+    intent: TradeIntent,
+    inp: TriggerIntentInput,
+) -> tuple[TriggerEventRow, NotificationRow]:
+    """Write trigger_event + notification + intent status update — no commit.
+
+    Pure persistence helper shared by `TriggerIntentCommand` (with lock, for
+    existing intents) and `CreateTradeIntentCommand` (no lock, for the
+    just-flushed intent in the same transaction). Caller decides when to
+    commit and how to translate `IntegrityError`.
+
+    `triggered_at` left unset on both rows / UPDATE values — the DB fills it
+    via `func.now()` (server_default on trigger_events, explicit on the
+    UPDATE). In a single PostgreSQL transaction every NOW() call returns the
+    transaction-start timestamp, so the two columns end up with identical
+    values without us tracking them in Python.
+    """
+
+    title, body = render_price_triggered(
+        symbol=intent.symbol,
+        strategy=intent.strategy,
+        target_price=intent.target_price_effective,
+        trigger_price=inp.trigger_price,
+        quote_time=inp.quote_time,
+    )
+
+    trigger_row = TriggerEventRow(
+        id=uuid4(),
+        trade_intent_id=intent.id,
+        owner_user_id=intent.owner_user_id,
+        symbol=intent.symbol,
+        quote_snapshot=inp.quote_snapshot,
+        target_price_effective=intent.target_price_effective,
+        trigger_price=inp.trigger_price,
+        trigger_reference_price_type=inp.trigger_reference_price_type,
+        fallback_used=inp.fallback_used,
+    )
+    notification_row = NotificationRow(
+        id=uuid4(),
+        owner_user_id=intent.owner_user_id,
+        trade_intent_id=intent.id,
+        type="price_triggered",
+        rendered_title=title,
+        rendered_body=body,
+    )
+
+    db.add(trigger_row)
+    db.execute(
+        update(TradeIntent)
+        .where(TradeIntent.id == intent.id, TradeIntent.status == "active")
+        .values(status="triggered", triggered_at=func.now(), updated_at=func.now()),
+    )
+    db.add(notification_row)
+    return trigger_row, notification_row
+
+
 class TriggerIntentCommand:
     def __init__(self, db: Session) -> None:
         self._db = db
@@ -104,51 +170,11 @@ class TriggerIntentCommand:
         if intent.status != "active":
             raise IntentNotActiveError(inp.intent_id, intent.status)
 
-        # Render before persistence so bad inputs fail without polluting the tx.
-        title, body = render_price_triggered(
-            symbol=intent.symbol,
-            strategy=intent.strategy,
-            target_price=intent.target_price_effective,
-            trigger_price=inp.trigger_price,
-            quote_time=inp.quote_time,
-        )
-
-        # `triggered_at` left unset on both rows / UPDATE values — the DB fills
-        # it via `func.now()` (server_default on trigger_events, explicit on
-        # the UPDATE). In a single PostgreSQL transaction every NOW() call
-        # returns the transaction-start timestamp, so the two columns end up
-        # with identical values without us tracking them in Python.
-        trigger_row = TriggerEventRow(
-            id=uuid4(),
-            trade_intent_id=intent.id,
-            owner_user_id=intent.owner_user_id,
-            symbol=intent.symbol,
-            quote_snapshot=inp.quote_snapshot,
-            target_price_effective=intent.target_price_effective,
-            trigger_price=inp.trigger_price,
-            trigger_reference_price_type=inp.trigger_reference_price_type,
-            fallback_used=inp.fallback_used,
-        )
-        notification_row = NotificationRow(
-            id=uuid4(),
-            owner_user_id=intent.owner_user_id,
-            trade_intent_id=intent.id,
-            type="price_triggered",
-            rendered_title=title,
-            rendered_body=body,
-        )
-
         # Wrap the whole write sequence: autoflush on `execute(update(...))`
         # can surface the UNIQUE violation before commit, so a commit-only
         # try/except would miss it.
         try:
-            self._db.add(trigger_row)
-            self._db.execute(
-                update(TradeIntent)
-                .where(TradeIntent.id == intent.id, TradeIntent.status == "active")
-                .values(status="triggered", triggered_at=func.now(), updated_at=func.now()),
-            )
-            self._db.add(notification_row)
+            trigger_row, notification_row = persist_trigger(self._db, intent, inp)
             self._db.commit()
             self._db.refresh(trigger_row)
             self._db.refresh(notification_row)

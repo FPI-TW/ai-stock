@@ -3,18 +3,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.commands.trigger_intent import (
-    IntentNotActiveError,
-    TriggerIntentCommand,
-    TriggerIntentInput,
-)
+from app.commands.trigger_intent import TriggerIntentInput, persist_trigger
+from app.db.models.core import TradeIntent as TradeIntentRow
 from app.domain.price import InvalidTypeError, PriceRequest, PriceService, SecurityType
 from app.domain.quote_evaluation import QuoteEvaluator
-from app.domain.trade_intent import IntentNotFoundError, TradeIntentData
+from app.domain.trade_intent import TradeIntentData
 from app.domain.trading_session import TradingSessionService
-from app.domain.trigger_event import DuplicateTriggerError, quote_snapshot_to_jsonb
+from app.domain.trigger_event import quote_snapshot_to_jsonb
 from app.repositories.intent_repository import IntentRepository
 from app.services.quote.base import QuoteProvider, QuoteUnavailableError
 from app.services.quote.intent_reconciler import reconcile_after_terminal_transition, reconcile_on_create
@@ -51,20 +49,25 @@ class CancelTradeIntentInput:
 class CreateTradeIntentCommand:
     """Create a trade intent, reconcile its quote subscription, and optionally trigger.
 
-    Transaction shape:
-    1. validate → flush intent (no commit)
-    2. `reconcile_on_create` — subscribe broker. Failure here rolls back the intent.
-    3. commit the create transaction.
-    4. `find_by_id` to materialise server-side timestamps.
-    5. If the intent landed `active` (spec §15: 盤中 create + 條件成立 → 立即觸發),
-       attempt an immediate trigger via `TriggerIntentCommand` in a separate
-       transaction. The brief "active but pre-trigger" window is the V0.5
-       trade-off; V1 outbox will collapse this to one tx.
+    Single-transaction shape (review #2 follow-up):
+    1. validate → flush intent (no commit). The flushed row is held by this
+       session only — invisible to dispatcher / other readers until commit.
+    2. `reconcile_on_create` — subscribe broker. Failure here rolls back the
+       intent (still inside the same tx).
+    3. If the intent landed `active` and the current quote already meets the
+       condition (spec §15), inline `persist_trigger` writes
+       `trigger_events` / updates `trade_intents.status` / writes
+       `notifications`. No `SELECT ... FOR UPDATE` here: the row was just
+       flushed by this session, so no other session can race us.
+    4. `commit` — intent (+ optional trigger_event + notification) land in
+       one atomic write. Any failure between flush and commit rolls back
+       the entire create.
+    5. `find_by_id` after commit to materialise server-side timestamps and
+       the final status (active / triggered / scheduled).
 
-    Immediate-trigger failures (no quote, race on status guard, duplicate
-    backstop) are downgraded to warning logs; the intent stays in whatever
-    state it ended up in, and callers can re-evaluate via
-    `/dev/evaluate-quotes` or a future scheduler.
+    Quote unavailable on the immediate-trigger path is non-blocking
+    (spec §15): the intent commits as `active`, a later quote will drive
+    the trigger via the dispatcher or `/dev/evaluate-quotes`.
     """
 
     def __init__(
@@ -74,7 +77,6 @@ class CreateTradeIntentCommand:
         intent_repo: IntentRepository,
         quote_provider: QuoteProvider,
         evaluator: QuoteEvaluator,
-        trigger_cmd: TriggerIntentCommand,
         db: Session,
     ) -> None:
         self._symbol_service = symbol_service
@@ -82,7 +84,6 @@ class CreateTradeIntentCommand:
         self._intent_repo = intent_repo
         self._quote_provider = quote_provider
         self._evaluator = evaluator
-        self._trigger_cmd = trigger_cmd
         self._db = db
 
     def execute(self, inp: CreateTradeIntentInput) -> TradeIntentData:
@@ -131,75 +132,102 @@ class CreateTradeIntentCommand:
             # 5. reconcile subscription before commit — fail here rolls back the intent
             reconcile_on_create(self._quote_provider, inp.symbol)
 
+            # 6. immediate trigger if the intent is active and the current quote
+            #    already meets the strategy condition (spec §15). Scheduled
+            #    intents skip — they wait for the next-day activation path.
+            #    Folded into this transaction so dispatcher can never observe
+            #    an active-but-pre-trigger window.
+            if initial_status == "active":
+                self._apply_inline_trigger_if_quote_met(intent_id, inp.symbol, now)
+
             self._db.commit()
         except Exception:
             self._db.rollback()
             raise
 
-        # 6. materialise server-side values (created_at / updated_at). Done
-        #    after commit so a SELECT hiccup here can't corrupt a half-written
-        #    write — the row is already durable.
-        intent = self._intent_repo.find_by_id(intent_id, inp.owner_user_id)
+        # 7. materialise server-side values (created_at / updated_at, plus
+        #    triggered_at if step 6 fired). Done after commit so a SELECT
+        #    hiccup here can't corrupt a half-written write.
+        return self._intent_repo.find_by_id(intent_id, inp.owner_user_id)
 
-        # 7. immediate trigger if the intent is active and the current quote
-        #    already meets the strategy condition (spec §15). Scheduled
-        #    intents skip — they wait for the next-day activation path.
-        if intent.status == "active":
-            return self._maybe_immediate_trigger(intent, now)
-        return intent
+    def _apply_inline_trigger_if_quote_met(
+        self,
+        intent_id: UUID,
+        symbol: str,
+        now: datetime,
+    ) -> None:
+        """Evaluate current quote and, if condition met, write trigger rows in this tx.
 
-    def _maybe_immediate_trigger(self, intent: TradeIntentData, now: datetime) -> TradeIntentData:
-        # Quote unavailable is non-blocking per spec §15: intent stays active,
-        # next /dev/evaluate-quotes (or a scheduler in V1) will re-attempt.
-        # Other provider-layer errors (session down, etc.) propagate — they
-        # signal a degraded system that callers should see, not a per-symbol
-        # cache miss to silently absorb.
+        Runs before commit, so the just-flushed intent is still invisible to
+        other sessions — no `SELECT ... FOR UPDATE` is needed. Quote
+        unavailable is non-blocking: the create commits as `active` and a
+        later quote drives the trigger.
+        """
+
         try:
-            quotes = self._quote_provider.get_quotes([intent.symbol])
+            quotes = self._quote_provider.get_quotes([symbol])
         except QuoteUnavailableError as exc:
             logger.warning(
                 "create: quote unavailable for %s, intent %s stays active: %s",
-                intent.symbol,
-                intent.id,
+                symbol,
+                intent_id,
                 exc,
             )
-            return intent
+            return
         if not quotes:
             logger.warning(
                 "create: quote unavailable for %s, intent %s stays active",
-                intent.symbol,
-                intent.id,
+                symbol,
+                intent_id,
             )
-            return intent
+            return
+
+        # Reload the ORM row from the session — the repo returned only the id,
+        # so we re-select to drive `persist_trigger`. The row sits in the
+        # session's identity map after the earlier flush; this SELECT hits the
+        # local cache, no extra round-trip.
+        intent_row = self._db.execute(select(TradeIntentRow).where(TradeIntentRow.id == intent_id)).scalar_one()
+        intent_domain = TradeIntentData(
+            id=intent_row.id,
+            owner_user_id=intent_row.owner_user_id,
+            symbol=intent_row.symbol,
+            strategy=intent_row.strategy,
+            execution_mode=intent_row.execution_mode,
+            quantity_lots=intent_row.quantity_lots,
+            target_price_original=intent_row.target_price_original,
+            target_price_effective=intent_row.target_price_effective,
+            trigger_reference_price_type=intent_row.trigger_reference_price_type,
+            trading_date=intent_row.trading_date,
+            time_in_force=intent_row.time_in_force,
+            status=intent_row.status,
+            # created_at / updated_at populated post-flush by server_default; not
+            # consulted by the evaluator so we leave them as-is.
+            created_at=intent_row.created_at,
+            updated_at=intent_row.updated_at,
+        )
 
         quote = quotes[0]
-        result = self._evaluator.evaluate(quote, intent, now)
+        result = self._evaluator.evaluate(quote, intent_domain, now)
         if not result.should_trigger:
-            return intent
+            return
 
         # evaluator guarantees these are populated when should_trigger is True;
         # explicit check (not assert) so the invariant holds under `python -O`.
         if result.trigger_price is None or result.trigger_reference_price_type is None:
             raise RuntimeError(f"Evaluator returned should_trigger=True but trigger fields are None: {result}")
-        try:
-            self._trigger_cmd.execute(
-                TriggerIntentInput(
-                    intent_id=intent.id,
-                    trigger_price=result.trigger_price,
-                    trigger_reference_price_type=result.trigger_reference_price_type,
-                    fallback_used=result.fallback_used,
-                    quote_snapshot=quote_snapshot_to_jsonb(quote),
-                    quote_time=quote.quote_time,
-                )
-            )
-        except (IntentNotActiveError, IntentNotFoundError, DuplicateTriggerError) as exc:
-            # Race between create-commit and trigger-lock; intent stays active
-            # in the response. Caller can re-evaluate via /dev/evaluate-quotes
-            # or a future scheduler. Logged for ops investigation.
-            logger.warning("create: immediate trigger race for intent %s: %s", intent.id, exc)
-            return intent
 
-        return self._intent_repo.find_by_id(intent.id, intent.owner_user_id)
+        persist_trigger(
+            self._db,
+            intent_row,
+            TriggerIntentInput(
+                intent_id=intent_row.id,
+                trigger_price=result.trigger_price,
+                trigger_reference_price_type=result.trigger_reference_price_type,
+                fallback_used=result.fallback_used,
+                quote_snapshot=quote_snapshot_to_jsonb(quote),
+                quote_time=quote.quote_time,
+            ),
+        )
 
 
 class CancelTradeIntentCommand:

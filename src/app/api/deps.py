@@ -102,7 +102,6 @@ def get_create_trade_intent_command(
     intent_repo: IntentRepoDep,
     quote_provider: QuoteProviderDep,
     evaluator: QuoteEvaluatorDep,
-    trigger_cmd: TriggerIntentCommandDep,
     db: DatabaseDep,
 ) -> CreateTradeIntentCommand:
     return CreateTradeIntentCommand(
@@ -111,7 +110,6 @@ def get_create_trade_intent_command(
         intent_repo,
         quote_provider,
         evaluator,
-        trigger_cmd,
         db,
     )
 
