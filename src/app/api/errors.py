@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.domain.notification import NotificationNotFoundError
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
 from app.domain.symbol_errors import SymbolError, SymbolNotTradableError, UnknownSymbolError
 from app.domain.trade_intent import (
@@ -202,6 +203,21 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning(
             "Intent not found",
             extra={"request_id": get_request_id(request), "intent_id": str(exc.intent_id)},
+        )
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_404_NOT_FOUND,
+            code=ErrorCode.NOT_FOUND,
+        )
+
+    @app.exception_handler(NotificationNotFoundError)
+    async def notification_not_found_handler(request: Request, exc: NotificationNotFoundError) -> JSONResponse:
+        logger.warning(
+            "Notification not found",
+            extra={
+                "request_id": get_request_id(request),
+                "notification_id": str(exc.notification_id),
+            },
         )
         return build_error_response(
             request=request,
