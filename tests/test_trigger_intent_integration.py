@@ -11,16 +11,17 @@ from zoneinfo import ZoneInfo
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, create_engine, select
+from sqlalchemy import Engine, create_engine, select, update
 from sqlalchemy.orm import Session
 
 from app.commands.trigger_intent import (
     IntentNotActiveError,
     TriggerIntentCommand,
     TriggerIntentInput,
+    persist_trigger,
 )
 from app.core.config import get_settings
-from app.db.models.core import Notification, Symbol, TriggerEvent
+from app.db.models.core import Notification, Symbol, TradeIntent, TriggerEvent
 from app.domain.trade_intent import IntentNotFoundError
 from app.domain.trigger_event import DuplicateTriggerError
 from app.repositories.intent_repository import IntentRepository
@@ -293,3 +294,74 @@ def test_rollback_leaves_no_partial_state_on_duplicate(
 
     notification_count = db_session.execute(select(Notification).where(Notification.trade_intent_id == intent_id)).all()
     assert notification_count == []
+
+
+@pytest.mark.integration
+def test_persist_trigger_rowcount_guard_raises_when_status_changed_underneath(
+    trigger_engine: Engine,
+) -> None:
+    """Defense-in-depth: simulate a future caller that skips SELECT FOR UPDATE.
+
+    Two sessions on the same engine — the main session loads the intent
+    ORM row while it is still active; a racing session flips status to
+    `cancelled` and commits. When the main session then drives
+    `persist_trigger`, its `UPDATE ... WHERE status='active'` will miss
+    (the row is no longer active in DB) — `rowcount` 0 must raise
+    `IntentNotActiveError` and prevent the staged trigger_event /
+    notification from committing.
+
+    Direct unit-style call into `persist_trigger` is intentional —
+    `TriggerIntentCommand.execute()` would short-circuit at the Python
+    status guard after re-reading the row, so we cannot exercise the
+    rowcount branch through the public surface.
+    """
+
+    owner = uuid4()
+    intent_id: UUID
+
+    with Session(trigger_engine) as setup_session:
+        repo = IntentRepository(setup_session)
+        intent_id = repo.create(
+            owner_user_id=owner,
+            symbol="2330",
+            strategy="buy_price_alert",
+            quantity_lots=1,
+            target_price_original=Decimal("100.0000"),
+            target_price_effective=Decimal("100.0000"),
+            trigger_reference_price_type="ask",
+            trading_date=date(2026, 5, 11),
+            time_in_force="day",
+            execution_mode="notify_only",
+            status="active",
+        )
+        setup_session.commit()
+
+    main_session = Session(trigger_engine)
+    race_session = Session(trigger_engine)
+    try:
+        intent_row = main_session.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one()
+        assert intent_row.status == "active"  # main session's view, pre-race
+
+        # Racing session flips DB-side status. READ COMMITTED — main
+        # session's next statement will observe the new value.
+        race_session.execute(update(TradeIntent).where(TradeIntent.id == intent_id).values(status="cancelled"))
+        race_session.commit()
+
+        with pytest.raises(IntentNotActiveError):
+            persist_trigger(main_session, intent_row, _input(intent_id))
+
+        main_session.rollback()
+    finally:
+        main_session.close()
+        race_session.close()
+
+    # Verify no orphan trigger_event / notification leaked through.
+    with Session(trigger_engine) as verify:
+        trigger_rows = verify.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).all()
+        notif_rows = verify.execute(select(Notification).where(Notification.trade_intent_id == intent_id)).all()
+        intent_after = verify.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one()
+
+    assert trigger_rows == []
+    assert notif_rows == []
+    assert intent_after.status == "cancelled"
+    assert intent_after.triggered_at is None
