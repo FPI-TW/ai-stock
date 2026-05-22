@@ -49,6 +49,18 @@ class CancelTradeIntentInput:
 class CreateTradeIntentCommand:
     """Create a trade intent, reconcile its quote subscription, and optionally trigger.
 
+    Two entry points share the same in-transaction work:
+
+    - `execute(input) -> TradeIntentData` — owns the transaction boundary.
+      Single-create callers (the `POST /trade-intents` route) use this. It
+      wraps `execute_within_tx` with `commit` / `rollback` and resolves the
+      flushed intent via `find_by_id` after commit.
+    - `execute_within_tx(input) -> UUID` — runs validation / flush /
+      reconcile / inline-trigger only. Does **not** commit, does **not**
+      rollback, does **not** call `find_by_id`. Callers (e.g. the batch
+      endpoint introduced in BE-V0.5-14) loop this method inside their own
+      `try` block and own the final `commit` / `rollback`.
+
     Single-transaction shape (review #2 follow-up):
     1. validate → flush intent (no commit). The flushed row is held by this
        session only — invisible to dispatcher / other readers until commit.
@@ -61,9 +73,10 @@ class CreateTradeIntentCommand:
        flushed by this session, so no other session can race us.
     4. `commit` — intent (+ optional trigger_event + notification) land in
        one atomic write. Any failure between flush and commit rolls back
-       the entire create.
+       the entire create. (Only `execute()` runs this step.)
     5. `find_by_id` after commit to materialise server-side timestamps and
-       the final status (active / triggered / scheduled).
+       the final status (active / triggered / scheduled). (Only `execute()`
+       runs this step.)
 
     Quote unavailable on the immediate-trigger path is non-blocking
     (spec §15): the intent commits as `active`, a later quote will drive
@@ -88,67 +101,79 @@ class CreateTradeIntentCommand:
 
     def execute(self, inp: CreateTradeIntentInput) -> TradeIntentData:
         try:
-            # 1. validate symbol existence and tradability
-            symbol_obj = self._symbol_service.get_tradable_symbol(inp.symbol)
-
-            # 2. validate price and tick size via PriceService
-            try:
-                security_type = SecurityType(symbol_obj.instrument_type)
-            except ValueError:
-                raise InvalidTypeError(symbol_obj.instrument_type, "must be stock or etf") from None
-            effective_price = PriceService.validate(
-                PriceRequest(
-                    type=security_type,
-                    price=inp.target_price,
-                    amount=inp.quantity_lots,
-                )
-            )
-
-            # 3. determine trading_date and initial status
-            now = self._session_service.now_taipei()
-            trading_date = self._session_service.get_day_intent_trading_date(now)
-            initial_status = self._session_service.get_initial_day_intent_status(now)
-
-            # 4. persist (flush only — no refresh; the domain object is
-            #    materialised after the final commit via `find_by_id`)
-            trigger_ref = _TRIGGER_REF.get(inp.strategy)
-            if trigger_ref is None:
-                raise ValueError(f"Unsupported strategy: {inp.strategy}")
-
-            intent_id = self._intent_repo.create(
-                owner_user_id=inp.owner_user_id,
-                symbol=inp.symbol,
-                strategy=inp.strategy,
-                quantity_lots=inp.quantity_lots,
-                target_price_original=effective_price,
-                target_price_effective=effective_price,
-                trigger_reference_price_type=trigger_ref,
-                trading_date=trading_date,
-                time_in_force=_TIME_IN_FORCE,
-                execution_mode=_EXECUTION_MODE,
-                status=initial_status,
-            )
-
-            # 5. reconcile subscription before commit — fail here rolls back the intent
-            reconcile_on_create(self._quote_provider, inp.symbol)
-
-            # 6. immediate trigger if the intent is active and the current quote
-            #    already meets the strategy condition (spec §15). Scheduled
-            #    intents skip — they wait for the next-day activation path.
-            #    Folded into this transaction so dispatcher can never observe
-            #    an active-but-pre-trigger window.
-            if initial_status == "active":
-                self._apply_inline_trigger_if_quote_met(intent_id, inp.symbol, now)
-
+            intent_id = self.execute_within_tx(inp)
             self._db.commit()
         except Exception:
             self._db.rollback()
             raise
 
-        # 7. materialise server-side values (created_at / updated_at, plus
-        #    triggered_at if step 6 fired). Done after commit so a SELECT
-        #    hiccup here can't corrupt a half-written write.
+        # materialise server-side values (created_at / updated_at, plus
+        # triggered_at if the inline-trigger fired). Done after commit so a
+        # SELECT hiccup here can't corrupt a half-written write.
         return self._intent_repo.find_by_id(intent_id, inp.owner_user_id)
+
+    def execute_within_tx(self, inp: CreateTradeIntentInput) -> UUID:
+        """Validate, flush, reconcile, and inline-trigger — without owning the tx.
+
+        Caller owns `commit` / `rollback`. Any failure raises; caller must
+        roll back the session before the next operation. Returns the
+        flushed intent id; the caller is responsible for materialising the
+        domain object via `find_by_id` after commit if needed.
+        """
+
+        # 1. validate symbol existence and tradability
+        symbol_obj = self._symbol_service.get_tradable_symbol(inp.symbol)
+
+        # 2. validate price and tick size via PriceService
+        try:
+            security_type = SecurityType(symbol_obj.instrument_type)
+        except ValueError:
+            raise InvalidTypeError(symbol_obj.instrument_type, "must be stock or etf") from None
+        effective_price = PriceService.validate(
+            PriceRequest(
+                type=security_type,
+                price=inp.target_price,
+                amount=inp.quantity_lots,
+            )
+        )
+
+        # 3. determine trading_date and initial status
+        now = self._session_service.now_taipei()
+        trading_date = self._session_service.get_day_intent_trading_date(now)
+        initial_status = self._session_service.get_initial_day_intent_status(now)
+
+        # 4. persist (flush only — no refresh; the domain object is
+        #    materialised after the final commit via `find_by_id`)
+        trigger_ref = _TRIGGER_REF.get(inp.strategy)
+        if trigger_ref is None:
+            raise ValueError(f"Unsupported strategy: {inp.strategy}")
+
+        intent_id = self._intent_repo.create(
+            owner_user_id=inp.owner_user_id,
+            symbol=inp.symbol,
+            strategy=inp.strategy,
+            quantity_lots=inp.quantity_lots,
+            target_price_original=effective_price,
+            target_price_effective=effective_price,
+            trigger_reference_price_type=trigger_ref,
+            trading_date=trading_date,
+            time_in_force=_TIME_IN_FORCE,
+            execution_mode=_EXECUTION_MODE,
+            status=initial_status,
+        )
+
+        # 5. reconcile subscription before commit — fail here rolls back the intent
+        reconcile_on_create(self._quote_provider, inp.symbol)
+
+        # 6. immediate trigger if the intent is active and the current quote
+        #    already meets the strategy condition (spec §15). Scheduled
+        #    intents skip — they wait for the next-day activation path.
+        #    Folded into this transaction so dispatcher can never observe
+        #    an active-but-pre-trigger window.
+        if initial_status == "active":
+            self._apply_inline_trigger_if_quote_met(intent_id, inp.symbol, now)
+
+        return intent_id
 
     def _apply_inline_trigger_if_quote_met(
         self,
