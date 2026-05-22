@@ -5,12 +5,23 @@
 - 類型：AFK
 - 優先序：P1
 - 預估：15h
-- 依賴：BE-V1-02, BE-V1-07, BE-V1-08, BE-V1-09
+- 依賴：BE-V0.5-14, BE-V1-02, BE-V1-07, BE-V1-08, BE-V1-09
 - 交付版本：V1
 
 ## 背景
 
 V1 必須支援 CSV 批次建立 trade intent（domain-spec §7）。前端解析 CSV 後呼叫後端 validation/preview，後端回 normalized rows + 錯誤 + 調整資訊，使用者確認後同 transaction 建立。
+
+BE-V0.5-14 已提供 V0.5 簡化版：`POST /trade-intents/batch`，前端解析、後端 loop `CreateTradeIntent`、無 preview / draft / idempotency、20 row 上限、buy/sell 範本。本工單在其上補：
+
+- Preview / draft TTL 15 分鐘（讓 user 看過 effective price 再確認）。
+- Confirm 重 validate（avoid trust draft；對 corporate action 套用後的價格保 source of truth）。
+- Idempotency key 必填（與 BE-V1-16 統一）。
+- Bracket template（依 BE-V1-07 / V1-08）。
+- Batch limit 拉到 100。
+- `batch_import_id` / `source_row_number` / `input_source = csv` 正式啟用（V0.5-14 未寫這些欄位）。
+
+決策：V1 上線時棄用 `POST /trade-intents/batch`，統一改走 `/trade-intents/csv/preview` + `/trade-intents/csv/confirm`，避免兩條入口；前端 V0.5 暫用 batch endpoint 的 client code 在 V1 隨 preview/confirm flow 改寫。
 
 V1 CSV 模板：
 

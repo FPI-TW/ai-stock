@@ -24,11 +24,11 @@ V0.5 原則：
 
 | 版本          | 工單數 |  小計 |
 | ------------- | -----: | ----: |
-| V0.5          |     12 | 227.5h |
+| V0.5          |     13 | 239.5h |
 | V1 additional |     19 | 582.5h |
-| Total         |     31 | 810h |
+| Total         |     32 | 822h |
 
-V0.5 工單數：BE-V0.5-01 至 BE-V0.5-13 共 13 編號，其中 BE-V0.5-08 已由 BE-V0.5-13 取代，實際交付 12 張。
+V0.5 工單數：BE-V0.5-01 至 BE-V0.5-14 共 14 編號，其中 BE-V0.5-08 已由 BE-V0.5-13 取代，實際交付 13 張。
 
 ## 3. 類型與優先序
 
@@ -62,6 +62,7 @@ V0.5 工單數：BE-V0.5-01 至 BE-V0.5-13 共 13 編號，其中 BE-V0.5-08 已
 | BE-V0.5-11 | 本地主流程 API examples 與 frontend handoff                      | P1     |   11h | pending | [BE-V0.5-11-api-examples-handoff.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v0.5/BE-V0.5-11-api-examples-handoff.md)         |
 | BE-V0.5-12 | Integration tests：create -> quote -> trigger -> notification    | P0     |   20h | done | [BE-V0.5-12-integration-tests.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v0.5/BE-V0.5-12-integration-tests.md)               |
 | BE-V0.5-13 | Shioaji Demo Quote Provider（取代 BE-V0.5-08）                   | P0     |   22h | done | [BE-V0.5-13-shioaji-quote-provider.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v0.5/BE-V0.5-13-shioaji-quote-provider.md)     |
+| BE-V0.5-14 | CSV 前端解析 + 後端 batch create（無 preview/draft 層）          | P1     |   12h | pending | [BE-V0.5-14-csv-batch-frontend-parse.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v0.5/BE-V0.5-14-csv-batch-frontend-parse.md) |
 
 ## 5. V0.5 → V1 銜接重點
 
@@ -73,6 +74,7 @@ V0.5 已落地的設計決策影響 V1 工單拆解：
 - **Symbol master**（BE-V0.5-04）：目前 5 檔 hardcoded seed。BE-V1-03 接 TWSE ISIN 匯入 + admin override readiness，需保留 BE-V0.5-13 demo allowlist 與 symbol seed 內容一致的不變式。
 - **Owner scope**（BE-V0.5-03）：API 已不接受 client 傳入 `owner_user_id`，BE-V1-01/02 把 placeholder 替換為 auth context；所有既有 query / repository 不必改 owner-scoping 邏輯。
 - **Decimal price + tick-size**（BE-V0.5-05）：BE-V1-09 的 round-away-from-trigger 直接擴充 tick-size service，不另開模組。
+- **CSV 入口**（BE-V0.5-14）：V0.5 已提供 `POST /trade-intents/batch`（前端解析、loop `CreateTradeIntent`、20 row 上限、無 preview/draft/idempotency）。BE-V1-10 在其上補 preview/draft TTL、idempotency、bracket row、batch limit 100，並評估是否棄用 `/trade-intents/batch` 統一改走 `/trade-intents/csv/*`。
 
 ## 6. V1 Additional 工單索引
 
@@ -89,7 +91,7 @@ V0.5 已落地的設計決策影響 V1 工單拆解：
 | BE-V1-07 | Take-profit / stop-loss strategy semantics                                 | AFK  | P1     |   30h | BE-V0.5-07, BE-V0.5-09                     | [BE-V1-07-take-profit-stop-loss.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v1/BE-V1-07-take-profit-stop-loss.md) |
 | BE-V1-08 | OCO bracket alert group behavior                                           | AFK  | P1     |   35h | BE-V1-06, BE-V1-07                         | [BE-V1-08-oco-bracket.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v1/BE-V1-08-oco-bracket.md) |
 | BE-V1-09 | Corporate action importer、cash dividend snapshot、effective price preview | HITL | P1     |   45h | BE-V0.5-05, BE-V1-03, BE-V1-04             | [BE-V1-09-corporate-action.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v1/BE-V1-09-corporate-action.md) |
-| BE-V1-10 | CSV preview、draft、confirm 與 batch metadata                              | AFK  | P1     |   15h | BE-V1-02, BE-V1-07, BE-V1-08, BE-V1-09     | [BE-V1-10-csv-batch.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v1/BE-V1-10-csv-batch.md) |
+| BE-V1-10 | CSV preview、draft、confirm 與 batch metadata                              | AFK  | P1     |   15h | BE-V0.5-14, BE-V1-02, BE-V1-07, BE-V1-08, BE-V1-09 | [BE-V1-10-csv-batch.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v1/BE-V1-10-csv-batch.md) |
 | BE-V1-11 | Telegram bind/unbind 與 Telegram delivery worker                           | HITL | P1     |   20h | BE-V1-01, BE-V1-06                         | [BE-V1-11-telegram.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v1/BE-V1-11-telegram.md) |
 | BE-V1-12 | User notification settings 與 notification center hardening                | AFK  | P1     |   20h | BE-V1-06, BE-V1-11                         | [BE-V1-12-notification-settings.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v1/BE-V1-12-notification-settings.md) |
 | BE-V1-13 | Admin user management 與 account disable command                           | AFK  | P1     |   35h | BE-V1-01, BE-V1-02, BE-V0.5-07             | [BE-V1-13-admin-user-management.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v1/BE-V1-13-admin-user-management.md) |
