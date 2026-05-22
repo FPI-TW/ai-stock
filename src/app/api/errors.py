@@ -36,6 +36,7 @@ class ErrorCode(StrEnum):
     INVALID_CURSOR = "INVALID_CURSOR"
     QUOTE_PROVIDER_UNAVAILABLE = "QUOTE_PROVIDER_UNAVAILABLE"
     QUOTE_UNAVAILABLE = "QUOTE_UNAVAILABLE"
+    CSV_BATCH_LIMIT_EXCEEDED = "CSV_BATCH_LIMIT_EXCEEDED"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -54,6 +55,7 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INVALID_CURSOR: "Cursor 已失效或不存在",
     ErrorCode.QUOTE_PROVIDER_UNAVAILABLE: "行情服務暫時無法使用",
     ErrorCode.QUOTE_UNAVAILABLE: "尚未收到該標的的行情報價",
+    ErrorCode.CSV_BATCH_LIMIT_EXCEEDED: "批次資料筆數超過上限",
 }
 
 

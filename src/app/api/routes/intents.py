@@ -13,6 +13,7 @@ from app.api.errors import ApiError, ErrorCode
 from app.commands.trade_intent import CancelTradeIntentInput, CreateTradeIntentInput
 from app.domain.trade_intent import VALID_STATUSES
 from app.schemas.intent import (
+    IntentBatchRequest,
     IntentCreateRequest,
     IntentCreateResponse,
     IntentDetailResponse,
@@ -21,6 +22,14 @@ from app.schemas.intent import (
 )
 
 router = APIRouter()
+
+# Batch endpoint 上限。超出回 CSV_BATCH_LIMIT_EXCEEDED（工單 §90）。V1-10 拉到 100。
+_BATCH_ROW_LIMIT = 20
+
+# Stub envelope code for the batch handler.
+# Replaced when the row-level transaction loop lands (post PR #15 merge).
+# 工單 §60-99 / Implementation note 兩條（subscription reconcile cleanup、intra-batch dedup）。
+_BATCH_STUB_CODE = "BATCH_NOT_IMPLEMENTED_STUB"
 
 
 def _parse_status_list(raw: list[str] | None) -> list[str] | None:
@@ -74,6 +83,43 @@ def create_intent(
         )
     )
     return IntentCreateResponse(data=map_to_response_data(intent))
+
+
+@router.post("/batch")
+def create_intents_batch(
+    request: IntentBatchRequest,
+    user: CurrentUserDep,
+) -> dict[str, object]:
+    """Batch create entrypoint — structural validation layer only.
+
+    Row-level business validation (symbol / tick / session / duplicate / quota)
+    and the same-transaction loop are pending PR #15 (`execute_within_tx`
+    extraction) plus the two Implementation notes in the work order
+    (`docs/orders/v0.5/BE-V0.5-14-csv-batch-frontend-parse.md`). When this
+    handler is wired up, replace the stub raise with the loop described in
+    work order §97 + the two notes; the structural validation here stays.
+    """
+
+    if len(request.rows) > _BATCH_ROW_LIMIT:
+        raise ApiError(
+            code=ErrorCode.CSV_BATCH_LIMIT_EXCEEDED,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            details={"actual": len(request.rows), "limit": _BATCH_ROW_LIMIT},
+        )
+
+    # Owner scope (work order §203) — read here so unused-import / unused-arg
+    # checks stay green and the wiring is obvious when the stub is replaced.
+    _ = user.user_id
+
+    raise ApiError(
+        code=_BATCH_STUB_CODE,
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        message=(
+            "批次端點尚未完整實作（BE-V0.5-14）：結構驗證已通過，"
+            "row-level validation 與 transaction loop 等 PR #15 merge 後接入。"
+        ),
+        details={"receivedRows": len(request.rows)},
+    )
 
 
 @router.get("", response_model=IntentListResponse)

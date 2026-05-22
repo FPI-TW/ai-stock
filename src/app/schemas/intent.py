@@ -18,6 +18,31 @@ class IntentCreateRequest(OwnerScopedRequestModel):
     target_price: str = Field(validation_alias="targetPrice")
 
 
+class IntentBatchRow(OwnerScopedRequestModel):
+    """One row of a batch create request — same shape as single create body.
+
+    Owner is taken from request context (not per-row); extra='forbid' rejects
+    ownerUserId / tradingDate / status and any other backend-derived field
+    per work order BE-V0.5-14 §85.
+    """
+
+    symbol: str
+    strategy: Literal["buy_price_alert", "sell_price_alert"]
+    quantity_lots: int = Field(validation_alias="quantityLots", ge=1)
+    target_price: str = Field(validation_alias="targetPrice")
+
+
+class IntentBatchRequest(OwnerScopedRequestModel):
+    """Batch create payload.
+
+    `min_length=1` rejects empty list with VALIDATION_ERROR (work order §198);
+    upper bound of 20 is enforced in the route handler so the violation can
+    raise the distinct `CSV_BATCH_LIMIT_EXCEEDED` envelope (work order §90).
+    """
+
+    rows: list[IntentBatchRow] = Field(min_length=1)
+
+
 class IntentResponseData(BaseModel):
     """Response shape for a single trade intent.
 
