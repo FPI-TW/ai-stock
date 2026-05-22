@@ -182,6 +182,39 @@ class IntentRepository:
         next_cursor = str(page[-1].id) if has_more and page else None
         return [_to_domain(r) for r in page], next_cursor
 
+    def system_list_active_symbols(self) -> list[str]:
+        """Return distinct symbols with at least one active intent (owner-agnostic).
+
+        `system_` prefix marks this as an evaluator / dispatcher path that
+        deliberately skips owner scoping. Never expose through user-facing API
+        — owner authz is the caller's responsibility.
+        """
+        rows = (
+            self._db.execute(select(TradeIntent.symbol).where(TradeIntent.status == "active").distinct())
+            .scalars()
+            .all()
+        )
+        return list(rows)
+
+    def system_list_active_by_symbols(self, symbols: list[str]) -> list[TradeIntentData]:
+        """Return all active intents whose symbol is in the given list (owner-agnostic).
+
+        `system_` prefix — see `system_list_active_symbols` for the scoping caveat.
+        """
+        if not symbols:
+            return []
+        rows = (
+            self._db.execute(
+                select(TradeIntent).where(
+                    TradeIntent.status == "active",
+                    TradeIntent.symbol.in_(symbols),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [_to_domain(r) for r in rows]
+
     def cancel(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
         """Set status='cancelled' and flush.
 

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from app.core.config import Settings
 from app.services.quote.base import (
+    QuoteListener,
     QuoteProvider,
     QuoteProviderError,
     QuoteProviderUnavailableError,
@@ -55,6 +56,7 @@ class ShioajiQuoteProvider(QuoteProvider):
         self._max = max_subscriptions
         self._snapshots: dict[str, QuoteSnapshot] = {}
         self._subscribed: set[str] = set()
+        self._listeners: list[QuoteListener] = []
         self._lock = threading.RLock()
         self._started = False
 
@@ -172,26 +174,58 @@ class ShioajiQuoteProvider(QuoteProvider):
             return set(self._subscribed)
 
     # ------------------------------------------------------------------
+    # QuoteProvider protocol — listener support
+    # ------------------------------------------------------------------
+
+    def add_quote_listener(self, listener: QuoteListener) -> None:
+        with self._lock:
+            self._listeners.append(listener)
+
+    def remove_quote_listener(self, listener: QuoteListener) -> None:
+        with self._lock:
+            try:
+                self._listeners.remove(listener)
+            except ValueError:
+                pass
+
+    # ------------------------------------------------------------------
     # callbacks (worker threads — do NOT touch SQLAlchemy session here)
     # ------------------------------------------------------------------
 
     def _on_tick(self, payload: TickPayload) -> None:
         with self._lock:
             previous = self._snapshots.get(payload.symbol)
-            self._snapshots[payload.symbol] = build_snapshot(
+            snapshot = build_snapshot(
                 symbol=payload.symbol,
                 previous=previous,
                 last_price=payload.last_price,
                 quote_time=payload.quote_time,
             )
+            self._snapshots[payload.symbol] = snapshot
+            listeners = list(self._listeners)
+        self._fire_listeners(snapshot, listeners)
 
     def _on_bidask(self, payload: BidAskPayload) -> None:
         with self._lock:
             previous = self._snapshots.get(payload.symbol)
-            self._snapshots[payload.symbol] = build_snapshot(
+            snapshot = build_snapshot(
                 symbol=payload.symbol,
                 previous=previous,
                 bid_price=payload.bid_price,
                 ask_price=payload.ask_price,
                 quote_time=payload.quote_time,
             )
+            self._snapshots[payload.symbol] = snapshot
+            listeners = list(self._listeners)
+        self._fire_listeners(snapshot, listeners)
+
+    def _fire_listeners(self, snapshot: QuoteSnapshot, listeners: list[QuoteListener]) -> None:
+        """Run listeners outside the snapshot lock so dispatch latency can't
+        block concurrent broker callbacks. A misbehaving listener must never
+        kill subsequent dispatches or propagate up to the SDK thread.
+        """
+        for listener in listeners:
+            try:
+                listener(snapshot)
+            except Exception:
+                logger.exception("quote listener raised on %s", snapshot.symbol)

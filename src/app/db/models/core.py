@@ -91,8 +91,8 @@ class TradeIntent(TimestampMixin, Base):
     triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class TriggerRecord(Base):
-    __tablename__ = "trigger_records"
+class TriggerEvent(Base):
+    __tablename__ = "trigger_events"
     __table_args__ = (
         CheckConstraint(
             "trigger_reference_price_type IN ('ask', 'bid', 'last_fallback')",
@@ -121,7 +121,7 @@ class TriggerRecord(Base):
     trigger_price: Mapped[Decimal] = mapped_column(Numeric(9, 4), nullable=False)
     trigger_reference_price_type: Mapped[str] = mapped_column(Text, nullable=False)
     fallback_used: Mapped[bool] = mapped_column(nullable=False, server_default="false")
-    triggered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    triggered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

@@ -42,11 +42,11 @@ def reflect_table(engine: Engine, table_name: str) -> Table:
 def test_migration_upgrade_creates_v0_5_schema(migrated_engine: Engine) -> None:
     inspector = sa.inspect(migrated_engine)
 
-    assert {"symbols", "trade_intents", "trigger_records", "notifications"}.issubset(inspector.get_table_names())
+    assert {"symbols", "trade_intents", "trigger_events", "notifications"}.issubset(inspector.get_table_names())
     assert not {"audit_events", "outbox_events", "notification_deliveries", "import_reports", "users"}.intersection(
         inspector.get_table_names()
     )
-    for table_name in ("symbols", "trade_intents", "trigger_records", "notifications"):
+    for table_name in ("symbols", "trade_intents", "trigger_events", "notifications"):
         assert "created_at" in {column["name"] for column in inspector.get_columns(table_name)}
     for table_name in ("symbols", "trade_intents", "notifications"):
         assert "updated_at" in {column["name"] for column in inspector.get_columns(table_name)}
@@ -58,7 +58,7 @@ def test_price_columns_use_numeric_9_4(migrated_engine: Engine) -> None:
 
     expected_columns = {
         "trade_intents": {"target_price_original", "target_price_effective"},
-        "trigger_records": {"target_price_effective", "trigger_price"},
+        "trigger_events": {"target_price_effective", "trigger_price"},
     }
     for table_name, column_names in expected_columns.items():
         columns = {column["name"]: column["type"] for column in inspector.get_columns(table_name)}
@@ -79,7 +79,7 @@ def test_migration_downgrade_removes_v0_5_schema() -> None:
     engine = create_engine(get_settings().database_url or "")
     try:
         inspector = sa.inspect(engine)
-        assert not {"symbols", "trade_intents", "trigger_records", "notifications"}.intersection(
+        assert not {"symbols", "trade_intents", "trigger_events", "notifications"}.intersection(
             inspector.get_table_names()
         )
     finally:
@@ -138,7 +138,7 @@ def test_symbol_rejects_uppercase_etf_instrument_type(migrated_engine: Engine) -
 
 
 @pytest.mark.integration
-def test_trigger_record_requires_unique_trade_intent_id(migrated_engine: Engine) -> None:
+def test_trigger_event_requires_unique_trade_intent_id(migrated_engine: Engine) -> None:
     symbol_id = uuid4()
     trade_intent_id = uuid4()
 
@@ -149,15 +149,15 @@ def test_trigger_record_requires_unique_trade_intent_id(migrated_engine: Engine)
             .insert()
             .values(**build_trade_intent(id=trade_intent_id, symbol="2317"))
         )
-        trigger_records = reflect_table(migrated_engine, "trigger_records")
-        connection.execute(trigger_records.insert().values(**build_trigger_record(trade_intent_id)))
+        trigger_events = reflect_table(migrated_engine, "trigger_events")
+        connection.execute(trigger_events.insert().values(**build_trigger_event(trade_intent_id)))
 
         with pytest.raises(IntegrityError):
-            connection.execute(trigger_records.insert().values(**build_trigger_record(trade_intent_id)))
+            connection.execute(trigger_events.insert().values(**build_trigger_event(trade_intent_id)))
 
 
 @pytest.mark.integration
-def test_trigger_record_rejects_unknown_symbol(migrated_engine: Engine) -> None:
+def test_trigger_event_rejects_unknown_symbol(migrated_engine: Engine) -> None:
     symbol_id = uuid4()
     trade_intent_id = uuid4()
 
@@ -171,14 +171,14 @@ def test_trigger_record_rejects_unknown_symbol(migrated_engine: Engine) -> None:
 
         with pytest.raises(IntegrityError):
             connection.execute(
-                reflect_table(migrated_engine, "trigger_records")
+                reflect_table(migrated_engine, "trigger_events")
                 .insert()
-                .values(**build_trigger_record(trade_intent_id, symbol="9999"))
+                .values(**build_trigger_event(trade_intent_id, symbol="9999"))
             )
 
 
 @pytest.mark.integration
-def test_trigger_record_requires_fallback_consistency(migrated_engine: Engine) -> None:
+def test_trigger_event_requires_fallback_consistency(migrated_engine: Engine) -> None:
     symbol_id = uuid4()
     trade_intent_id = uuid4()
 
@@ -192,10 +192,10 @@ def test_trigger_record_requires_fallback_consistency(migrated_engine: Engine) -
 
         with pytest.raises(IntegrityError):
             connection.execute(
-                reflect_table(migrated_engine, "trigger_records")
+                reflect_table(migrated_engine, "trigger_events")
                 .insert()
                 .values(
-                    **build_trigger_record(
+                    **build_trigger_event(
                         trade_intent_id,
                         symbol="2882",
                         trigger_reference_price_type="last_fallback",
@@ -206,7 +206,7 @@ def test_trigger_record_requires_fallback_consistency(migrated_engine: Engine) -
 
 
 @pytest.mark.integration
-def test_trigger_record_allows_last_price_fallback(migrated_engine: Engine) -> None:
+def test_trigger_event_allows_last_price_fallback(migrated_engine: Engine) -> None:
     symbol_id = uuid4()
     trade_intent_id = uuid4()
 
@@ -218,10 +218,10 @@ def test_trigger_record_allows_last_price_fallback(migrated_engine: Engine) -> N
             .values(**build_trade_intent(id=trade_intent_id, symbol="2891"))
         )
         connection.execute(
-            reflect_table(migrated_engine, "trigger_records")
+            reflect_table(migrated_engine, "trigger_events")
             .insert()
             .values(
-                **build_trigger_record(
+                **build_trigger_event(
                     trade_intent_id,
                     symbol="2891",
                     trigger_reference_price_type="last_fallback",
@@ -356,7 +356,7 @@ def build_trade_intent(
     }
 
 
-def build_trigger_record(
+def build_trigger_event(
     trade_intent_id: UUID,
     symbol: str = "2317",
     trigger_reference_price_type: str = "ask",

@@ -133,3 +133,93 @@ def test_non_positive_bidask_update_is_preserved_for_validation() -> None:
     [snap] = provider.get_quotes(["2330"])
     assert snap.bid_price == Decimal("0")
     assert snap.ask_price == Decimal("-1")
+
+
+def test_tick_callback_fires_registered_listeners() -> None:
+    """Acceptance: Shioaji callback drives evaluator dispatch via the listener
+    contract. The provider must invoke every registered listener with the new
+    snapshot once it lands in cache.
+    """
+    provider = _make_provider()
+    quote_time = datetime(2026, 5, 11, 10, 30, tzinfo=TAIPEI)
+
+    listener_a = MagicMock()
+    listener_b = MagicMock()
+    provider.add_quote_listener(listener_a)
+    provider.add_quote_listener(listener_b)
+
+    provider._on_tick(  # noqa: SLF001
+        TickPayload(symbol="2330", last_price=Decimal("590.5"), quote_time=quote_time)
+    )
+
+    listener_a.assert_called_once()
+    listener_b.assert_called_once()
+    (snap_a,), _ = listener_a.call_args
+    assert snap_a.symbol == "2330"
+    assert snap_a.last_price == Decimal("590.5")
+
+
+def test_bidask_callback_fires_registered_listeners() -> None:
+    provider = _make_provider()
+    quote_time = datetime(2026, 5, 11, 10, 30, tzinfo=TAIPEI)
+    listener = MagicMock()
+    provider.add_quote_listener(listener)
+
+    provider._on_bidask(  # noqa: SLF001
+        BidAskPayload(
+            symbol="2330",
+            bid_price=Decimal("589"),
+            ask_price=Decimal("591"),
+            quote_time=quote_time,
+        )
+    )
+
+    listener.assert_called_once()
+    (snap,), _ = listener.call_args
+    assert snap.bid_price == Decimal("589")
+    assert snap.ask_price == Decimal("591")
+
+
+def test_listener_exception_does_not_block_subsequent_listeners() -> None:
+    """A misbehaving listener must not kill the dispatch chain — broker callbacks
+    can't tolerate uncaught exceptions reaching back into the SDK thread.
+    """
+    provider = _make_provider()
+    quote_time = datetime(2026, 5, 11, 10, 30, tzinfo=TAIPEI)
+
+    boom = MagicMock(side_effect=RuntimeError("listener exploded"))
+    survivor = MagicMock()
+    provider.add_quote_listener(boom)
+    provider.add_quote_listener(survivor)
+
+    provider._on_tick(  # noqa: SLF001
+        TickPayload(symbol="2330", last_price=Decimal("590.5"), quote_time=quote_time)
+    )
+
+    boom.assert_called_once()
+    survivor.assert_called_once()
+
+
+def test_remove_quote_listener_stops_further_notifications() -> None:
+    provider = _make_provider()
+    quote_time = datetime(2026, 5, 11, 10, 30, tzinfo=TAIPEI)
+    listener = MagicMock()
+    provider.add_quote_listener(listener)
+
+    provider._on_tick(  # noqa: SLF001
+        TickPayload(symbol="2330", last_price=Decimal("590.5"), quote_time=quote_time)
+    )
+    listener.assert_called_once()
+
+    provider.remove_quote_listener(listener)
+    provider._on_tick(  # noqa: SLF001
+        TickPayload(symbol="2330", last_price=Decimal("591"), quote_time=quote_time)
+    )
+    listener.assert_called_once()  # unchanged after removal
+
+
+def test_remove_unregistered_listener_is_silent() -> None:
+    provider = _make_provider()
+    stranger = MagicMock()
+    # Must not raise — idempotent per protocol contract.
+    provider.remove_quote_listener(stranger)

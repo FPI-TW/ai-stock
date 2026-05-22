@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -62,3 +63,23 @@ def test_in_memory_has_no_quota() -> None:
     for symbol in ("2330", "2317", "0050", "00878", "9999", "1101"):
         provider.subscribe(symbol)
     assert len(provider.active_subscriptions()) == 6
+
+
+def test_remove_quote_listener_stops_further_notifications() -> None:
+    provider = InMemoryQuoteProvider()
+    listener = MagicMock()
+    provider.add_quote_listener(listener)
+
+    provider.push_quote(_snap())
+    listener.assert_called_once()
+
+    provider.remove_quote_listener(listener)
+    provider.push_quote(_snap())
+    listener.assert_called_once()  # unchanged after removal
+
+
+def test_remove_unregistered_listener_is_silent() -> None:
+    provider = InMemoryQuoteProvider()
+    stranger = MagicMock()
+    # Must not raise — idempotent per protocol contract.
+    provider.remove_quote_listener(stranger)

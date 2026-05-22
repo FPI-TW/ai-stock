@@ -5,13 +5,17 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.errors import register_exception_handlers
+from app.api.routes.dev import router as dev_router
 from app.api.routes.health import router as health_router
 from app.api.routes.intents import router as intents_router
 from app.api.routes.symbols import router as symbols_router
 from app.core.config import get_settings
 from app.core.ids import RequestIdMiddleware
+from app.domain.quote_evaluation import QuoteEvaluator
+from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
 from app.services.quote import build_quote_provider
+from app.services.quote_dispatcher import QuoteEvaluationDispatcher
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +51,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             extra={"active_subscriptions": sorted(provider.active_subscriptions())},
         )
 
+        # Wire incoming quotes to the evaluator: every snapshot the provider
+        # observes (via broker callback or `push_quote`) now drives evaluation
+        # of that symbol's active intents on a fresh short-lived session.
+        # Without DATABASE_URL we have no intents to evaluate, so the listener
+        # is only useful when the DB is configured.
+        session_service = TradingSessionService()
+        dispatcher = QuoteEvaluationDispatcher(
+            session_factory=session_factory,
+            evaluator=QuoteEvaluator(session_service),
+            session_service=session_service,
+        )
+        provider.add_quote_listener(dispatcher.dispatch)
+
     try:
         yield
     finally:
@@ -63,6 +80,8 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(symbols_router, prefix="/symbols", tags=["symbols"])
     app.include_router(intents_router, prefix="/trade-intents", tags=["trade-intents"])
+    if settings.local_mode:
+        app.include_router(dev_router, prefix="/dev", tags=["dev"])
     return app
 
 

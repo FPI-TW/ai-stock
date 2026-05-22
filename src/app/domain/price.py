@@ -4,6 +4,19 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 
+
+def format_price_str(value: Decimal) -> str:
+    """Render a Decimal as a user-facing string with at least two decimal places.
+
+    Used wherever prices are surfaced to clients (API response, notification body).
+    Keeps the original precision when more than two decimals are present.
+    """
+    s = format(value, "f")
+    integer_part, _, decimal_part = s.partition(".")
+    decimal_part = (decimal_part or "").rstrip("0").ljust(2, "0")
+    return f"{integer_part}.{decimal_part}"
+
+
 # TWSE stock tick-size table: (price_upper_bound_exclusive, tick_size)
 # Source: https://www.twse.com.tw/zh/products/system/trading.html
 _STOCK_TICK_TABLE: list[tuple[Decimal, Decimal]] = [
