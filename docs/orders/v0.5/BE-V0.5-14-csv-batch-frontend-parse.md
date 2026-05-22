@@ -223,3 +223,145 @@ Response（任一 row 失敗 422 / 409 / 視首個失敗 row 的 HTTP status）�
 - 不要在本工單實作 CSV 解析；後端只收 JSON `rows`，避免引入 CSV parser dependency 與檔案上傳路徑。
 - V1-10 對等的 `POST /trade-intents/csv/preview` 與 `/csv/confirm` 與本工單的 `POST /trade-intents/batch` 是**不同 endpoint**；V1 升級時保留 batch endpoint 作為 simple path，preview/confirm 為帶 draft 流程的進階版，或在 V1-10 決定統一棄用 batch endpoint（建議棄用，避免兩條入口）。本工單不替 V1 鎖死設計。
 - Endpoint 路徑用 `/trade-intents/batch` 而非 `/trade-intents/csv/*`：強調「後端不知道也不需要知道是不是 CSV」，前端如果改用 Excel 或表格輸入也能直接重用。
+
+## Implementation note：subscription reconcile 在 rollback 時的清理
+
+> 由 PR #15（refactor 抽出 `execute_within_tx`）review 過程發現，補進來避免 batch endpoint 實作到一半才意識到。**動工前務必先讀**。
+
+### 問題
+
+`CreateTradeIntentCommand.execute_within_tx`（PR #15 後的新 entry point）內呼叫 `reconcile_on_create(provider, symbol)` → 觸發 `provider.subscribe(symbol)`。subscribe 成功時直接寫入 provider 內部 in-memory set（shioaji_demo provider 的 `self._subscribed`），**完全不參與 SQLAlchemy session**——所以 caller 後續 `db.rollback()` 不會 undo 已經寫入 provider 的訂閱狀態。
+
+Single create 場景下影響有限（最多殘留一個訂閱，下次同 symbol 的 terminal transition 會被 `reconcile_after_terminal_transition` 清掉），但 batch loop 會放大這個 side effect。具體 fail trace（原本 0 訂閱、batch 6 個 unique allowed symbol）：
+
+| Row | 動作 | provider `_subscribed` | DB (pending) |
+|-----|------|------------------------|--------------|
+| 1 (A) | `execute_within_tx` 成功 | `{A}` | flush 1 筆 |
+| 2 (B) | 成功 | `{A,B}` | flush 2 筆 |
+| 3–5 (C,D,E) | 成功 | `{A,B,C,D,E}` | flush 5 筆 |
+| 6 (F) | quota 已滿 → raise `QuoteSubscriptionLimitExceeded` | `{A,B,C,D,E}`（**未加入 F**） | 待 rollback |
+| `db.rollback()` | — | **仍是 `{A,B,C,D,E}`** | 0 筆 |
+
+✗ 直接違反本工單**驗收條件**「同 batch 內新增 symbol 觸發 > 5 訂閱 → 整批拒絕，**配額不殘留**」。DB rollback 乾淨了，但 provider 端配額被永久佔住 5 格，下次任何新 symbol create 都會被 quota 拒絕，直到下次有 terminal transition 才有可能釋放。
+
+### 採用方案：在 batch endpoint 的 catch path 補 reconcile_after_terminal_transition
+
+```python
+processed_symbols: set[str] = set()
+try:
+    intent_ids: list[UUID] = []
+    for row in inp.rows:
+        processed_symbols.add(row.symbol)
+        intent_ids.append(cmd.execute_within_tx(row))
+    db.commit()
+except Exception:
+    db.rollback()
+    # 釋放 batch 內已 subscribe、但 rollback 後沒有對應 active intent 的 symbol
+    for symbol in processed_symbols:
+        reconcile_after_terminal_transition(quote_provider, intent_repo, symbol)
+    raise
+```
+
+選這條路的理由：
+
+- **天然不會誤殺**：`reconcile_after_terminal_transition` 內部 `count_active_or_scheduled_for_symbol(symbol)`，rollback 後本 batch 的 row 不存在於 DB，但別人的 active intent 仍會被 count → count > 0 就 skip unsubscribe。所以對「symbol 本來就已被其他 user / 其他 intent 訂閱」的情境天然安全。
+- **不需要 batch endpoint 知道「`reconcile_on_create` 這 row 實際上有沒有真的呼叫 subscribe」**（symbol 可能在 batch 開始前就已訂閱、reconcile_on_create 走 no-op 分支）。
+- **重用既有 reconciler 路徑**，不在 endpoint 層另寫一條 subscription 管理邏輯，符合 §工程注意事項「不要在 endpoint 層另算一次（容易兩處 drift）」。
+- **與 cancel / trigger 的 terminal transition 走同一條清理路徑**，未來改 reconciler 時不會漏一個地方。
+
+### 不要採取的替代方案
+
+- **不要做 pre-flight quota 計算**：違反 §「不在本工單為 batch 加 pre-flight quota 計算（避免兩條路徑）」。
+- **不要把 reconcile 移到 commit 之後**：會喪失「訂閱失敗時 rollback intent」契約（quota / allowlist 失敗變成 partial commit + 事後 cleanup，errror UX 變糟），且需在 batch 寫第二條 reconcile 入口，違反 §220。
+- **不要 batch endpoint 自己追蹤 `did_actually_subscribe`**：要從 `reconcile_on_create` 多回傳一個 flag，污染 single create 的 API surface。
+
+### 驗收 / 測試補充（追加，並非取代既有測試要求）
+
+- [ ] Integration：原本 0 訂閱 → batch 6 row 6 個 unique allowed symbol → 第 6 row 觸發 `QUOTE_SUBSCRIPTION_LIMIT_EXCEEDED` → 整批 rollback 後，`provider.active_subscriptions()` 仍為 0 個（**配額完全不殘留**）。
+- [ ] Integration：原本 `{A}` 已有別人的 active intent 在訂閱 → batch 含 row(A) + row(B 新) + row(C 失敗) → rollback 後 provider 應為 `{A}`（A 因 count > 0 保留，B 因 count = 0 釋放）。
+- [ ] Integration：batch 內 row 1 成功、row 2 失敗 → rollback → provider 對 row 1 的 symbol 應 unsubscribe（如果沒有別的 active intent）。
+- [ ] Unit / 行為等價：對單 row failure，confirm `_subscribed` 在 catch path 跑完後與 batch 開始前一致。
+
+### 為什麼這條 note 不在 PR #15
+
+PR #15 是純結構抽出（`execute()` 拆出 `execute_within_tx`），行為與 single create 等價，沒有引入新的 side-effect 路徑。本問題在 main 既有的 single create 路徑就存在，只是被 BE-V0.5-14 的 batch loop 放大。修在這份工單 / batch PR 內，scope 才正確。
+
+## Implementation note：同 batch 內 duplicate row 在 inline trigger 後漏擋
+
+> 由 PR #15 review 過程組長提出（P1），補進來避免 batch endpoint 實作時違反驗收條件「同 batch 內兩 row 條件相同 → 第二 row 拋 `DUPLICATE_INTENT`」。**動工前務必先讀**。
+
+### 問題
+
+`CreateTradeIntentCommand.execute_within_tx`（PR #15 後）走序為 flush → reconcile → **inline trigger**（`src/app/commands/trade_intent.py` step 6）。若 row 1 立即觸發成立，`persist_trigger` 在同一 session 把 row 1 的 `status` 從 `active` 更新為 `triggered`。
+
+但 repo duplicate check (`intent_repository.py:79-93`) 過濾條件是 `status IN CANCELLABLE_STATUSES`，而 `CANCELLABLE_STATUSES = {"active", "scheduled"}`（`domain/trade_intent.py:6`）——**不含 `triggered`**。DB partial unique index 同樣是 `WHERE status IN ('scheduled', 'active')`（migration 第 96 行），兩道防線都會放過已 triggered 的 row。
+
+具體 fail trace（同 user / 同 symbol / 同 strategy / 同 target / 盤中且 quote 立即成立）：
+
+| Row | `execute_within_tx` 內動作 | row 1 在 session 視角 |
+|-----|---------------------------|----------------------|
+| 1 | flush（status=active）→ reconcile → inline trigger 成立 → status=triggered | session 內 status=triggered |
+| 2 | repo dup check `status IN (active, scheduled)` 找不到 row 1 → pass → flush row 2 → ... | 兩筆同條件 intent 都存在 |
+| commit | — | **違反驗收**：應拋 `DUPLICATE_INTENT` 卻成功建立 |
+
+✗ 直接違反本工單**驗收條件**「同 batch 內兩 row 條件相同 → 第二 row 拋 `DUPLICATE_INTENT`，整批拒絕」。
+
+### 採用方案：callable 接 optional `intra_batch_seen` set
+
+`execute_within_tx` 加一個 optional 參數 `intra_batch_seen: set[tuple] | None = None`；single-create 走 `None` 路徑語意不變，batch endpoint 傳一個 set 進來、callable 在 `repo.create` 之前比對：
+
+```python
+def execute_within_tx(
+    self,
+    inp: CreateTradeIntentInput,
+    intra_batch_seen: set[tuple] | None = None,
+) -> UUID:
+    # ... 算完 effective_price / trading_date 之後、repo.create 之前 ...
+    if intra_batch_seen is not None:
+        key = (inp.symbol, inp.strategy, inp.quantity_lots,
+               effective_price, trading_date)
+        if key in intra_batch_seen:
+            raise DuplicateIntentError(inp.owner_user_id, inp.symbol, inp.strategy)
+        intra_batch_seen.add(key)
+    # ... 既有 flush / reconcile / inline trigger ...
+```
+
+Batch endpoint 用法：
+
+```python
+seen: set[tuple] = set()
+try:
+    intent_ids = [cmd.execute_within_tx(row, intra_batch_seen=seen) for row in inp.rows]
+    db.commit()
+except DuplicateIntentError:
+    db.rollback()
+    raise  # propagate → BATCH_ROW_REJECTED envelope
+```
+
+選這條路的理由：
+
+- **不依賴 row 當下 status**：在 flush 之前比對，與 inline trigger 之後的 status 變化完全解耦。
+- **single-create 語意不變**：`intra_batch_seen=None` → 跳過該分支，repo / partial unique index 仍允許「triggered 後 user 重建同條件」這條 V0.5 刻意保留的單筆語意。
+- **dedup key 欄位與 repo check 同步**（symbol / strategy / quantity_lots / effective_price / trading_date），未來改 dedup 欄位時也只改一處。
+- **不動 DB schema**：partial unique index 維持原狀。
+- **使用 `effective_price`（不是 raw input target_price）作 key**：tick adjustment / 字串差異（`600` vs `600.00`）會被歸一化，dedup 精確。
+- **責任分配清楚**：set 由 batch endpoint 管（per-request lifecycle、配合 catch path），check 與 key 計算由 callable 做（dedup 細節歸 callable）。
+
+### 不要採取的替代方案
+
+- **不要改 partial unique index 涵蓋 `triggered`**：要新 migration + 破壞 V0.5「觸發後可重建」單筆語意（user 想等下一輪再被通知），影響面遠大於 batch 工單。
+- **不要 batch endpoint 自己用 raw input target_price 做 string dedup**：tick adjustment 後 `600` 與 `600.00` 會被視為不同 key、誤放過；且不涵蓋 PriceService 內部歸一化的情境。
+- **不要在 callable 內無條件做 intra-batch dedup（不接 set 參數、自己 maintain 內部 set）**：single-create 不需要這道檢查，無條件加上會混淆語意「為什麼單筆 callable 要追蹤批次」、且 set lifecycle 不清楚（per-command instance？per-request？）。
+- **不要在 row 2 inline-trigger 路徑反查「同 batch 已存在的 triggered intent」**：複雜化 inline trigger 邏輯（要區分「自己這筆 trigger」vs「同 batch 其他 row trigger」），且仍要解決「row 2 已 flush 才發現 duplicate」的 rollback 順序問題。
+
+### 驗收 / 測試補充（追加，並非取代既有測試要求）
+
+- [ ] Integration：盤中、row 1 = (2330, buy, target=當下 ask)、row 2 = 完全相同條件 → row 1 inline trigger 成立 → row 2 應拋 `DUPLICATE_INTENT` → 整批 rollback → DB 0 筆 intent / 0 筆 trigger_event / 0 筆 notification。
+- [ ] Integration：row 1 (2330, buy, target=600) + row 2 (2330, buy, target=601) 不同 target_price → 不該誤殺、兩筆都成立（搭配既有「2 row 全 valid → 200」，驗證 dedup key 精確、不過度敏感）。
+- [ ] Unit：`intra_batch_seen=None` 時 callable 行為 byte-for-byte 等同 PR #15 後的 `execute_within_tx`（single-create 路徑無 regression）。
+
+### 為什麼這條 note 不在 PR #15
+
+PR #15 是純結構抽出，refactor 本身行為與 main 既有 single create 等價——main 已存在「`status='triggered'` 後 duplicate check 不擋」的語意，那是 V0.5 partial unique index 刻意設計的單筆 use case（觸發後 user 重建同條件等下一輪）。
+
+但 batch CSV 內兩列同條件 = user 複製貼上錯誤，必須拒絕——這條是 **batch 才引入的新語意**，不是 refactor 引入的 regression。所以 fix scope 落在 batch 工單。
