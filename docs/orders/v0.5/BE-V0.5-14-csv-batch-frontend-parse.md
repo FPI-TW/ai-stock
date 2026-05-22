@@ -223,3 +223,65 @@ Response（任一 row 失敗 422 / 409 / 視首個失敗 row 的 HTTP status）�
 - 不要在本工單實作 CSV 解析；後端只收 JSON `rows`，避免引入 CSV parser dependency 與檔案上傳路徑。
 - V1-10 對等的 `POST /trade-intents/csv/preview` 與 `/csv/confirm` 與本工單的 `POST /trade-intents/batch` 是**不同 endpoint**；V1 升級時保留 batch endpoint 作為 simple path，preview/confirm 為帶 draft 流程的進階版，或在 V1-10 決定統一棄用 batch endpoint（建議棄用，避免兩條入口）。本工單不替 V1 鎖死設計。
 - Endpoint 路徑用 `/trade-intents/batch` 而非 `/trade-intents/csv/*`：強調「後端不知道也不需要知道是不是 CSV」，前端如果改用 Excel 或表格輸入也能直接重用。
+
+## Implementation note：subscription reconcile 在 rollback 時的清理
+
+> 由 PR #15（refactor 抽出 `execute_within_tx`）review 過程發現，補進來避免 batch endpoint 實作到一半才意識到。**動工前務必先讀**。
+
+### 問題
+
+`CreateTradeIntentCommand.execute_within_tx`（PR #15 後的新 entry point）內呼叫 `reconcile_on_create(provider, symbol)` → 觸發 `provider.subscribe(symbol)`。subscribe 成功時直接寫入 provider 內部 in-memory set（shioaji_demo provider 的 `self._subscribed`），**完全不參與 SQLAlchemy session**——所以 caller 後續 `db.rollback()` 不會 undo 已經寫入 provider 的訂閱狀態。
+
+Single create 場景下影響有限（最多殘留一個訂閱，下次同 symbol 的 terminal transition 會被 `reconcile_after_terminal_transition` 清掉），但 batch loop 會放大這個 side effect。具體 fail trace（原本 0 訂閱、batch 6 個 unique allowed symbol）：
+
+| Row | 動作 | provider `_subscribed` | DB (pending) |
+|-----|------|------------------------|--------------|
+| 1 (A) | `execute_within_tx` 成功 | `{A}` | flush 1 筆 |
+| 2 (B) | 成功 | `{A,B}` | flush 2 筆 |
+| 3–5 (C,D,E) | 成功 | `{A,B,C,D,E}` | flush 5 筆 |
+| 6 (F) | quota 已滿 → raise `QuoteSubscriptionLimitExceeded` | `{A,B,C,D,E}`（**未加入 F**） | 待 rollback |
+| `db.rollback()` | — | **仍是 `{A,B,C,D,E}`** | 0 筆 |
+
+✗ 直接違反本工單**驗收條件**「同 batch 內新增 symbol 觸發 > 5 訂閱 → 整批拒絕，**配額不殘留**」。DB rollback 乾淨了，但 provider 端配額被永久佔住 5 格，下次任何新 symbol create 都會被 quota 拒絕，直到下次有 terminal transition 才有可能釋放。
+
+### 採用方案：在 batch endpoint 的 catch path 補 reconcile_after_terminal_transition
+
+```python
+processed_symbols: set[str] = set()
+try:
+    intent_ids: list[UUID] = []
+    for row in inp.rows:
+        processed_symbols.add(row.symbol)
+        intent_ids.append(cmd.execute_within_tx(row))
+    db.commit()
+except Exception:
+    db.rollback()
+    # 釋放 batch 內已 subscribe、但 rollback 後沒有對應 active intent 的 symbol
+    for symbol in processed_symbols:
+        reconcile_after_terminal_transition(quote_provider, intent_repo, symbol)
+    raise
+```
+
+選這條路的理由：
+
+- **天然不會誤殺**：`reconcile_after_terminal_transition` 內部 `count_active_or_scheduled_for_symbol(symbol)`，rollback 後本 batch 的 row 不存在於 DB，但別人的 active intent 仍會被 count → count > 0 就 skip unsubscribe。所以對「symbol 本來就已被其他 user / 其他 intent 訂閱」的情境天然安全。
+- **不需要 batch endpoint 知道「`reconcile_on_create` 這 row 實際上有沒有真的呼叫 subscribe」**（symbol 可能在 batch 開始前就已訂閱、reconcile_on_create 走 no-op 分支）。
+- **重用既有 reconciler 路徑**，不在 endpoint 層另寫一條 subscription 管理邏輯，符合 §工程注意事項「不要在 endpoint 層另算一次（容易兩處 drift）」。
+- **與 cancel / trigger 的 terminal transition 走同一條清理路徑**，未來改 reconciler 時不會漏一個地方。
+
+### 不要採取的替代方案
+
+- **不要做 pre-flight quota 計算**：違反 §「不在本工單為 batch 加 pre-flight quota 計算（避免兩條路徑）」。
+- **不要把 reconcile 移到 commit 之後**：會喪失「訂閱失敗時 rollback intent」契約（quota / allowlist 失敗變成 partial commit + 事後 cleanup，errror UX 變糟），且需在 batch 寫第二條 reconcile 入口，違反 §220。
+- **不要 batch endpoint 自己追蹤 `did_actually_subscribe`**：要從 `reconcile_on_create` 多回傳一個 flag，污染 single create 的 API surface。
+
+### 驗收 / 測試補充（追加，並非取代既有測試要求）
+
+- [ ] Integration：原本 0 訂閱 → batch 6 row 6 個 unique allowed symbol → 第 6 row 觸發 `QUOTE_SUBSCRIPTION_LIMIT_EXCEEDED` → 整批 rollback 後，`provider.active_subscriptions()` 仍為 0 個（**配額完全不殘留**）。
+- [ ] Integration：原本 `{A}` 已有別人的 active intent 在訂閱 → batch 含 row(A) + row(B 新) + row(C 失敗) → rollback 後 provider 應為 `{A}`（A 因 count > 0 保留，B 因 count = 0 釋放）。
+- [ ] Integration：batch 內 row 1 成功、row 2 失敗 → rollback → provider 對 row 1 的 symbol 應 unsubscribe（如果沒有別的 active intent）。
+- [ ] Unit / 行為等價：對單 row failure，confirm `_subscribed` 在 catch path 跑完後與 batch 開始前一致。
+
+### 為什麼這條 note 不在 PR #15
+
+PR #15 是純結構抽出（`execute()` 拆出 `execute_within_tx`），行為與 single create 等價，沒有引入新的 side-effect 路徑。本問題在 main 既有的 single create 路徑就存在，只是被 BE-V0.5-14 的 batch loop 放大。修在這份工單 / batch PR 內，scope 才正確。
