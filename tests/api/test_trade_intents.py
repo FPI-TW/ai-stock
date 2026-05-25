@@ -34,6 +34,22 @@ _SELL_PAYLOAD = {
     "quantityLots": 2,
     "targetPrice": "650",
 }
+_LIMIT_BUY_PAYLOAD = {
+    "symbol": "2330",
+    "strategy": "limit_buy_order",
+    "quantityLots": 1,
+    "targetPrice": "600",
+    "transactionMode": "partial_fill_allowed",
+    "notificationMode": "single",
+}
+_TRAILING_STOP_PAYLOAD = {
+    "symbol": "2330",
+    "strategy": "trailing_stop_alert",
+    "positionSide": "long",
+    "quantityLots": 1,
+    "trailMode": "percentage",
+    "trailValue": "5.0",
+}
 
 
 def _make_intent(
@@ -121,6 +137,28 @@ def test_create_sell_alert_success(api_client: TestClient, mock_create_command: 
     data = response.json()["data"]
     assert data["strategy"] == "sell_price_alert"
     assert data["quantityLots"] == 2
+
+
+def test_create_limit_order_rejected_until_v0_5_15(api_client: TestClient, mock_create_command: MagicMock) -> None:
+    """V0.5 union 暫不開放 limit_*_order;BE-V0.5-15 接手後改為 201。
+
+    避免 schema 通過後 command 邊界以 500 收尾。子 schema 行為由
+    tests/test_intent_create_schema.py 直接驗證。
+    """
+    response = api_client.post("/trade-intents", json=_LIMIT_BUY_PAYLOAD)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    mock_create_command.execute.assert_not_called()
+
+
+def test_create_trailing_stop_rejected_until_v0_5_16(api_client: TestClient, mock_create_command: MagicMock) -> None:
+    """V0.5 union 暫不開放 trailing_stop_alert;BE-V0.5-16 接手後改為 201。"""
+    response = api_client.post("/trade-intents", json=_TRAILING_STOP_PAYLOAD)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    mock_create_command.execute.assert_not_called()
 
 
 def test_create_intent_rejects_owner_user_id_in_payload(api_client: TestClient) -> None:
