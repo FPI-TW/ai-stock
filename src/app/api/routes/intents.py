@@ -107,10 +107,6 @@ def create_intents_batch(
             details={"actual": len(request.rows), "limit": _BATCH_ROW_LIMIT},
         )
 
-    # Owner scope (work order §203) — read here so unused-import / unused-arg
-    # checks stay green and the wiring is obvious when the stub is replaced.
-    _ = user.user_id
-
     raise ApiError(
         code=_BATCH_STUB_CODE,
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
