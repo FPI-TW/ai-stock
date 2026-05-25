@@ -17,6 +17,9 @@ from app.schemas.intent import (
     IntentCreateResponse,
     IntentDetailResponse,
     IntentListResponse,
+    LimitBuyOrderCreateRequest,
+    LimitSellOrderCreateRequest,
+    TrailingStopAlertCreateRequest,
     map_to_response_data,
 )
 
@@ -58,21 +61,45 @@ def _validate_cursor(cursor: str | None) -> None:
         ) from exc
 
 
+def _map_create_request_to_input(request: IntentCreateRequest, owner_user_id: UUID) -> CreateTradeIntentInput:
+    if isinstance(request, TrailingStopAlertCreateRequest):
+        return CreateTradeIntentInput(
+            symbol=request.symbol,
+            strategy=request.strategy,
+            quantity_lots=request.quantity_lots,
+            owner_user_id=owner_user_id,
+            position_side=request.position_side,
+            trail_mode=request.trail_mode,
+            trail_value=request.trail_value,
+        )
+
+    if isinstance(request, LimitBuyOrderCreateRequest | LimitSellOrderCreateRequest):
+        return CreateTradeIntentInput(
+            symbol=request.symbol,
+            strategy=request.strategy,
+            quantity_lots=request.quantity_lots,
+            owner_user_id=owner_user_id,
+            target_price=request.target_price,
+            transaction_mode=request.transaction_mode,
+            notification_mode=request.notification_mode,
+        )
+
+    return CreateTradeIntentInput(
+        symbol=request.symbol,
+        strategy=request.strategy,
+        quantity_lots=request.quantity_lots,
+        owner_user_id=owner_user_id,
+        target_price=request.target_price,
+    )
+
+
 @router.post("", response_model=IntentCreateResponse, status_code=status.HTTP_201_CREATED)
 def create_intent(
     request: IntentCreateRequest,
     user: CurrentUserDep,
     command: CreateTradeIntentCommandDep,
 ) -> IntentCreateResponse:
-    intent = command.execute(
-        CreateTradeIntentInput(
-            symbol=request.symbol,
-            strategy=request.strategy,
-            quantity_lots=request.quantity_lots,
-            target_price=request.target_price,
-            owner_user_id=user.user_id,
-        )
-    )
+    intent = command.execute(_map_create_request_to_input(request, user.user_id))
     return IntentCreateResponse(data=map_to_response_data(intent))
 
 

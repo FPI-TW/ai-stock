@@ -1,21 +1,85 @@
 from datetime import date, datetime
-from typing import Literal
+from decimal import Decimal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.api.schemas.base import OwnerScopedRequestModel
 from app.domain.price import format_price_str
 from app.domain.trade_intent import TradeIntentData
 
 
-class IntentCreateRequest(OwnerScopedRequestModel):
+class _BaseIntentCreateRequest(OwnerScopedRequestModel):
     """extra='forbid' inherited — ownerUserId and unknown fields are rejected."""
 
     symbol: str
-    strategy: Literal["buy_price_alert", "sell_price_alert"]
     quantity_lots: int = Field(validation_alias="quantityLots", ge=1)
+
+
+class _TargetPriceIntentCreateRequest(_BaseIntentCreateRequest):
     target_price: str = Field(validation_alias="targetPrice")
+
+
+class BuyPriceAlertCreateRequest(_TargetPriceIntentCreateRequest):
+    strategy: Literal["buy_price_alert"]
+
+
+class SellPriceAlertCreateRequest(_TargetPriceIntentCreateRequest):
+    strategy: Literal["sell_price_alert"]
+
+
+class _LimitOrderCreateRequest(_TargetPriceIntentCreateRequest):
+    transaction_mode: Literal["single_notification", "partial_fill_allowed"] = Field(
+        default="single_notification",
+        validation_alias="transactionMode",
+    )
+    notification_mode: Literal["single"] = Field(
+        default="single",
+        validation_alias="notificationMode",
+    )
+
+
+class LimitBuyOrderCreateRequest(_LimitOrderCreateRequest):
+    strategy: Literal["limit_buy_order"]
+
+
+class LimitSellOrderCreateRequest(_LimitOrderCreateRequest):
+    strategy: Literal["limit_sell_order"]
+
+
+class TrailingStopAlertCreateRequest(_BaseIntentCreateRequest):
+    strategy: Literal["trailing_stop_alert"]
+    position_side: Literal["long", "short"] = Field(validation_alias="positionSide")
+    trail_mode: Literal["percentage", "fixed_amount"] = Field(validation_alias="trailMode")
+    trail_value: Decimal = Field(validation_alias="trailValue", gt=0)
+
+    @model_validator(mode="after")
+    def _validate_percentage_trail_value(self) -> "TrailingStopAlertCreateRequest":
+        if self.trail_mode == "percentage" and self.trail_value > Decimal("50"):
+            message = "trailValue must be less than or equal to 50 when trailMode is percentage"
+            raise ValidationError.from_exception_data(
+                self.__class__.__name__,
+                [
+                    {
+                        "type": "value_error",
+                        "loc": ("trailValue",),
+                        "input": self.trail_value,
+                        "ctx": {"error": ValueError(message)},
+                    }
+                ],
+            )
+        return self
+
+
+type IntentCreateRequest = Annotated[
+    BuyPriceAlertCreateRequest
+    | SellPriceAlertCreateRequest
+    | LimitBuyOrderCreateRequest
+    | LimitSellOrderCreateRequest
+    | TrailingStopAlertCreateRequest,
+    Field(discriminator="strategy"),
+]
 
 
 class IntentResponseData(BaseModel):

@@ -34,6 +34,22 @@ _SELL_PAYLOAD = {
     "quantityLots": 2,
     "targetPrice": "650",
 }
+_LIMIT_BUY_PAYLOAD = {
+    "symbol": "2330",
+    "strategy": "limit_buy_order",
+    "quantityLots": 1,
+    "targetPrice": "600",
+    "transactionMode": "partial_fill_allowed",
+    "notificationMode": "single",
+}
+_TRAILING_STOP_PAYLOAD = {
+    "symbol": "2330",
+    "strategy": "trailing_stop_alert",
+    "positionSide": "long",
+    "quantityLots": 1,
+    "trailMode": "percentage",
+    "trailValue": "5.0",
+}
 
 
 def _make_intent(
@@ -121,6 +137,45 @@ def test_create_sell_alert_success(api_client: TestClient, mock_create_command: 
     data = response.json()["data"]
     assert data["strategy"] == "sell_price_alert"
     assert data["quantityLots"] == 2
+
+
+def test_create_limit_order_maps_mode_fields(api_client: TestClient, mock_create_command: MagicMock) -> None:
+    mock_create_command.execute.return_value = _make_intent(strategy="limit_buy_order")
+
+    response = api_client.post("/trade-intents", json=_LIMIT_BUY_PAYLOAD)
+
+    assert response.status_code == status.HTTP_201_CREATED
+    command_input = mock_create_command.execute.call_args.args[0]
+    assert command_input.strategy == "limit_buy_order"
+    assert command_input.target_price == "600"
+    assert command_input.transaction_mode == "partial_fill_allowed"
+    assert command_input.notification_mode == "single"
+    assert command_input.position_side is None
+    assert command_input.trail_mode is None
+    assert command_input.trail_value is None
+
+
+def test_create_trailing_stop_maps_trailing_fields(api_client: TestClient, mock_create_command: MagicMock) -> None:
+    mock_create_command.execute.return_value = _make_intent(strategy="trailing_stop_alert")
+
+    response = api_client.post("/trade-intents", json=_TRAILING_STOP_PAYLOAD)
+
+    assert response.status_code == status.HTTP_201_CREATED
+    command_input = mock_create_command.execute.call_args.args[0]
+    assert command_input.strategy == "trailing_stop_alert"
+    assert command_input.target_price is None
+    assert command_input.transaction_mode is None
+    assert command_input.notification_mode is None
+    assert command_input.position_side == "long"
+    assert command_input.trail_mode == "percentage"
+    assert command_input.trail_value == Decimal("5.0")
+
+
+def test_create_trailing_stop_rejects_target_price(api_client: TestClient) -> None:
+    response = api_client.post("/trade-intents", json={**_TRAILING_STOP_PAYLOAD, "targetPrice": "600"})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
 def test_create_intent_rejects_owner_user_id_in_payload(api_client: TestClient) -> None:
