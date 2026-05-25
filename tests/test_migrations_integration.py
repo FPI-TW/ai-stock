@@ -310,6 +310,38 @@ def test_trade_intent_accepts_limit_order_strategies(migrated_engine: Engine) ->
 
 
 @pytest.mark.integration
+def test_trade_intent_rejects_filled_quantity_above_committed_quantity(migrated_engine: Engine) -> None:
+    """Block the impossible 'over-fill' state at DB level (review #20)."""
+    with migrated_engine.begin() as connection:
+        insert_symbol(connection, uuid4(), "2609")
+        trade_intents = reflect_table(migrated_engine, "trade_intents")
+        with pytest.raises(IntegrityError):
+            connection.execute(
+                trade_intents.insert().values(
+                    **build_trade_intent(symbol="2609", quantity_lots=1),
+                    filled_quantity_lots=2,
+                )
+            )
+
+
+@pytest.mark.integration
+def test_trade_intent_accepts_filled_quantity_equal_to_committed(migrated_engine: Engine) -> None:
+    """Full fill is the V0.5 trigger path — must remain allowed."""
+    trade_intent_id = uuid4()
+    trade_intents = reflect_table(migrated_engine, "trade_intents")
+    with migrated_engine.begin() as connection:
+        insert_symbol(connection, uuid4(), "2610")
+        connection.execute(
+            trade_intents.insert().values(
+                **build_trade_intent(id=trade_intent_id, symbol="2610", quantity_lots=3),
+                filled_quantity_lots=3,
+            )
+        )
+        row = connection.execute(sa.select(trade_intents).where(trade_intents.c.id == trade_intent_id)).mappings().one()
+    assert row["filled_quantity_lots"] == 3
+
+
+@pytest.mark.integration
 def test_trade_intent_rejects_unknown_transaction_mode(migrated_engine: Engine) -> None:
     with migrated_engine.begin() as connection:
         insert_symbol(connection, uuid4(), "2615")

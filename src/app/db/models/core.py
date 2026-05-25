@@ -68,7 +68,10 @@ class TradeIntent(TimestampMixin, Base):
         CheckConstraint("quantity_lots > 0", name="quantity_lots"),
         CheckConstraint("target_price_original > 0", name="target_price_original"),
         CheckConstraint("target_price_effective > 0", name="target_price_effective"),
-        CheckConstraint("filled_quantity_lots >= 0", name="filled_quantity_lots"),
+        CheckConstraint(
+            "filled_quantity_lots >= 0 AND filled_quantity_lots <= quantity_lots",
+            name="filled_quantity_lots",
+        ),
         Index("ix_trade_intents_owner_status_trading_date", "owner_user_id", "status", "trading_date"),
         Index("ix_trade_intents_symbol_status_trading_date", "symbol", "status", "trading_date"),
         Index(

@@ -55,9 +55,15 @@ def upgrade() -> None:
         'ALTER TABLE trade_intents ADD CONSTRAINT "ck_trade_intents_notification_mode" '
         "CHECK (notification_mode IN ('single', 'per_fill'))"
     )
+    # Bound filled_quantity_lots by `quantity_lots` from the same row — the
+    # V0.5 evaluator only ever writes a full fill, but the constraint blocks
+    # impossible states from backfills / manual fixes / a future V2
+    # partial-fill writer that goes off the rails. trigger_events does not
+    # store quantity_lots so it cannot enforce the same bound without a
+    # cross-table trigger; leave that to V2 if it ever proves necessary.
     op.execute(
         'ALTER TABLE trade_intents ADD CONSTRAINT "ck_trade_intents_filled_quantity_lots" '
-        "CHECK (filled_quantity_lots >= 0)"
+        "CHECK (filled_quantity_lots >= 0 AND filled_quantity_lots <= quantity_lots)"
     )
 
     # Extend strategy CHECK to include the two limit_order strategies. The
