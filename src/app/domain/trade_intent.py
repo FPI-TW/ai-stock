@@ -47,8 +47,8 @@ class TradeIntentData:
     strategy: str
     execution_mode: str
     quantity_lots: int
-    target_price_original: Decimal
-    target_price_effective: Decimal
+    target_price_original: Decimal | None
+    target_price_effective: Decimal | None
     trigger_reference_price_type: str
     trading_date: date
     time_in_force: str

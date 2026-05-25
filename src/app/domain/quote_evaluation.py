@@ -65,8 +65,11 @@ class QuoteEvaluator:
             return EvaluationResult(should_trigger=False, skip_reason=validation_failure)
 
         if intent.strategy == "buy_price_alert":
+            # DB ck `trailing_field_exclusivity` guarantees non-null for buy/sell.
+            assert intent.target_price_effective is not None
             return self._evaluate_buy(quote, intent.target_price_effective)
         if intent.strategy == "sell_price_alert":
+            assert intent.target_price_effective is not None
             return self._evaluate_sell(quote, intent.target_price_effective)
         return EvaluationResult(should_trigger=False, skip_reason=SkipReason.UNSUPPORTED_STRATEGY)
 

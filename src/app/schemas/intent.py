@@ -118,6 +118,12 @@ class IntentDetailResponse(BaseModel):
 
 
 def map_to_response_data(intent: TradeIntentData) -> IntentResponseData:
+    # Trailing rows (added in a later BE-V0.5-16 PR) carry null target_prices
+    # — when they land, this mapper will branch on strategy and expose the
+    # trailing fields instead. For now only buy/sell reach here, and DB ck
+    # `trailing_field_exclusivity` guarantees both columns are non-null.
+    assert intent.target_price_original is not None
+    assert intent.target_price_effective is not None
     return IntentResponseData(
         id=intent.id,
         symbol=intent.symbol,

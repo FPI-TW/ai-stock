@@ -119,6 +119,11 @@ def persist_trigger(
     values without us tracking them in Python.
     """
 
+    # `render_price_triggered` only handles buy/sell strategies; trailing rows
+    # route to a separate template (added in a later BE-V0.5-16 PR). For the
+    # strategies currently dispatched here, DB ck `trailing_field_exclusivity`
+    # guarantees `target_price_effective` is non-null.
+    assert intent.target_price_effective is not None
     title, body = render_price_triggered(
         symbol=intent.symbol,
         strategy=intent.strategy,
