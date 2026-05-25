@@ -100,6 +100,27 @@ def test_batch_twenty_one_rows_returns_csv_batch_limit_exceeded(api_client: Test
     assert body["error"]["details"] == {"actual": 21, "limit": 20}
 
 
+def test_batch_twenty_one_rows_with_invalid_row_returns_csv_batch_limit_exceeded(
+    api_client: TestClient,
+) -> None:
+    """Row count check must precede per-row schema validation (work order §90).
+
+    Regression guard: prior to moving the limit to the schema layer
+    (`max_length=BATCH_ROW_LIMIT`), the handler did `len(request.rows) > 20`
+    AFTER Pydantic finished validating each row — so oversized payloads with a
+    malformed row leaked out as VALIDATION_ERROR (the bad row's error) instead
+    of CSV_BATCH_LIMIT_EXCEEDED. This test pins the precedence so a future
+    refactor can't silently revive that bug."""
+    bad_first = {k: v for k, v in _VALID_BUY.items() if k != "symbol"}
+    rows = [bad_first] + [{**_VALID_BUY, "symbol": f"23{i:02d}"} for i in range(20)]
+    response = api_client.post("/trade-intents/batch", json={"rows": rows})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    body = response.json()
+    assert body["error"]["code"] == "CSV_BATCH_LIMIT_EXCEEDED"
+    assert body["error"]["details"] == {"actual": 21, "limit": 20}
+
+
 # ------------------------------------------------------------------
 # Missing required fields
 # ------------------------------------------------------------------

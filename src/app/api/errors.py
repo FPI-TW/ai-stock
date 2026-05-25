@@ -267,6 +267,19 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # Schema-level `max_length` on batch rows surfaces as a `too_long` error
+        # at loc=('body', 'rows'); translate to the CSV_BATCH_LIMIT_EXCEEDED
+        # envelope so the row-count contract (work order §90) is honored even
+        # when oversized payloads also contain malformed rows.
+        for err in exc.errors():
+            if err.get("type") == "too_long" and tuple(err.get("loc", ())) == ("body", "rows"):
+                ctx = err.get("ctx", {})
+                return build_error_response(
+                    request=request,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    code=ErrorCode.CSV_BATCH_LIMIT_EXCEEDED,
+                    details={"actual": ctx.get("actual_length"), "limit": ctx.get("max_length")},
+                )
         return build_error_response(
             request=request,
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

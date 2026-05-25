@@ -23,9 +23,6 @@ from app.schemas.intent import (
 
 router = APIRouter()
 
-# Batch endpoint 上限。超出回 CSV_BATCH_LIMIT_EXCEEDED（工單 §90）。V1-10 拉到 100。
-_BATCH_ROW_LIMIT = 20
-
 # Stub envelope code for the batch handler.
 # Replaced when the row-level transaction loop lands (post PR #15 merge).
 # 工單 §60-99 / Implementation note 兩條（subscription reconcile cleanup、intra-batch dedup）。
@@ -115,6 +112,12 @@ def create_intents_batch(
         merge 後接入，外加工單兩條 Implementation note
         (`docs/orders/v0.5/BE-V0.5-14-csv-batch-frontend-parse.md` §229 起)。
 
+        Row count upper bound（CSV_BATCH_LIMIT_EXCEEDED）由 schema 層
+        `max_length=BATCH_ROW_LIMIT` + `validation_error_handler` 翻譯，
+        不在 handler 內檢查——這樣 oversized payload 不會先付 per-row
+        validation 成本，且契約「row 數 > 20 → CSV_BATCH_LIMIT_EXCEEDED」
+        永遠優先於 per-row VALIDATION_ERROR（工單 §90）。
+
     Future-state contract（給接前端的人 — 工單 §101 起的完整定義）
         - 全成功 → `200` + `{ data: { createdRows, rows: [{ rowNumber,
           tradeIntentId, status }] } }`（工單 §101-§121）。
@@ -122,20 +125,13 @@ def create_intents_batch(
           HTTP status 取首失敗 row 的 single-create status（422 或 409）。
           Per-row error 格式 `{ rowNumber, field, code, message, details }`
           （工單 §128-§155）。
-        - Rows 超上限 → `422 CSV_BATCH_LIMIT_EXCEEDED`（已在本 stub 生效）。
+        - Rows 超上限 → `422 CSV_BATCH_LIMIT_EXCEEDED`（schema + errors handler）。
 
     完整 error code 矩陣與 envelope sample 見工單 §101-§180。
     當 stub 被替換時：把 return type 改回實際 response model、移除
     `response_model=None` 與 501 responses entry、把 raise 換成
     工單 §97 / §255 / §334 的 row loop。
     """
-
-    if len(request.rows) > _BATCH_ROW_LIMIT:
-        raise ApiError(
-            code=ErrorCode.CSV_BATCH_LIMIT_EXCEEDED,
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            details={"actual": len(request.rows), "limit": _BATCH_ROW_LIMIT},
-        )
 
     raise ApiError(
         code=_BATCH_STUB_CODE,

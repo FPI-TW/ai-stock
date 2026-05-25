@@ -32,15 +32,24 @@ class IntentBatchRow(OwnerScopedRequestModel):
     target_price: str = Field(validation_alias="targetPrice")
 
 
+# Batch endpoint row count upper bound (work order §90). V1-10 lifts to 100.
+# Enforced at schema layer so the check runs BEFORE per-row validation —
+# oversized payloads short-circuit without paying per-row schema cost, and
+# the `too_long` ValidationError is translated to CSV_BATCH_LIMIT_EXCEEDED
+# in `validation_error_handler` (errors.py).
+BATCH_ROW_LIMIT = 20
+
+
 class IntentBatchRequest(OwnerScopedRequestModel):
     """Batch create payload.
 
-    `min_length=1` rejects empty list with VALIDATION_ERROR (work order §198);
-    upper bound of 20 is enforced in the route handler so the violation can
-    raise the distinct `CSV_BATCH_LIMIT_EXCEEDED` envelope (work order §90).
+    `min_length=1` rejects empty list with VALIDATION_ERROR (work order §198).
+    `max_length=BATCH_ROW_LIMIT` triggers a Pydantic `too_long` error that
+    `validation_error_handler` re-shapes into the distinct
+    `CSV_BATCH_LIMIT_EXCEEDED` envelope (work order §90).
     """
 
-    rows: list[IntentBatchRow] = Field(min_length=1)
+    rows: list[IntentBatchRow] = Field(min_length=1, max_length=BATCH_ROW_LIMIT)
 
 
 class IntentResponseData(BaseModel):
