@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic_core import PydanticCustomError
 
 from app.api.schemas.base import OwnerScopedRequestModel
 from app.domain.price import format_price_str
@@ -57,26 +58,35 @@ class TrailingStopAlertCreateRequest(_BaseIntentCreateRequest):
     @model_validator(mode="after")
     def _validate_percentage_trail_value(self) -> "TrailingStopAlertCreateRequest":
         if self.trail_mode == "percentage" and self.trail_value > Decimal("50"):
-            message = "trailValue must be less than or equal to 50 when trailMode is percentage"
+            # `PydanticCustomError` keeps the loc pointing at `trailValue` while
+            # producing a JSON-serializable representation in `exc.errors()` —
+            # the raw `value_error` + `ctx={"error": ValueError(...)}` path
+            # leaks a Decimal/ValueError into the API envelope JSON encoder.
             raise ValidationError.from_exception_data(
                 self.__class__.__name__,
                 [
                     {
-                        "type": "value_error",
+                        "type": PydanticCustomError(
+                            "value_error",
+                            "trailValue must be less than or equal to 50 when trailMode is percentage",
+                        ),
                         "loc": ("trailValue",),
-                        "input": self.trail_value,
-                        "ctx": {"error": ValueError(message)},
+                        "input": str(self.trail_value),
                     }
                 ],
             )
         return self
 
 
-# V0.5 階段 union 只暴露已實作的 strategy。
-# LimitBuy/Sell 與 TrailingStop 子 schema 定義保留供 BE-V0.5-15 / 16 接手納入 union;
+# V0.5 階段 union 只暴露已實作或結構驗證已完成的 strategy。
+# LimitBuy/Sell 子 schema 定義保留供 BE-V0.5-15 接手納入 union;
 # evaluator / migration 上線前不開放,避免 schema 通過後 command 邊界以 500 收尾。
+#
+# `trailing_stop_alert` 自 BE-V0.5-16 階段納入 union:Pydantic 層驗證完整,
+# command 路徑尚未實作,route 攔截後回 501 STRATEGY_NOT_IMPLEMENTED;後續 PR
+# 接 watermark / evaluator / migration 後移除 route 層的 trailing 攔截。
 type IntentCreateRequest = Annotated[
-    BuyPriceAlertCreateRequest | SellPriceAlertCreateRequest,
+    BuyPriceAlertCreateRequest | SellPriceAlertCreateRequest | TrailingStopAlertCreateRequest,
     Field(discriminator="strategy"),
 ]
 
