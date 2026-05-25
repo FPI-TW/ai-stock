@@ -181,6 +181,19 @@ def test_batch_row_with_owner_user_id_returns_422(api_client: TestClient) -> Non
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
+def test_batch_row_with_unknown_field_returns_422(api_client: TestClient) -> None:
+    """Generalized extra='forbid' check — any unknown key (not just the
+    backend-derived ones above) must be rejected. Documents the contract
+    intent 'reject ALL unknown fields' independently of the semantic-field
+    tests, so if those tests get rewritten when a field becomes explicitly
+    allowed, this one still guards the unknown-field policy."""
+    bad_row = {**_VALID_BUY, "foo": "bar"}
+    response = api_client.post("/trade-intents/batch", json={"rows": [bad_row]})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
 def test_batch_top_level_extra_field_returns_422(api_client: TestClient) -> None:
     response = api_client.post("/trade-intents/batch", json={"rows": [_VALID_BUY], "ownerUserId": "x"})
 
