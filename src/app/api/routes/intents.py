@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Never
 from uuid import UUID
 
 from fastapi import APIRouter, Query, status
@@ -85,19 +85,49 @@ def create_intent(
     return IntentCreateResponse(data=map_to_response_data(intent))
 
 
-@router.post("/batch")
+@router.post(
+    "/batch",
+    response_model=None,
+    responses={
+        422: {
+            "description": (
+                "CSV_BATCH_LIMIT_EXCEEDED — rows 超過 _BATCH_ROW_LIMIT。"
+                "PR #15 後此 status 亦會包含 BATCH_ROW_REJECTED（row-level 驗證失敗時）。"
+            ),
+        },
+        501: {
+            "description": (
+                "BATCH_NOT_IMPLEMENTED_STUB — PR #15 (`execute_within_tx`) merge 前的暫時行為。"
+                "PR #15 後此 entry 應從 responses 移除。"
+            ),
+        },
+    },
+)
 def create_intents_batch(
     request: IntentBatchRequest,
     user: CurrentUserDep,
-) -> dict[str, object]:
+) -> Never:
     """Batch create entrypoint — structural validation layer only.
 
-    Row-level business validation (symbol / tick / session / duplicate / quota)
-    and the same-transaction loop are pending PR #15 (`execute_within_tx`
-    extraction) plus the two Implementation notes in the work order
-    (`docs/orders/v0.5/BE-V0.5-14-csv-batch-frontend-parse.md`). When this
-    handler is wired up, replace the stub raise with the loop described in
-    work order §97 + the two notes; the structural validation here stays.
+    Stub state（現況）
+        Row-level business validation (symbol / tick / session / duplicate /
+        quota) 與 same-transaction loop 等 PR #15 (`execute_within_tx` 抽出)
+        merge 後接入，外加工單兩條 Implementation note
+        (`docs/orders/v0.5/BE-V0.5-14-csv-batch-frontend-parse.md` §229 起)。
+
+    Future-state contract（給接前端的人 — 工單 §101 起的完整定義）
+        - 全成功 → `200` + `{ data: { createdRows, rows: [{ rowNumber,
+          tradeIntentId, status }] } }`（工單 §101-§121）。
+        - 任一 row 失敗 → 整批 rollback，envelope code `BATCH_ROW_REJECTED`，
+          HTTP status 取首失敗 row 的 single-create status（422 或 409）。
+          Per-row error 格式 `{ rowNumber, field, code, message, details }`
+          （工單 §128-§155）。
+        - Rows 超上限 → `422 CSV_BATCH_LIMIT_EXCEEDED`（已在本 stub 生效）。
+
+    完整 error code 矩陣與 envelope sample 見工單 §101-§180。
+    當 stub 被替換時：把 return type 改回實際 response model、移除
+    `response_model=None` 與 501 responses entry、把 raise 換成
+    工單 §97 / §255 / §334 的 row loop。
     """
 
     if len(request.rows) > _BATCH_ROW_LIMIT:
