@@ -1,7 +1,6 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -37,13 +36,8 @@ class CreateTradeIntentInput:
     symbol: str
     strategy: str
     quantity_lots: int
+    target_price: str  # kept as str to preserve decimal precision
     owner_user_id: UUID
-    target_price: str | None = None  # kept as str to preserve decimal precision
-    transaction_mode: str | None = None
-    notification_mode: str | None = None
-    position_side: str | None = None
-    trail_mode: str | None = None
-    trail_value: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -102,8 +96,6 @@ class CreateTradeIntentCommand:
                 security_type = SecurityType(symbol_obj.instrument_type)
             except ValueError:
                 raise InvalidTypeError(symbol_obj.instrument_type, "must be stock or etf") from None
-            if inp.target_price is None:
-                raise ValueError(f"Unsupported strategy without target price: {inp.strategy}")
             effective_price = PriceService.validate(
                 PriceRequest(
                     type=security_type,

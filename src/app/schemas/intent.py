@@ -72,12 +72,11 @@ class TrailingStopAlertCreateRequest(_BaseIntentCreateRequest):
         return self
 
 
+# V0.5 階段 union 只暴露已實作的 strategy。
+# LimitBuy/Sell 與 TrailingStop 子 schema 定義保留供 BE-V0.5-15 / 16 接手納入 union;
+# evaluator / migration 上線前不開放,避免 schema 通過後 command 邊界以 500 收尾。
 type IntentCreateRequest = Annotated[
-    BuyPriceAlertCreateRequest
-    | SellPriceAlertCreateRequest
-    | LimitBuyOrderCreateRequest
-    | LimitSellOrderCreateRequest
-    | TrailingStopAlertCreateRequest,
+    BuyPriceAlertCreateRequest | SellPriceAlertCreateRequest,
     Field(discriminator="strategy"),
 ]
 

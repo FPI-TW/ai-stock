@@ -139,43 +139,26 @@ def test_create_sell_alert_success(api_client: TestClient, mock_create_command: 
     assert data["quantityLots"] == 2
 
 
-def test_create_limit_order_maps_mode_fields(api_client: TestClient, mock_create_command: MagicMock) -> None:
-    mock_create_command.execute.return_value = _make_intent(strategy="limit_buy_order")
+def test_create_limit_order_rejected_until_v0_5_15(api_client: TestClient, mock_create_command: MagicMock) -> None:
+    """V0.5 union 暫不開放 limit_*_order;BE-V0.5-15 接手後改為 201。
 
+    避免 schema 通過後 command 邊界以 500 收尾。子 schema 行為由
+    tests/test_intent_create_schema.py 直接驗證。
+    """
     response = api_client.post("/trade-intents", json=_LIMIT_BUY_PAYLOAD)
-
-    assert response.status_code == status.HTTP_201_CREATED
-    command_input = mock_create_command.execute.call_args.args[0]
-    assert command_input.strategy == "limit_buy_order"
-    assert command_input.target_price == "600"
-    assert command_input.transaction_mode == "partial_fill_allowed"
-    assert command_input.notification_mode == "single"
-    assert command_input.position_side is None
-    assert command_input.trail_mode is None
-    assert command_input.trail_value is None
-
-
-def test_create_trailing_stop_maps_trailing_fields(api_client: TestClient, mock_create_command: MagicMock) -> None:
-    mock_create_command.execute.return_value = _make_intent(strategy="trailing_stop_alert")
-
-    response = api_client.post("/trade-intents", json=_TRAILING_STOP_PAYLOAD)
-
-    assert response.status_code == status.HTTP_201_CREATED
-    command_input = mock_create_command.execute.call_args.args[0]
-    assert command_input.strategy == "trailing_stop_alert"
-    assert command_input.target_price is None
-    assert command_input.transaction_mode is None
-    assert command_input.notification_mode is None
-    assert command_input.position_side == "long"
-    assert command_input.trail_mode == "percentage"
-    assert command_input.trail_value == Decimal("5.0")
-
-
-def test_create_trailing_stop_rejects_target_price(api_client: TestClient) -> None:
-    response = api_client.post("/trade-intents", json={**_TRAILING_STOP_PAYLOAD, "targetPrice": "600"})
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    mock_create_command.execute.assert_not_called()
+
+
+def test_create_trailing_stop_rejected_until_v0_5_16(api_client: TestClient, mock_create_command: MagicMock) -> None:
+    """V0.5 union 暫不開放 trailing_stop_alert;BE-V0.5-16 接手後改為 201。"""
+    response = api_client.post("/trade-intents", json=_TRAILING_STOP_PAYLOAD)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    mock_create_command.execute.assert_not_called()
 
 
 def test_create_intent_rejects_owner_user_id_in_payload(api_client: TestClient) -> None:
