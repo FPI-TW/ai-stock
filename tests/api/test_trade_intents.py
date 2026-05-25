@@ -152,12 +152,64 @@ def test_create_limit_order_rejected_until_v0_5_15(api_client: TestClient, mock_
     mock_create_command.execute.assert_not_called()
 
 
-def test_create_trailing_stop_rejected_until_v0_5_16(api_client: TestClient, mock_create_command: MagicMock) -> None:
-    """V0.5 union 暫不開放 trailing_stop_alert;BE-V0.5-16 接手後改為 201。"""
+def test_create_trailing_stop_returns_501_until_command_lands(
+    api_client: TestClient, mock_create_command: MagicMock
+) -> None:
+    """BE-V0.5-16 Pydantic 子 schema 已納入 union,但 command/evaluator 路徑
+    尚未實作。route 層攔截後回 501 STRATEGY_NOT_IMPLEMENTED;後續 PR 接上
+    trailing command 後改為 201。"""
     response = api_client.post("/trade-intents", json=_TRAILING_STOP_PAYLOAD)
 
+    assert response.status_code == status.HTTP_501_NOT_IMPLEMENTED
+    body = response.json()
+    assert body["error"]["code"] == "STRATEGY_NOT_IMPLEMENTED"
+    assert body["error"]["details"] == {"strategy": "trailing_stop_alert"}
+    mock_create_command.execute.assert_not_called()
+
+
+def test_create_trailing_stop_missing_position_side_returns_422(
+    api_client: TestClient, mock_create_command: MagicMock
+) -> None:
+    payload = {k: v for k, v in _TRAILING_STOP_PAYLOAD.items() if k != "positionSide"}
+
+    response = api_client.post("/trade-intents", json=payload)
+
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    body = response.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    locs = [tuple(e["loc"]) for e in body["error"]["details"]["errors"]]
+    assert any("positionSide" in loc for loc in locs)
+    mock_create_command.execute.assert_not_called()
+
+
+def test_create_trailing_stop_with_target_price_returns_422(
+    api_client: TestClient, mock_create_command: MagicMock
+) -> None:
+    """trailing 子 schema extra=forbid;多帶 targetPrice 一律 422。"""
+    payload = {**_TRAILING_STOP_PAYLOAD, "targetPrice": "600"}
+
+    response = api_client.post("/trade-intents", json=payload)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    body = response.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    locs = [tuple(e["loc"]) for e in body["error"]["details"]["errors"]]
+    assert any("targetPrice" in loc for loc in locs)
+    mock_create_command.execute.assert_not_called()
+
+
+def test_create_trailing_stop_percentage_above_50_returns_422(
+    api_client: TestClient, mock_create_command: MagicMock
+) -> None:
+    payload = {**_TRAILING_STOP_PAYLOAD, "trailValue": "60"}
+
+    response = api_client.post("/trade-intents", json=payload)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    body = response.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    locs = [tuple(e["loc"]) for e in body["error"]["details"]["errors"]]
+    assert any("trailValue" in loc for loc in locs)
     mock_create_command.execute.assert_not_called()
 
 
