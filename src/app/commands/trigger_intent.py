@@ -44,7 +44,19 @@ from app.db.models.core import TriggerEvent as TriggerEventRow
 from app.domain.notification import NotificationData
 from app.domain.trade_intent import IntentNotFoundError
 from app.domain.trigger_event import DuplicateTriggerError, TriggerError, TriggerEventData
-from app.services.notification_template import render_price_triggered
+from app.services.notification_template import (
+    render_limit_order_triggered,
+    render_price_triggered,
+)
+
+# Strategy → notification type. Centralised so persist_trigger only branches
+# in one place when a new strategy lands.
+_NOTIFICATION_TYPE_BY_STRATEGY: dict[str, str] = {
+    "buy_price_alert": "price_triggered",
+    "sell_price_alert": "price_triggered",
+    "limit_buy_order": "limit_order_triggered",
+    "limit_sell_order": "limit_order_triggered",
+}
 
 
 class IntentNotActiveError(TriggerError):
@@ -81,6 +93,7 @@ def _trigger_event_to_domain(row: TriggerEventRow) -> TriggerEventData:
         trigger_price=row.trigger_price,
         trigger_reference_price_type=row.trigger_reference_price_type,
         fallback_used=row.fallback_used,
+        filled_quantity_lots=row.filled_quantity_lots,
         triggered_at=row.triggered_at,
         created_at=row.created_at,
     )
@@ -119,13 +132,33 @@ def persist_trigger(
     values without us tracking them in Python.
     """
 
-    title, body = render_price_triggered(
-        symbol=intent.symbol,
-        strategy=intent.strategy,
-        target_price=intent.target_price_effective,
-        trigger_price=inp.trigger_price,
-        quote_time=inp.quote_time,
-    )
+    notification_type = _NOTIFICATION_TYPE_BY_STRATEGY.get(intent.strategy)
+    if notification_type is None:
+        raise ValueError(f"Unsupported strategy for trigger: {intent.strategy!r}")
+
+    # V0.5 treats every trigger as a full fill — broker integration / partial
+    # fill accumulation arrives in V2. Computing this once keeps the trigger
+    # event, intent update, and notification body in lockstep.
+    filled_quantity_lots = intent.quantity_lots
+
+    if notification_type == "limit_order_triggered":
+        title, body = render_limit_order_triggered(
+            symbol=intent.symbol,
+            strategy=intent.strategy,
+            target_price=intent.target_price_effective,
+            trigger_price=inp.trigger_price,
+            quote_time=inp.quote_time,
+            quantity_lots=intent.quantity_lots,
+            filled_quantity_lots=filled_quantity_lots,
+        )
+    else:
+        title, body = render_price_triggered(
+            symbol=intent.symbol,
+            strategy=intent.strategy,
+            target_price=intent.target_price_effective,
+            trigger_price=inp.trigger_price,
+            quote_time=inp.quote_time,
+        )
 
     trigger_row = TriggerEventRow(
         id=uuid4(),
@@ -137,12 +170,13 @@ def persist_trigger(
         trigger_price=inp.trigger_price,
         trigger_reference_price_type=inp.trigger_reference_price_type,
         fallback_used=inp.fallback_used,
+        filled_quantity_lots=filled_quantity_lots,
     )
     notification_row = NotificationRow(
         id=uuid4(),
         owner_user_id=intent.owner_user_id,
         trade_intent_id=intent.id,
-        type="price_triggered",
+        type=notification_type,
         rendered_title=title,
         rendered_body=body,
     )
@@ -156,7 +190,13 @@ def persist_trigger(
         db.execute(
             update(TradeIntent)
             .where(TradeIntent.id == intent.id, TradeIntent.status == "active")
-            .values(status="triggered", triggered_at=func.now(), updated_at=func.now()),
+            .values(
+                status="triggered",
+                triggered_at=func.now(),
+                updated_at=func.now(),
+                filled_quantity_lots=filled_quantity_lots,
+                last_fill_at=func.now(),
+            ),
         ),
     )
     # Defense-in-depth: if rowcount is 0 the status guard was bypassed

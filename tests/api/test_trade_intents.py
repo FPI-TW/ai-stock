@@ -60,6 +60,10 @@ def _make_intent(
     quantity_lots: int = 1,
     price: str = "600",
     cancelled_at: datetime | None = None,
+    transaction_mode: str = "single_notification",
+    notification_mode: str = "single",
+    filled_quantity_lots: int = 0,
+    last_fill_at: datetime | None = None,
 ) -> TradeIntentData:
     now = datetime.now(tz=UTC)
     return TradeIntentData(
@@ -77,6 +81,10 @@ def _make_intent(
         status=status,
         created_at=now,
         updated_at=now,
+        transaction_mode=transaction_mode,
+        notification_mode=notification_mode,
+        filled_quantity_lots=filled_quantity_lots,
+        last_fill_at=last_fill_at,
         cancelled_at=cancelled_at,
     )
 
@@ -139,17 +147,55 @@ def test_create_sell_alert_success(api_client: TestClient, mock_create_command: 
     assert data["quantityLots"] == 2
 
 
-def test_create_limit_order_rejected_until_v0_5_15(api_client: TestClient, mock_create_command: MagicMock) -> None:
-    """V0.5 union 暫不開放 limit_*_order;BE-V0.5-15 接手後改為 201。
+def test_create_limit_buy_order_success(api_client: TestClient, mock_create_command: MagicMock) -> None:
+    """BE-V0.5-15: limit_buy_order 進 union;response 回 4 個 V2 預留欄位。"""
+    mock_create_command.execute.return_value = _make_intent(
+        strategy="limit_buy_order",
+        transaction_mode="partial_fill_allowed",
+        notification_mode="single",
+    )
 
-    避免 schema 通過後 command 邊界以 500 收尾。子 schema 行為由
-    tests/test_intent_create_schema.py 直接驗證。
-    """
     response = api_client.post("/trade-intents", json=_LIMIT_BUY_PAYLOAD)
 
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()["data"]
+    assert data["strategy"] == "limit_buy_order"
+    assert data["transactionMode"] == "partial_fill_allowed"
+    assert data["notificationMode"] == "single"
+    assert data["filledQuantityLots"] == 0
+    assert data["lastFillAt"] is None
+
+    call = mock_create_command.execute.call_args.args[0]
+    assert call.transaction_mode == "partial_fill_allowed"
+    assert call.notification_mode == "single"
+
+
+def test_create_limit_order_rejects_per_fill_notification_mode(api_client: TestClient) -> None:
+    """notificationMode = per_fill 由 Literal['single'] 自動 422,不需 strategy-specific code."""
+    response = api_client.post(
+        "/trade-intents",
+        json={**_LIMIT_BUY_PAYLOAD, "notificationMode": "per_fill"},
+    )
+
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
-    mock_create_command.execute.assert_not_called()
+    body = response.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    locs = [tuple(err["loc"]) for err in body["error"]["details"]["errors"]]
+    assert any(loc[-1] == "notificationMode" for loc in locs)
+
+
+def test_create_buy_alert_rejects_transaction_mode(api_client: TestClient) -> None:
+    """buy_price_alert 子 schema 不含 transactionMode;extra=forbid 擋下."""
+    response = api_client.post(
+        "/trade-intents",
+        json={**_BUY_PAYLOAD, "transactionMode": "single_notification"},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    body = response.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    locs = [tuple(err["loc"]) for err in body["error"]["details"]["errors"]]
+    assert any(loc[-1] == "transactionMode" for loc in locs)
 
 
 def test_create_trailing_stop_rejected_until_v0_5_16(api_client: TestClient, mock_create_command: MagicMock) -> None:

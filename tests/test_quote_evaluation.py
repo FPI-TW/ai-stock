@@ -238,3 +238,63 @@ class TestUnsupportedStrategy:
         result = evaluator.evaluate(_snapshot(ask_price=Decimal("99")), intent, SESSION_NOW)
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.UNSUPPORTED_STRATEGY
+
+
+class TestLimitBuyOrder:
+    """BE-V0.5-15: limit_buy_order shares the buy_price_alert trigger rule (ask <= target, last fallback)."""
+
+    def test_ask_below_target_triggers(self, evaluator: QuoteEvaluator) -> None:
+        intent = make_intent(strategy="limit_buy_order")
+        result = evaluator.evaluate(_snapshot(ask_price=Decimal("99")), intent, SESSION_NOW)
+        assert result.should_trigger
+        assert result.trigger_price == Decimal("99")
+        assert result.trigger_reference_price_type == "ask"
+        assert result.fallback_used is False
+
+    def test_ask_above_target_skips(self, evaluator: QuoteEvaluator) -> None:
+        intent = make_intent(strategy="limit_buy_order")
+        result = evaluator.evaluate(_snapshot(ask_price=Decimal("101")), intent, SESSION_NOW)
+        assert not result.should_trigger
+        assert result.skip_reason is SkipReason.CONDITION_NOT_MET
+
+    def test_last_fallback_when_ask_missing(self, evaluator: QuoteEvaluator) -> None:
+        intent = make_intent(strategy="limit_buy_order")
+        result = evaluator.evaluate(
+            _snapshot(bid_price=Decimal("98"), last_price=Decimal("100")),
+            intent,
+            SESSION_NOW,
+        )
+        assert result.should_trigger
+        assert result.trigger_price == Decimal("100")
+        assert result.trigger_reference_price_type == "last_fallback"
+        assert result.fallback_used is True
+
+
+class TestLimitSellOrder:
+    """BE-V0.5-15: limit_sell_order shares the sell_price_alert trigger rule (bid >= target, last fallback)."""
+
+    def test_bid_above_target_triggers(self, evaluator: QuoteEvaluator) -> None:
+        intent = make_intent(strategy="limit_sell_order")
+        result = evaluator.evaluate(_snapshot(bid_price=Decimal("101")), intent, SESSION_NOW)
+        assert result.should_trigger
+        assert result.trigger_price == Decimal("101")
+        assert result.trigger_reference_price_type == "bid"
+        assert result.fallback_used is False
+
+    def test_bid_below_target_skips(self, evaluator: QuoteEvaluator) -> None:
+        intent = make_intent(strategy="limit_sell_order")
+        result = evaluator.evaluate(_snapshot(bid_price=Decimal("99")), intent, SESSION_NOW)
+        assert not result.should_trigger
+        assert result.skip_reason is SkipReason.CONDITION_NOT_MET
+
+    def test_last_fallback_when_bid_missing(self, evaluator: QuoteEvaluator) -> None:
+        intent = make_intent(strategy="limit_sell_order")
+        result = evaluator.evaluate(
+            _snapshot(ask_price=Decimal("102"), last_price=Decimal("100")),
+            intent,
+            SESSION_NOW,
+        )
+        assert result.should_trigger
+        assert result.trigger_price == Decimal("100")
+        assert result.trigger_reference_price_type == "last_fallback"
+        assert result.fallback_used is True

@@ -24,10 +24,14 @@ logger = logging.getLogger(__name__)
 _EXECUTION_MODE = "notify_only"
 _TIME_IN_FORCE = "day"
 
-# trigger price reference by strategy
+# trigger price reference by strategy. limit_buy_order / limit_sell_order
+# resolve to the same reference price as buy/sell_price_alert in V0.5; the
+# strategy split is purely a notification / future-broker-integration concern.
 _TRIGGER_REF: dict[str, str] = {
     "buy_price_alert": "ask",
     "sell_price_alert": "bid",
+    "limit_buy_order": "ask",
+    "limit_sell_order": "bid",
 }
 
 
@@ -38,6 +42,8 @@ class CreateTradeIntentInput:
     quantity_lots: int
     target_price: str  # kept as str to preserve decimal precision
     owner_user_id: UUID
+    transaction_mode: str = "single_notification"
+    notification_mode: str = "single"
 
 
 @dataclass(frozen=True)
@@ -127,6 +133,8 @@ class CreateTradeIntentCommand:
                 time_in_force=_TIME_IN_FORCE,
                 execution_mode=_EXECUTION_MODE,
                 status=initial_status,
+                transaction_mode=inp.transaction_mode,
+                notification_mode=inp.notification_mode,
             )
 
             # 5. reconcile subscription before commit — fail here rolls back the intent
@@ -204,6 +212,10 @@ class CreateTradeIntentCommand:
             # consulted by the evaluator so we leave them as-is.
             created_at=intent_row.created_at,
             updated_at=intent_row.updated_at,
+            transaction_mode=intent_row.transaction_mode,
+            notification_mode=intent_row.notification_mode,
+            filled_quantity_lots=intent_row.filled_quantity_lots,
+            last_fill_at=intent_row.last_fill_at,
         )
 
         quote = quotes[0]

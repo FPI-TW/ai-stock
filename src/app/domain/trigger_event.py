@@ -47,5 +47,6 @@ class TriggerEventData:
     trigger_price: Decimal
     trigger_reference_price_type: str
     fallback_used: bool
+    filled_quantity_lots: int
     triggered_at: datetime
     created_at: datetime

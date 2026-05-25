@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-VALID_NOTIFICATION_TYPES = frozenset({"price_triggered"})
+VALID_NOTIFICATION_TYPES = frozenset({"price_triggered", "limit_order_triggered"})
 
 
 class NotificationError(Exception):

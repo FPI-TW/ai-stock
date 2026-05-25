@@ -55,5 +55,9 @@ class TradeIntentData:
     status: str
     created_at: datetime
     updated_at: datetime
+    transaction_mode: str = "single_notification"
+    notification_mode: str = "single"
+    filled_quantity_lots: int = 0
+    last_fill_at: datetime | None = None
     cancelled_at: datetime | None = None
     triggered_at: datetime | None = None

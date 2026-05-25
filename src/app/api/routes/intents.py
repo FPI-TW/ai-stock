@@ -52,6 +52,9 @@ def create_intent(
     user: CurrentUserDep,
     command: CreateTradeIntentCommandDep,
 ) -> IntentCreateResponse:
+    # transaction_mode / notification_mode only exist on the limit_order
+    # sub-schemas; getattr keeps the buy/sell_price_alert path on the
+    # CreateTradeIntentInput defaults without an isinstance branch.
     intent = command.execute(
         CreateTradeIntentInput(
             symbol=request.symbol,
@@ -59,6 +62,8 @@ def create_intent(
             quantity_lots=request.quantity_lots,
             target_price=request.target_price,
             owner_user_id=user.user_id,
+            transaction_mode=getattr(request, "transaction_mode", "single_notification"),
+            notification_mode=getattr(request, "notification_mode", "single"),
         )
     )
     return IntentCreateResponse(data=map_to_response_data(intent))

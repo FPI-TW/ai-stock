@@ -34,6 +34,10 @@ def _to_domain(row: TradeIntent) -> TradeIntentData:
         status=row.status,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        transaction_mode=row.transaction_mode,
+        notification_mode=row.notification_mode,
+        filled_quantity_lots=row.filled_quantity_lots,
+        last_fill_at=row.last_fill_at,
         cancelled_at=row.cancelled_at,
         triggered_at=row.triggered_at,
     )
@@ -60,6 +64,8 @@ class IntentRepository:
         time_in_force: str,
         execution_mode: str,
         status: str,
+        transaction_mode: str = "single_notification",
+        notification_mode: str = "single",
     ) -> UUID:
         """Add a new TradeIntent and flush; return its id.
 
@@ -105,6 +111,8 @@ class IntentRepository:
             trading_date=trading_date,
             time_in_force=time_in_force,
             status=status,
+            transaction_mode=transaction_mode,
+            notification_mode=notification_mode,
         )
         self._db.add(row)
         try:

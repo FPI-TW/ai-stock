@@ -72,11 +72,13 @@ class TrailingStopAlertCreateRequest(_BaseIntentCreateRequest):
         return self
 
 
-# V0.5 階段 union 只暴露已實作的 strategy。
-# LimitBuy/Sell 與 TrailingStop 子 schema 定義保留供 BE-V0.5-15 / 16 接手納入 union;
-# evaluator / migration 上線前不開放,避免 schema 通過後 command 邊界以 500 收尾。
+# BE-V0.5-15 puts limit_buy_order / limit_sell_order into the union now that
+# the migration, evaluator dispatch, and notification template all land in
+# this PR. TrailingStop remains opt-out until BE-V0.5-16 wires up the same
+# layers — keep the sub-schema defined above so that work order only has to
+# extend this union.
 type IntentCreateRequest = Annotated[
-    BuyPriceAlertCreateRequest | SellPriceAlertCreateRequest,
+    BuyPriceAlertCreateRequest | SellPriceAlertCreateRequest | LimitBuyOrderCreateRequest | LimitSellOrderCreateRequest,
     Field(discriminator="strategy"),
 ]
 
@@ -99,6 +101,10 @@ class IntentResponseData(BaseModel):
     time_in_force: str = Field(serialization_alias="timeInForce")
     execution_mode: str = Field(serialization_alias="executionMode")
     status: str
+    transaction_mode: str = Field(serialization_alias="transactionMode")
+    notification_mode: str = Field(serialization_alias="notificationMode")
+    filled_quantity_lots: int = Field(serialization_alias="filledQuantityLots")
+    last_fill_at: datetime | None = Field(default=None, serialization_alias="lastFillAt")
     created_at: datetime = Field(serialization_alias="createdAt")
     cancelled_at: datetime | None = Field(default=None, serialization_alias="cancelledAt")
 
@@ -129,6 +135,10 @@ def map_to_response_data(intent: TradeIntentData) -> IntentResponseData:
         time_in_force=intent.time_in_force,
         execution_mode=intent.execution_mode,
         status=intent.status,
+        transaction_mode=intent.transaction_mode,
+        notification_mode=intent.notification_mode,
+        filled_quantity_lots=intent.filled_quantity_lots,
+        last_fill_at=intent.last_fill_at,
         created_at=intent.created_at,
         cancelled_at=intent.cancelled_at,
     )

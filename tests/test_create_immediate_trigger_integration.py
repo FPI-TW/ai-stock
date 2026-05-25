@@ -233,3 +233,42 @@ def test_create_with_last_fallback_triggers_and_records_metadata(
     trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
     assert trigger_row.trigger_reference_price_type == "last_fallback"
     assert trigger_row.fallback_used is True
+
+
+@pytest.mark.integration
+def test_create_limit_buy_order_inside_session_triggers_with_limit_notification(
+    db_session: Session,
+    client: TestClient,
+    quote_provider: InMemoryQuoteProvider,
+) -> None:
+    """BE-V0.5-15: limit_buy_order immediate trigger writes the full-fill
+    metadata and uses the limit_order_triggered notification type."""
+    quote_provider.push_quote(_snapshot(ask="99.5"))
+
+    response = client.post(
+        "/trade-intents",
+        json={
+            "symbol": "2330",
+            "strategy": "limit_buy_order",
+            "quantityLots": 2,
+            "targetPrice": "99.5",
+            "transactionMode": "partial_fill_allowed",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()["data"]
+    assert body["status"] == "triggered"
+    assert body["transactionMode"] == "partial_fill_allowed"
+    assert body["notificationMode"] == "single"
+    assert body["filledQuantityLots"] == 2
+    assert body["lastFillAt"] is not None
+
+    intent_id = UUID(body["id"])
+    trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
+    assert trigger_row.filled_quantity_lots == 2
+
+    notif_row = db_session.execute(select(Notification).where(Notification.trade_intent_id == intent_id)).scalar_one()
+    assert notif_row.type == "limit_order_triggered"
+    assert notif_row.rendered_title == "2330 限價買單已觸發"
+    assert "成交 2 張 / 委託 2 張" in notif_row.rendered_body

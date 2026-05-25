@@ -46,7 +46,10 @@ class Symbol(TimestampMixin, Base):
 class TradeIntent(TimestampMixin, Base):
     __tablename__ = "trade_intents"
     __table_args__ = (
-        CheckConstraint("strategy IN ('buy_price_alert', 'sell_price_alert')", name="strategy"),
+        CheckConstraint(
+            "strategy IN ('buy_price_alert', 'sell_price_alert', 'limit_buy_order', 'limit_sell_order')",
+            name="strategy",
+        ),
         CheckConstraint("execution_mode = 'notify_only'", name="execution_mode"),
         CheckConstraint("time_in_force = 'day'", name="time_in_force"),
         CheckConstraint(
@@ -57,9 +60,15 @@ class TradeIntent(TimestampMixin, Base):
             "trigger_reference_price_type IN ('ask', 'bid', 'last_fallback')",
             name="trigger_reference_price_type",
         ),
+        CheckConstraint(
+            "transaction_mode IN ('single_notification', 'partial_fill_allowed')",
+            name="transaction_mode",
+        ),
+        CheckConstraint("notification_mode IN ('single', 'per_fill')", name="notification_mode"),
         CheckConstraint("quantity_lots > 0", name="quantity_lots"),
         CheckConstraint("target_price_original > 0", name="target_price_original"),
         CheckConstraint("target_price_effective > 0", name="target_price_effective"),
+        CheckConstraint("filled_quantity_lots >= 0", name="filled_quantity_lots"),
         Index("ix_trade_intents_owner_status_trading_date", "owner_user_id", "status", "trading_date"),
         Index("ix_trade_intents_symbol_status_trading_date", "symbol", "status", "trading_date"),
         Index(
@@ -87,6 +96,10 @@ class TradeIntent(TimestampMixin, Base):
     trading_date: Mapped[date] = mapped_column(Date, nullable=False)
     time_in_force: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
+    transaction_mode: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'single_notification'"))
+    notification_mode: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'single'"))
+    filled_quantity_lots: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    last_fill_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -105,6 +118,7 @@ class TriggerEvent(Base):
         ),
         CheckConstraint("target_price_effective > 0", name="target_price_effective"),
         CheckConstraint("trigger_price > 0", name="trigger_price"),
+        CheckConstraint("filled_quantity_lots >= 0", name="filled_quantity_lots"),
     )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
@@ -121,6 +135,7 @@ class TriggerEvent(Base):
     trigger_price: Mapped[Decimal] = mapped_column(Numeric(9, 4), nullable=False)
     trigger_reference_price_type: Mapped[str] = mapped_column(Text, nullable=False)
     fallback_used: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    filled_quantity_lots: Mapped[int] = mapped_column(Integer, nullable=False)
     triggered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -128,8 +143,11 @@ class TriggerEvent(Base):
 class Notification(Base):
     __tablename__ = "notifications"
     __table_args__ = (
-        CheckConstraint("type IN ('price_triggered')", name="type"),
-        CheckConstraint("(type <> 'price_triggered') OR (trade_intent_id IS NOT NULL)", name="price_triggered_intent"),
+        CheckConstraint("type IN ('price_triggered', 'limit_order_triggered')", name="type"),
+        CheckConstraint(
+            "(type NOT IN ('price_triggered', 'limit_order_triggered')) OR (trade_intent_id IS NOT NULL)",
+            name="price_triggered_intent",
+        ),
         Index("ix_notifications_owner_created_at", "owner_user_id", text("created_at DESC")),
         Index("ix_notifications_owner_read_at", "owner_user_id", "read_at"),
     )

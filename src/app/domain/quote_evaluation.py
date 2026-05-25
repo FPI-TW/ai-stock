@@ -64,9 +64,14 @@ class QuoteEvaluator:
         if validation_failure is not None:
             return EvaluationResult(should_trigger=False, skip_reason=validation_failure)
 
-        if intent.strategy == "buy_price_alert":
+        # limit_buy_order / limit_sell_order share the buy/sell trigger
+        # conditions verbatim in V0.5 (ask <= target / bid >= target with
+        # last_price fallback). The strategy split exists so the notification
+        # template and V2 broker integration can branch on intent.strategy
+        # without touching the evaluator.
+        if intent.strategy in ("buy_price_alert", "limit_buy_order"):
             return self._evaluate_buy(quote, intent.target_price_effective)
-        if intent.strategy == "sell_price_alert":
+        if intent.strategy in ("sell_price_alert", "limit_sell_order"):
             return self._evaluate_sell(quote, intent.target_price_effective)
         return EvaluationResult(should_trigger=False, skip_reason=SkipReason.UNSUPPORTED_STRATEGY)
 

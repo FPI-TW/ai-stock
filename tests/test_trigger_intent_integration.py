@@ -250,6 +250,7 @@ def test_duplicate_trigger_via_unique_constraint_raises(
             trigger_price=Decimal("99.0000"),
             trigger_reference_price_type="ask",
             fallback_used=False,
+            filled_quantity_lots=1,
             triggered_at=QUOTE_TIME,
         )
     )
@@ -279,6 +280,7 @@ def test_rollback_leaves_no_partial_state_on_duplicate(
             trigger_price=Decimal("99.0000"),
             trigger_reference_price_type="ask",
             fallback_used=False,
+            filled_quantity_lots=1,
             triggered_at=QUOTE_TIME,
         )
     )
@@ -365,3 +367,166 @@ def test_persist_trigger_rowcount_guard_raises_when_status_changed_underneath(
     assert notif_rows == []
     assert intent_after.status == "cancelled"
     assert intent_after.triggered_at is None
+
+
+# ----------------------------------------------------------------------------
+# BE-V0.5-15 limit_buy_order / limit_sell_order coverage
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_trigger_limit_buy_order_writes_full_fill_and_limit_notification(
+    db_session: Session,
+    trigger_cmd: TriggerIntentCommand,
+    repo: IntentRepository,
+) -> None:
+    owner = uuid4()
+    intent_id = repo.create(
+        owner_user_id=owner,
+        symbol="2330",
+        strategy="limit_buy_order",
+        quantity_lots=3,
+        target_price_original=Decimal("600.0000"),
+        target_price_effective=Decimal("600.0000"),
+        trigger_reference_price_type="ask",
+        trading_date=date(2026, 5, 11),
+        time_in_force="day",
+        execution_mode="notify_only",
+        status="active",
+        transaction_mode="partial_fill_allowed",
+        notification_mode="single",
+    )
+    db_session.commit()
+
+    result = trigger_cmd.execute(
+        _input(
+            intent_id,
+            trigger_price="599.0000",
+            trigger_reference_price_type="ask",
+            quote_snapshot={"symbol": "2330", "ask_price": "599.0000"},
+        )
+    )
+
+    # trigger_event carries the V0.5 full-fill snapshot.
+    assert result.trigger_event.filled_quantity_lots == 3
+
+    # intent transitioned to triggered and recorded the V2 partial-fill metadata.
+    updated = repo.find_by_id(intent_id, owner)
+    assert updated.status == "triggered"
+    assert updated.triggered_at is not None
+    assert updated.transaction_mode == "partial_fill_allowed"
+    assert updated.notification_mode == "single"
+    assert updated.filled_quantity_lots == 3
+    assert updated.last_fill_at is not None
+
+    # notification routes to limit_order_triggered with the required wording.
+    assert result.notification.type == "limit_order_triggered"
+    assert result.notification.rendered_title == "2330 限價買單已觸發"
+    body = result.notification.rendered_body
+    assert "限價買單" in body
+    assert "成交 3 張 / 委託 3 張" in body
+    assert "僅通知、未下單、不保證成交" in body
+
+
+@pytest.mark.integration
+def test_trigger_limit_sell_order_writes_full_fill_and_limit_notification(
+    db_session: Session,
+    trigger_cmd: TriggerIntentCommand,
+    repo: IntentRepository,
+) -> None:
+    owner = uuid4()
+    intent_id = repo.create(
+        owner_user_id=owner,
+        symbol="2330",
+        strategy="limit_sell_order",
+        quantity_lots=2,
+        target_price_original=Decimal("650.0000"),
+        target_price_effective=Decimal("650.0000"),
+        trigger_reference_price_type="bid",
+        trading_date=date(2026, 5, 11),
+        time_in_force="day",
+        execution_mode="notify_only",
+        status="active",
+    )
+    db_session.commit()
+
+    result = trigger_cmd.execute(
+        _input(
+            intent_id,
+            trigger_price="651.0000",
+            trigger_reference_price_type="bid",
+            quote_snapshot={"symbol": "2330", "bid_price": "651.0000"},
+        )
+    )
+
+    assert result.trigger_event.filled_quantity_lots == 2
+    assert result.notification.type == "limit_order_triggered"
+    assert result.notification.rendered_title == "2330 限價賣單已觸發"
+    assert "成交 2 張 / 委託 2 張" in result.notification.rendered_body
+
+
+@pytest.mark.integration
+def test_trigger_buy_price_alert_still_writes_full_fill_and_price_notification(
+    db_session: Session,
+    trigger_cmd: TriggerIntentCommand,
+    repo: IntentRepository,
+) -> None:
+    """Regression: buy_price_alert keeps notification type 'price_triggered'
+    but the new filled_quantity_lots / last_fill_at fields are populated."""
+    owner = uuid4()
+    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner)
+
+    result = trigger_cmd.execute(_input(intent_id))
+
+    updated = repo.find_by_id(intent_id, owner)
+    assert updated.transaction_mode == "single_notification"
+    assert updated.notification_mode == "single"
+    assert updated.filled_quantity_lots == 1
+    assert updated.last_fill_at is not None
+    assert result.notification.type == "price_triggered"
+    assert result.trigger_event.filled_quantity_lots == 1
+
+
+@pytest.mark.integration
+def test_buy_price_alert_and_limit_buy_order_share_target_without_conflict(
+    db_session: Session,
+    repo: IntentRepository,
+) -> None:
+    """Duplicate index already includes `strategy`; the two strategies must
+    not block each other when otherwise identical."""
+    owner = uuid4()
+
+    repo.create(
+        owner_user_id=owner,
+        symbol="2330",
+        strategy="buy_price_alert",
+        quantity_lots=1,
+        target_price_original=Decimal("600.0000"),
+        target_price_effective=Decimal("600.0000"),
+        trigger_reference_price_type="ask",
+        trading_date=date(2026, 5, 11),
+        time_in_force="day",
+        execution_mode="notify_only",
+        status="active",
+    )
+    repo.create(
+        owner_user_id=owner,
+        symbol="2330",
+        strategy="limit_buy_order",
+        quantity_lots=1,
+        target_price_original=Decimal("600.0000"),
+        target_price_effective=Decimal("600.0000"),
+        trigger_reference_price_type="ask",
+        trading_date=date(2026, 5, 11),
+        time_in_force="day",
+        execution_mode="notify_only",
+        status="active",
+    )
+    db_session.commit()
+
+    rows = (
+        db_session.execute(select(TradeIntent).where(TradeIntent.owner_user_id == owner, TradeIntent.symbol == "2330"))
+        .scalars()
+        .all()
+    )
+    assert {row.strategy for row in rows} == {"buy_price_alert", "limit_buy_order"}

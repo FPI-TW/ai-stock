@@ -296,6 +296,108 @@ def test_trade_intent_rejects_duplicate_active_intent(migrated_engine: Engine) -
 
 
 @pytest.mark.integration
+def test_trade_intent_accepts_limit_order_strategies(migrated_engine: Engine) -> None:
+    """BE-V0.5-15: limit_buy_order / limit_sell_order pass the strategy CHECK."""
+    with migrated_engine.begin() as connection:
+        insert_symbol(connection, uuid4(), "2603")
+        trade_intents = reflect_table(migrated_engine, "trade_intents")
+        for strategy in ("limit_buy_order", "limit_sell_order"):
+            connection.execute(
+                trade_intents.insert().values(
+                    **build_trade_intent(symbol="2603", strategy=strategy, owner_user_id=uuid4())
+                )
+            )
+
+
+@pytest.mark.integration
+def test_trade_intent_rejects_unknown_transaction_mode(migrated_engine: Engine) -> None:
+    with migrated_engine.begin() as connection:
+        insert_symbol(connection, uuid4(), "2615")
+        trade_intents = reflect_table(migrated_engine, "trade_intents")
+        with pytest.raises(IntegrityError):
+            connection.execute(
+                trade_intents.insert().values(
+                    **build_trade_intent(symbol="2615"),
+                    transaction_mode="bogus",
+                )
+            )
+
+
+@pytest.mark.integration
+def test_trade_intent_defaults_partial_fill_columns_to_v0_5_baseline(
+    migrated_engine: Engine,
+) -> None:
+    """Insert without specifying the new columns → DB server defaults kick in."""
+    trade_intent_id = uuid4()
+    with migrated_engine.begin() as connection:
+        insert_symbol(connection, uuid4(), "2618")
+        trade_intents = reflect_table(migrated_engine, "trade_intents")
+        connection.execute(trade_intents.insert().values(**build_trade_intent(id=trade_intent_id, symbol="2618")))
+        row = connection.execute(sa.select(trade_intents).where(trade_intents.c.id == trade_intent_id)).mappings().one()
+
+    assert row["transaction_mode"] == "single_notification"
+    assert row["notification_mode"] == "single"
+    assert row["filled_quantity_lots"] == 0
+    assert row["last_fill_at"] is None
+
+
+@pytest.mark.integration
+def test_trigger_event_rejects_negative_filled_quantity_lots(migrated_engine: Engine) -> None:
+    trade_intent_id = uuid4()
+    with migrated_engine.begin() as connection:
+        insert_symbol(connection, uuid4(), "2884")
+        connection.execute(
+            reflect_table(migrated_engine, "trade_intents")
+            .insert()
+            .values(**build_trade_intent(id=trade_intent_id, symbol="2884"))
+        )
+
+        with pytest.raises(IntegrityError):
+            connection.execute(
+                reflect_table(migrated_engine, "trigger_events")
+                .insert()
+                .values(**build_trigger_event(trade_intent_id, symbol="2884", filled_quantity_lots=-1))
+            )
+
+
+@pytest.mark.integration
+def test_notification_accepts_limit_order_triggered_type(migrated_engine: Engine) -> None:
+    """BE-V0.5-15: limit_order_triggered is a valid notification type and still
+    requires a linked trade_intent_id."""
+    trade_intent_id = uuid4()
+    with migrated_engine.begin() as connection:
+        insert_symbol(connection, uuid4(), "2885")
+        connection.execute(
+            reflect_table(migrated_engine, "trade_intents")
+            .insert()
+            .values(**build_trade_intent(id=trade_intent_id, symbol="2885", strategy="limit_buy_order"))
+        )
+        notifications = reflect_table(migrated_engine, "notifications")
+        connection.execute(
+            notifications.insert().values(
+                id=uuid4(),
+                owner_user_id=uuid4(),
+                trade_intent_id=trade_intent_id,
+                type="limit_order_triggered",
+                rendered_title="2885 限價買單已觸發",
+                rendered_body="限價買單\n成交 1 張 / 委託 1 張",
+            )
+        )
+
+        with pytest.raises(IntegrityError):
+            connection.execute(
+                notifications.insert().values(
+                    id=uuid4(),
+                    owner_user_id=uuid4(),
+                    trade_intent_id=None,
+                    type="limit_order_triggered",
+                    rendered_title="?",
+                    rendered_body="?",
+                )
+            )
+
+
+@pytest.mark.integration
 def test_trade_intent_allows_duplicate_after_terminal_status(migrated_engine: Engine) -> None:
     symbol_id = uuid4()
     owner_user_id = uuid4()
@@ -361,6 +463,7 @@ def build_trigger_event(
     symbol: str = "2317",
     trigger_reference_price_type: str = "ask",
     fallback_used: bool = False,
+    filled_quantity_lots: int = 1,
 ) -> dict[str, object]:
     return {
         "id": uuid4(),
@@ -372,5 +475,6 @@ def build_trigger_event(
         "trigger_price": Decimal("100.0000"),
         "trigger_reference_price_type": trigger_reference_price_type,
         "fallback_used": fallback_used,
+        "filled_quantity_lots": filled_quantity_lots,
         "triggered_at": datetime(2026, 5, 12, 1, 30, tzinfo=UTC),
     }
