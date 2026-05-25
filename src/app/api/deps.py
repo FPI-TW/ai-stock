@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
+from app.commands.notification import MarkNotificationReadCommand
 from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand
 from app.commands.trigger_intent import TriggerIntentCommand
 from app.core.config import Settings, get_settings
@@ -12,6 +13,7 @@ from app.db.session import check_database_connectivity, get_session_factory
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
+from app.repositories.notification_repository import NotificationRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.services.quote.base import QuoteProvider
 from app.services.symbol import SymbolService
@@ -126,3 +128,20 @@ def get_cancel_trade_intent_command(
 
 
 CancelTradeIntentCommandDep = Annotated[CancelTradeIntentCommand, Depends(get_cancel_trade_intent_command)]
+
+
+def get_notification_repository(db: DatabaseDep) -> NotificationRepository:
+    return NotificationRepository(db)
+
+
+NotificationRepoDep = Annotated[NotificationRepository, Depends(get_notification_repository)]
+
+
+def get_mark_notification_read_command(
+    repo: NotificationRepoDep,
+    db: DatabaseDep,
+) -> MarkNotificationReadCommand:
+    return MarkNotificationReadCommand(repo, db)
+
+
+MarkNotificationReadCommandDep = Annotated[MarkNotificationReadCommand, Depends(get_mark_notification_read_command)]
