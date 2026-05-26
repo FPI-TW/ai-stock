@@ -51,6 +51,9 @@ const sheetState = {
 let searchAbortController = null;
 let searchDebounceTimer = null;
 
+let lastIntentsList = []; // cached for client-side filter
+let intentFilter = "all";  // all | active | triggered | cancelled
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -113,26 +116,47 @@ async function refreshIntents() {
     query: { pageSize: 100 },
   });
 
-  list.innerHTML = "";
   if (resp.status !== 200) {
+    list.innerHTML = "";
     list.appendChild(emptyState("⚠️", "讀取委託失敗", resp.body?.error?.message || `HTTP ${resp.status}`));
     document.getElementById("uv-intent-count").textContent = "—";
     return;
   }
 
-  const intents = resp.body?.data || [];
-  const active = intents.filter((i) => i.status === "active" || i.status === "scheduled");
-  const others = intents.filter((i) => i.status === "triggered" || i.status === "cancelled");
+  lastIntentsList = resp.body?.data || [];
+  renderIntentsFiltered();
+}
 
-  document.getElementById("uv-intent-count").textContent = `${active.length} 進行 · ${others.length} 已結束`;
+function renderIntentsFiltered() {
+  const list = document.getElementById("uv-intent-list");
+  list.innerHTML = "";
 
-  if (intents.length === 0) {
+  const active = lastIntentsList.filter((i) => i.status === "active" || i.status === "scheduled");
+  const triggered = lastIntentsList.filter((i) => i.status === "triggered");
+  const cancelled = lastIntentsList.filter((i) => i.status === "cancelled");
+
+  document.getElementById("uv-intent-count").textContent =
+    `${active.length} 進行 · ${triggered.length} 已觸發 · ${cancelled.length} 已取消`;
+
+  let visible;
+  if (intentFilter === "active") visible = active;
+  else if (intentFilter === "triggered") visible = triggered;
+  else if (intentFilter === "cancelled") visible = cancelled;
+  else visible = [...active, ...triggered, ...cancelled];
+
+  if (lastIntentsList.length === 0) {
     list.appendChild(emptyState("📋", "尚無委託", "點右上『+ 新增委託』開始建立"));
     return;
   }
+  if (visible.length === 0) {
+    const filterLabel = { active: "進行中", triggered: "已觸發", cancelled: "已取消" }[intentFilter];
+    list.appendChild(emptyState("📭", `沒有${filterLabel}的委託`, "切其他分類試試"));
+    return;
+  }
 
-  for (const intent of active) list.appendChild(renderIntentCard(intent, { actionable: true }));
-  for (const intent of others.slice(0, 5)) list.appendChild(renderIntentCard(intent, { actionable: false }));
+  for (const intent of visible) {
+    list.appendChild(renderIntentCard(intent, { actionable: intent.status === "active" || intent.status === "scheduled" }));
+  }
 }
 
 function renderIntentCard(intent, { actionable }) {
@@ -150,7 +174,7 @@ function renderIntentCard(intent, { actionable }) {
         ])
       : null;
 
-  return el("article", { className: "intent-card" }, [
+  const card = el("article", { className: "intent-card", role: "button", tabindex: "0" }, [
     el("div", { className: "intent-card-row" }, [
       el("div", { className: "intent-card-symbol" }, [intent.symbol]),
       el("div", { className: "intent-card-strategy" }, [strategy]),
@@ -167,11 +191,24 @@ function renderIntentCard(intent, { actionable }) {
       actionable
         ? el("button", {
             className: "intent-card-cancel",
-            onClick: () => cancelIntent(intent.id, intent.symbol),
+            onClick: (ev) => {
+              ev.stopPropagation();
+              cancelIntent(intent.id, intent.symbol);
+            },
           }, ["取消委託"])
         : el("span", {}, [intent.cancelledAt ? `取消於 ${fmtRelativeTime(intent.cancelledAt)}` : ""]),
     ]),
   ]);
+
+  card.style.cursor = "pointer";
+  card.addEventListener("click", () => openIntentDetail(intent));
+  card.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      openIntentDetail(intent);
+    }
+  });
+  return card;
 }
 
 async function refreshNotifications() {
@@ -213,7 +250,7 @@ function renderNotifCard(notif) {
     .slice(0, 3)
     .join(" · ");
 
-  const card = el("article", { className: `notif-card ${notif.readAt ? "" : "unread"}` }, [
+  const card = el("article", { className: `notif-card ${notif.readAt ? "" : "unread"}`, role: "button", tabindex: "0" }, [
     el("div", { className: "notif-icon" }, [icon]),
     el("div", { className: "notif-body" }, [
       el("div", { className: "notif-title" }, [notif.renderedTitle]),
@@ -221,10 +258,14 @@ function renderNotifCard(notif) {
     ]),
     el("div", { className: "notif-time" }, [fmtRelativeTime(notif.createdAt)]),
   ]);
-  if (!notif.readAt) {
-    card.style.cursor = "pointer";
-    card.addEventListener("click", () => markNotifRead(notif.id));
-  }
+  card.style.cursor = "pointer";
+  card.addEventListener("click", () => openNotifDetail(notif));
+  card.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      openNotifDetail(notif);
+    }
+  });
   return card;
 }
 
@@ -241,13 +282,21 @@ function emptyState(icon, title, hint) {
 // ---------------------------------------------------------------------------
 
 async function cancelIntent(intentId, symbol) {
-  if (!confirm(`確定取消 ${symbol} 的委託？`)) return;
+  const ok = await customConfirm({
+    title: "取消委託",
+    message: `確定要取消 ${symbol} 的委託嗎？取消後無法復原。`,
+    okText: "取消委託",
+    destructive: true,
+  });
+  if (!ok) return;
+
   const resp = await sendRequest({
     method: "POST",
     path: `/trade-intents/${intentId}/cancel`,
   });
   if (resp.status === 200) {
     showToast("已取消委託", "success");
+    closeDetail();
     refreshIntents();
   } else {
     showToast(resp.body?.error?.message || `取消失敗 (${resp.status})`, "error");
@@ -454,6 +503,158 @@ function dismissToast(toast) {
 }
 
 // ---------------------------------------------------------------------------
+// Detail sheet (intent + notification)
+// ---------------------------------------------------------------------------
+
+function openIntentDetail(intent) {
+  const body = document.getElementById("detail-body");
+  document.getElementById("detail-title").textContent = `${intent.symbol} ${STRATEGY_LABEL[intent.strategy] || intent.strategy}`;
+
+  const grid = el("dl", { className: "detail-grid" }, [
+    row("狀態", STATUS_LABEL[intent.status] || intent.status),
+    row("策略", STRATEGY_LABEL[intent.strategy] || intent.strategy),
+    row("觸發條件", STRATEGY_TRIGGER_DESC[intent.strategy] || "—"),
+    row("目標價", intent.targetPriceEffective),
+    row("張數 (委託 / 成交)", `${intent.quantityLots} / ${intent.filledQuantityLots ?? 0}`),
+    row("執行模式", intent.executionMode),
+    row("時效", intent.timeInForce),
+    row("交易模式", intent.transactionMode || "—"),
+    row("通知模式", intent.notificationMode || "—"),
+    row("交易日", intent.tradingDate),
+    row("建立時間", new Date(intent.createdAt).toLocaleString("zh-TW")),
+    intent.triggeredAt ? row("觸發時間", new Date(intent.triggeredAt).toLocaleString("zh-TW")) : null,
+    intent.lastFillAt ? row("最後成交", new Date(intent.lastFillAt).toLocaleString("zh-TW")) : null,
+    intent.cancelledAt ? row("取消時間", new Date(intent.cancelledAt).toLocaleString("zh-TW")) : null,
+  ].filter(Boolean));
+
+  body.innerHTML = "";
+  body.appendChild(el("div", { className: "detail-section" }, [
+    el("div", { className: "detail-section-title" }, ["委託資訊"]),
+    grid,
+  ]));
+  body.appendChild(el("div", { className: "detail-section" }, [
+    el("div", { className: "detail-section-title" }, ["原始 ID"]),
+    el("pre", {}, [intent.id]),
+  ]));
+
+  const actions = el("div", { className: "detail-actions" }, [
+    el("button", { className: "detail-action-btn secondary", onClick: closeDetail }, ["關閉"]),
+    (intent.status === "active" || intent.status === "scheduled")
+      ? el("button", {
+          className: "detail-action-btn destructive",
+          onClick: () => cancelIntent(intent.id, intent.symbol),
+        }, ["取消委託"])
+      : null,
+  ].filter(Boolean));
+  body.appendChild(actions);
+
+  document.getElementById("detail-overlay").hidden = false;
+}
+
+function openNotifDetail(notif) {
+  const body = document.getElementById("detail-body");
+  document.getElementById("detail-title").textContent = notif.renderedTitle;
+
+  const grid = el("dl", { className: "detail-grid" }, [
+    row("類型", notif.type === "limit_order_triggered" ? "限價單觸發" : "到價提醒"),
+    row("通知時間", new Date(notif.createdAt).toLocaleString("zh-TW")),
+    row("狀態", notif.readAt ? `已讀 (${new Date(notif.readAt).toLocaleString("zh-TW")})` : "未讀"),
+    notif.tradeIntentId ? row("關聯委託 ID", notif.tradeIntentId) : null,
+  ].filter(Boolean));
+
+  body.innerHTML = "";
+  body.appendChild(el("div", { className: "detail-section" }, [
+    el("div", { className: "detail-section-title" }, ["通知資訊"]),
+    grid,
+  ]));
+  body.appendChild(el("div", { className: "detail-section" }, [
+    el("div", { className: "detail-section-title" }, ["完整內容"]),
+    el("pre", {}, [notif.renderedBody]),
+  ]));
+
+  const actions = el("div", { className: "detail-actions" }, [
+    el("button", { className: "detail-action-btn secondary", onClick: closeDetail }, ["關閉"]),
+    notif.readAt
+      ? null
+      : el("button", {
+          className: "detail-action-btn primary",
+          onClick: async () => {
+            await markNotifRead(notif.id);
+            closeDetail();
+          },
+        }, ["標為已讀"]),
+  ].filter(Boolean));
+  body.appendChild(actions);
+
+  document.getElementById("detail-overlay").hidden = false;
+}
+
+function row(label, value) {
+  return el("div", {}, [el("dt", {}, [label]), el("dd", {}, [String(value)])]);
+}
+
+export function closeDetail() {
+  document.getElementById("detail-overlay").hidden = true;
+}
+
+// ---------------------------------------------------------------------------
+// Custom confirm dialog
+// ---------------------------------------------------------------------------
+
+function customConfirm({ title = "確認", message = "", okText = "確定", cancelText = "取消", destructive = false }) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("confirm-overlay");
+    document.getElementById("confirm-title").textContent = title;
+    document.getElementById("confirm-message").textContent = message;
+    const okBtn = document.getElementById("confirm-ok");
+    const cancelBtn = document.getElementById("confirm-cancel");
+    okBtn.textContent = okText;
+    cancelBtn.textContent = cancelText;
+    okBtn.classList.toggle("destructive", destructive);
+    okBtn.classList.toggle("primary", !destructive);
+
+    overlay.hidden = false;
+
+    const cleanup = (result) => {
+      overlay.hidden = true;
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      overlay.removeEventListener("click", onBackdrop);
+      resolve(result);
+    };
+    const onOk = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onBackdrop = (ev) => {
+      if (ev.target.id === "confirm-overlay") cleanup(false);
+    };
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    overlay.addEventListener("click", onBackdrop);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Close-all (exported for Esc keyboard shortcut)
+// ---------------------------------------------------------------------------
+
+export function closeAllModals() {
+  let closed = false;
+  for (const id of ["detail-overlay", "switch-user-overlay", "sheet-overlay"]) {
+    const node = document.getElementById(id);
+    if (node && !node.hidden) {
+      node.hidden = true;
+      closed = true;
+    }
+  }
+  const confirmOverlay = document.getElementById("confirm-overlay");
+  if (confirmOverlay && !confirmOverlay.hidden) {
+    document.getElementById("confirm-cancel")?.click();
+    closed = true;
+  }
+  return closed;
+}
+
+// ---------------------------------------------------------------------------
 // Switch-user modal
 // ---------------------------------------------------------------------------
 
@@ -500,6 +701,25 @@ export function initUserView() {
   document.getElementById("uv-create-btn").addEventListener("click", openSheet);
   document.getElementById("user-refresh-btn").addEventListener("click", refreshDashboard);
   document.getElementById("user-switch-btn").addEventListener("click", openSwitchUser);
+
+  // filter chips
+  for (const btn of document.querySelectorAll("#uv-intent-filter button")) {
+    btn.addEventListener("click", () => {
+      intentFilter = btn.dataset.filter;
+      for (const b of document.querySelectorAll("#uv-intent-filter button")) {
+        b.classList.toggle("active", b === btn);
+      }
+      renderIntentsFiltered();
+    });
+  }
+
+  // detail sheet close
+  document.getElementById("detail-overlay").addEventListener("click", (ev) => {
+    if (ev.target.id === "detail-overlay") closeDetail();
+  });
+  for (const btn of document.querySelectorAll("[data-close-detail]")) {
+    btn.addEventListener("click", closeDetail);
+  }
 
   document.getElementById("sheet-cancel").addEventListener("click", closeSheet);
   document.getElementById("sheet-back").addEventListener("click", () => {

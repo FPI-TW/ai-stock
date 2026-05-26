@@ -153,8 +153,10 @@ function selectEndpoint(ep) {
   const pathEl = document.getElementById("req-path");
   pathEl.textContent = ep.path;
   pathEl.classList.remove("path-placeholder");
-  document.getElementById("req-path-params").value = ep.pathParams ? JSON.stringify(ep.pathParams) : "";
-  document.getElementById("req-query").value = ep.query ? JSON.stringify(ep.query) : "";
+
+  renderEndpointDescription(ep);
+  renderPathParamFields(ep);
+  renderQueryParamFields(ep);
   document.getElementById("req-headers").value = "";
   document.getElementById("req-body").value = "";
   document.getElementById("send-btn").disabled = false;
@@ -169,6 +171,144 @@ function selectEndpoint(ep) {
       exampleSel.appendChild(opt);
     }
   }
+}
+
+function renderEndpointDescription(ep) {
+  const box = document.getElementById("endpoint-description");
+  if (!ep.description) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = "";
+  if (ep.label) {
+    const lbl = document.createElement("span");
+    lbl.className = "label";
+    lbl.textContent = ep.label;
+    box.appendChild(lbl);
+  }
+  box.appendChild(document.createTextNode(ep.description));
+}
+
+// Pull `{name}` placeholders from the path so even endpoints without an
+// explicit `pathParamSpecs` get one field per template var.
+function extractPathParamNames(path) {
+  return Array.from(path.matchAll(/\{([^}]+)\}/g)).map((m) => m[1]);
+}
+
+function renderPathParamFields(ep) {
+  const section = document.getElementById("path-params-section");
+  const container = document.getElementById("path-params-fields");
+  container.innerHTML = "";
+  const names = extractPathParamNames(ep.path);
+  if (names.length === 0) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  for (const name of names) {
+    const spec = (ep.pathParamSpecs || {})[name] || {};
+    const examplePathParams = ep.pathParams || {};
+    const initial =
+      spec.example !== undefined && !String(spec.example).startsWith("<")
+        ? String(spec.example)
+        : examplePathParams[name] && !String(examplePathParams[name]).startsWith("<")
+        ? String(examplePathParams[name])
+        : "";
+    container.appendChild(buildParamField({
+      name,
+      description: spec.description || "Path 路徑參數",
+      placeholder: String(spec.example ?? examplePathParams[name] ?? ""),
+      initial,
+      dataKey: "pathParam",
+    }));
+  }
+}
+
+function renderQueryParamFields(ep) {
+  const section = document.getElementById("query-params-section");
+  const container = document.getElementById("query-params-fields");
+  container.innerHTML = "";
+  const specs = ep.queryParamSpecs || {};
+  const examples = ep.query || {};
+  const names = Array.from(new Set([...Object.keys(specs), ...Object.keys(examples)]));
+  if (names.length === 0) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  for (const name of names) {
+    const spec = specs[name] || {};
+    const initial = examples[name] !== undefined ? String(examples[name]) : "";
+    container.appendChild(buildParamField({
+      name,
+      description: spec.description || "查詢參數",
+      placeholder: spec.example !== undefined ? String(spec.example) : "",
+      initial,
+      dataKey: "queryParam",
+      options: spec.options,
+      type: spec.type,
+    }));
+  }
+}
+
+function buildParamField({ name, description, placeholder, initial, dataKey, options, type }) {
+  const field = document.createElement("div");
+  field.className = "param-field";
+
+  const labelBox = document.createElement("div");
+  labelBox.className = "param-field-label";
+  const nameEl = document.createElement("div");
+  nameEl.className = "param-field-name";
+  nameEl.textContent = name;
+  labelBox.appendChild(nameEl);
+  if (description) {
+    const descEl = document.createElement("div");
+    descEl.className = "param-field-desc";
+    descEl.textContent = description;
+    labelBox.appendChild(descEl);
+  }
+
+  const inputBox = document.createElement("div");
+  inputBox.className = "param-field-input";
+
+  let input;
+  if (options && Array.isArray(options) && options.length > 0) {
+    input = document.createElement("select");
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = "(不送)";
+    input.appendChild(empty);
+    for (const opt of options) {
+      const o = document.createElement("option");
+      o.value = String(opt);
+      o.textContent = String(opt);
+      input.appendChild(o);
+    }
+    if (initial) input.value = initial;
+  } else {
+    input = document.createElement("input");
+    input.type = type === "number" ? "number" : "text";
+    input.placeholder = placeholder || "";
+    input.value = initial || "";
+  }
+  input.dataset[dataKey] = name;
+  inputBox.appendChild(input);
+
+  field.appendChild(labelBox);
+  field.appendChild(inputBox);
+  return field;
+}
+
+function collectFieldValues(dataKey) {
+  const out = {};
+  for (const input of document.querySelectorAll(`[data-${dataKey === "pathParam" ? "path-param" : "query-param"}]`)) {
+    const value = input.value.trim();
+    if (value === "") continue;
+    const name = input.dataset[dataKey];
+    out[name] = value;
+  }
+  return out;
 }
 
 function renderResponse(status, durationMs, requestId, body) {
@@ -270,10 +410,10 @@ function pushHistory(record) {
 async function onSend() {
   if (!state.selected) return;
   const ep = state.selected;
-  let pathParams, query, headers, body;
+  let headers, body;
+  const pathParams = collectFieldValues("pathParam");
+  const query = collectFieldValues("queryParam");
   try {
-    pathParams = safeParseJson(document.getElementById("req-path-params").value, {});
-    query = safeParseJson(document.getElementById("req-query").value, {});
     headers = safeParseJson(document.getElementById("req-headers").value, {});
     const bodyText = document.getElementById("req-body").value.trim();
     body = bodyText ? safeParseJson(bodyText) : undefined;
@@ -284,13 +424,58 @@ async function onSend() {
   const btn = document.getElementById("send-btn");
   btn.disabled = true;
   try {
-    const record = await sendRequest({ method: ep.method, path: ep.path, pathParams, query, headers, body });
+    // remember the request shape so Copy-as-cURL can reproduce it
+    state.lastRequest = { method: ep.method, path: ep.path, pathParams, query, headers, body };
+    const record = await sendRequest(state.lastRequest);
     renderResponse(record.status, record.duration, record.requestId, record.body);
     pushHistory(record);
+    enableResponseActions();
   } catch (e) {
     renderResponse(0, 0, null, `network error: ${e.message}`);
   } finally {
     btn.disabled = false;
+  }
+}
+
+function enableResponseActions() {
+  document.getElementById("copy-curl-btn").disabled = false;
+  document.getElementById("copy-body-btn").disabled = false;
+}
+
+function buildCurl(req) {
+  if (!req) return "";
+  const url = new URL(substitutePathParams(req.path, req.pathParams || {}), window.location.origin);
+  for (const [k, v] of Object.entries(req.query || {})) {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+  }
+  const headers = { "Content-Type": "application/json", ...(req.headers || {}) };
+  const uuid = currentUserUuid();
+  if (uuid) headers["X-Local-User-Id"] = uuid;
+
+  const parts = [`curl -X ${req.method}`, `'${url.toString()}'`];
+  for (const [k, v] of Object.entries(headers)) {
+    parts.push(`\\\n  -H '${k}: ${String(v).replace(/'/g, "\\'")}'`);
+  }
+  if (req.method !== "GET" && req.method !== "HEAD" && req.body !== undefined) {
+    const bodyStr = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+    parts.push(`\\\n  -d '${bodyStr.replace(/'/g, "\\'")}'`);
+  }
+  return parts.join(" ");
+}
+
+async function copyToClipboard(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const originalText = btn.textContent;
+    btn.textContent = "已複製";
+    btn.classList.add("copied");
+    setTimeout(() => {
+      btn.textContent = originalText;
+      btn.classList.remove("copied");
+    }, 1500);
+  } catch (e) {
+    console.warn("clipboard write failed:", e);
+    alert("複製失敗，請手動 select");
   }
 }
 
@@ -517,6 +702,43 @@ function init() {
   refreshServerState();
   openApiSanityCheck();
   initUserViewMode();
+  initResponseActions();
+  initGlobalKeyboardShortcuts();
+}
+
+function initResponseActions() {
+  document.getElementById("copy-body-btn").addEventListener("click", (ev) => {
+    const body = document.getElementById("response-body").textContent;
+    copyToClipboard(body, ev.target);
+  });
+  document.getElementById("copy-curl-btn").addEventListener("click", (ev) => {
+    const curl = buildCurl(state.lastRequest);
+    if (!curl) return;
+    copyToClipboard(curl, ev.target);
+  });
+}
+
+function initGlobalKeyboardShortcuts() {
+  let userView = null;
+  // user-view module loaded lazily; capture reference once available
+  import("/test-assets/user-view.js").then((m) => {
+    userView = m;
+  });
+  window.addEventListener("keydown", (ev) => {
+    // Esc — close any open modal (dev pane has no modal; user view has sheets)
+    if (ev.key === "Escape") {
+      if (userView?.closeAllModals?.()) ev.preventDefault();
+      return;
+    }
+    // Cmd/Ctrl + Enter — send request in Dev mode
+    if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") {
+      const mode = document.getElementById("app").dataset.mode;
+      if (mode === "dev" && state.selected && !document.getElementById("send-btn").disabled) {
+        ev.preventDefault();
+        onSend();
+      }
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

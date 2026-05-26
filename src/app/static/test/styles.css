@@ -1171,8 +1171,393 @@ textarea {
  * `display: none`，被更高 specificity 的 #id rule 覆寫）。明確補回 hidden
  * 行為，否則 modal 一進頁面就遮住整個畫面、JS 設 hidden = true 也沒用。 */
 #sheet-overlay[hidden],
-#switch-user-overlay[hidden] {
+#switch-user-overlay[hidden],
+#detail-overlay[hidden],
+#confirm-overlay[hidden] {
   display: none !important;
+}
+
+#detail-overlay,
+#confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: overlay-in 0.18s ease;
+}
+
+#confirm-overlay {
+  align-items: center;
+}
+
+/* ---- Filter chips (intent status) -------------------------------------- */
+
+.uv-filter {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 12px;
+  padding: 4px;
+  background: rgba(120, 120, 128, 0.16);
+  border-radius: 10px;
+}
+
+.uv-filter button {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  padding: 7px 8px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.uv-filter button.active {
+  background: var(--bg-elevated);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.uv-filter button:not(.active):hover {
+  color: var(--accent);
+}
+
+/* ---- Detail sheet body ------------------------------------------------- */
+
+.detail-body {
+  padding: 18px 20px 24px;
+}
+
+.detail-section {
+  margin-bottom: 18px;
+}
+
+.detail-section:last-child {
+  margin-bottom: 0;
+}
+
+.detail-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.detail-grid {
+  background: var(--bg-grouped);
+  border-radius: var(--radius-card);
+  padding: 4px 16px;
+}
+
+.detail-grid div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--separator);
+  gap: 12px;
+}
+
+.detail-grid div:last-child {
+  border-bottom: 0;
+}
+
+.detail-grid dt {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.detail-grid dd {
+  font-size: 14px;
+  font-weight: 500;
+  text-align: right;
+  font-family: var(--font-mono);
+  color: var(--text);
+  word-break: break-all;
+}
+
+.detail-body pre {
+  background: var(--bg-grouped);
+  border-radius: var(--radius-card);
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+.detail-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.detail-action-btn {
+  flex: 1;
+  padding: 11px;
+  border: 0;
+  border-radius: var(--radius-control);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.1s ease, background 0.15s ease;
+}
+
+.detail-action-btn:active {
+  transform: scale(0.98);
+}
+
+.detail-action-btn.primary {
+  background: var(--accent);
+  color: white;
+}
+
+.detail-action-btn.primary:hover {
+  background: var(--accent-hover);
+}
+
+.detail-action-btn.destructive {
+  background: rgba(255, 59, 48, 0.12);
+  color: var(--error);
+}
+
+.detail-action-btn.destructive:hover {
+  background: rgba(255, 59, 48, 0.2);
+}
+
+.detail-action-btn.secondary {
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+.detail-action-btn.secondary:hover {
+  background: rgba(120, 120, 128, 0.2);
+}
+
+/* ---- Custom confirm dialog --------------------------------------------- */
+
+.confirm-dialog {
+  border-radius: 18px;
+  max-width: 320px;
+  width: calc(100% - 40px);
+  margin: 0 20px;
+  overflow: hidden;
+  animation: confirm-pop 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@keyframes confirm-pop {
+  from { transform: scale(0.92); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.confirm-content {
+  padding: 20px 24px 16px;
+  text-align: center;
+}
+
+.confirm-content h3 {
+  font-size: 17px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.confirm-content p {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.confirm-actions {
+  display: flex;
+  border-top: 1px solid var(--separator);
+}
+
+.confirm-btn {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  padding: 12px;
+  font-size: 16px;
+  cursor: pointer;
+  color: var(--accent);
+  font-family: inherit;
+}
+
+.confirm-btn:not(:last-child) {
+  border-right: 1px solid var(--separator);
+}
+
+.confirm-btn.cancel {
+  color: var(--text);
+}
+
+.confirm-btn.destructive {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.confirm-btn:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+/* ---- Dev mode response copy buttons ------------------------------------ */
+
+.response-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.response-action-btn {
+  background: var(--bg-input);
+  color: var(--accent);
+  border: 0;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  letter-spacing: 0.03em;
+  transition: background 0.15s ease;
+}
+
+.response-action-btn:hover:not(:disabled) {
+  background: rgba(0, 122, 255, 0.16);
+}
+
+.response-action-btn:disabled {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+
+.response-action-btn.copied {
+  background: var(--method-get-bg);
+  color: var(--success-text);
+}
+
+/* ---- Endpoint description card ---------------------------------------- */
+
+.endpoint-description {
+  background: var(--bg-grouped);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 18px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.endpoint-description .label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.endpoint-description[hidden] {
+  display: none;
+}
+
+/* ---- Dynamic param fields --------------------------------------------- */
+
+.form-section-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin: 14px 0 8px;
+}
+
+.form-section-label .hint {
+  font-weight: 400;
+  color: var(--text-tertiary);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: 4px;
+  font-size: 11px;
+}
+
+.param-field {
+  display: grid;
+  grid-template-columns: minmax(120px, 28%) 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--separator);
+}
+
+.param-field:last-child {
+  border-bottom: 0;
+}
+
+.param-field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 8px;
+}
+
+.param-field-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.param-field-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.param-field-input {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.param-field input,
+.param-field select {
+  width: 100%;
+  background: var(--bg-input);
+  border: 0;
+  border-radius: var(--radius-control);
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  outline: 0;
+  transition: box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.param-field input:focus,
+.param-field select:focus {
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-focus);
+}
+
+.param-field input::placeholder {
+  color: var(--text-tertiary);
+}
+
+#path-params-section[hidden],
+#query-params-section[hidden] {
+  display: none;
 }
 
 @keyframes overlay-in {
