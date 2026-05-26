@@ -1,5 +1,10 @@
 """add limit order and trailing stop alert strategies
 
+Downgrade safety: this migration refuses to downgrade while rows that depend
+on the new strategies / notification types still exist. Operators must migrate
+or delete those rows explicitly before rolling back; the downgrade must not
+silently discard user intents.
+
 Revision ID: 202605260001
 Revises: 202605210001
 Create Date: 2026-05-26 00:01:00
@@ -219,6 +224,32 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM trade_intents
+                WHERE strategy NOT IN ('buy_price_alert', 'sell_price_alert')
+            ) THEN
+                RAISE EXCEPTION
+                    'Cannot downgrade 202605260001: migrate or delete limit/trailing trade_intents first.';
+            END IF;
+
+            IF EXISTS (
+                SELECT 1
+                FROM notifications
+                WHERE type IN ('limit_order_triggered', 'trailing_stop_triggered')
+            ) THEN
+                RAISE EXCEPTION
+                    'Cannot downgrade 202605260001: migrate or delete limit/trailing notifications first.';
+            END IF;
+        END
+        $$;
+        """
+    )
+
     op.execute("ALTER TABLE notifications DROP CONSTRAINT ck_notifications_triggered_notification_intent")
     op.execute("ALTER TABLE notifications DROP CONSTRAINT ck_notifications_type")
     op.execute(
@@ -261,7 +292,6 @@ def downgrade() -> None:
     ):
         op.execute(f"ALTER TABLE trade_intents DROP CONSTRAINT {name}")
 
-    op.execute("DELETE FROM trade_intents WHERE strategy NOT IN ('buy_price_alert', 'sell_price_alert')")
     op.alter_column("trade_intents", "target_price_effective", existing_type=sa.Numeric(9, 4), nullable=False)
     op.alter_column("trade_intents", "target_price_original", existing_type=sa.Numeric(9, 4), nullable=False)
     op.drop_column("trade_intents", "baseline_updated_at")

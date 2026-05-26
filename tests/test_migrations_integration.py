@@ -87,6 +87,31 @@ def test_migration_downgrade_removes_v0_5_schema() -> None:
 
 
 @pytest.mark.integration
+def test_limit_trailing_migration_downgrade_refuses_to_delete_new_strategy_rows() -> None:
+    config = alembic_config()
+    command.downgrade(config, "base")
+    command.upgrade(config, "head")
+    engine = create_engine(get_settings().database_url or "")
+    try:
+        with engine.begin() as connection:
+            insert_symbol(connection, uuid4(), "2454")
+            connection.execute(
+                reflect_table(engine, "trade_intents")
+                .insert()
+                .values(**build_trade_intent(symbol="2454", strategy="limit_buy_order"))
+            )
+
+        with pytest.raises(Exception, match="Cannot downgrade 202605260001"):
+            command.downgrade(config, "202605210001")
+
+        with engine.begin() as connection:
+            connection.execute(sa.text("DELETE FROM trade_intents WHERE strategy = 'limit_buy_order'"))
+        command.downgrade(config, "base")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_trade_intent_rejects_non_positive_quantity(migrated_engine: Engine) -> None:
     symbol_id = uuid4()
     trade_intent = build_trade_intent(symbol="2330", quantity_lots=0)
