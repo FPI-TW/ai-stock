@@ -95,7 +95,7 @@ class QuoteEvaluationDispatcher:
                     )
                 if not result.should_trigger:
                     if result.baseline_updated_at is not None:
-                        db.commit()
+                        repo.commit()
                     continue
                 if result.trigger_price is None or result.trigger_reference_price_type is None:
                     raise RuntimeError(f"Evaluator returned should_trigger=True but trigger fields are None: {result}")

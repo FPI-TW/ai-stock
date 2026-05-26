@@ -80,7 +80,7 @@ def evaluate_quotes(
             )
         if not result.should_trigger:
             if result.baseline_updated_at is not None:
-                intent_repo._db.commit()  # noqa: SLF001
+                intent_repo.commit()
             continue
         if result.trigger_price is None or result.trigger_reference_price_type is None:
             raise RuntimeError(f"Evaluator returned should_trigger=True but trigger fields are None: {result}")

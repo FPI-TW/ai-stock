@@ -67,6 +67,16 @@ class IntentRepository:
     # public API
     # ------------------------------------------------------------------
 
+    def commit(self) -> None:
+        """Commit pending repository writes.
+
+        Most command paths own their transaction boundaries directly. This is
+        for system/dev evaluator paths that only have a repository dependency
+        but still need to persist non-trigger baseline updates.
+        """
+
+        self._db.commit()
+
     def create(
         self,
         owner_user_id: UUID,
