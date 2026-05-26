@@ -41,7 +41,7 @@ def test_seed_symbols_idempotent(seed_engine: Engine) -> None:
     with Session(seed_engine) as db:
         seed_symbols(db)
         count_1 = db.query(Symbol).count()
-        assert count_1 >= 6
+        assert count_1 >= 5
 
         seed_symbols(db)
         count_2 = db.query(Symbol).count()

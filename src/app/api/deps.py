@@ -85,8 +85,24 @@ def get_quote_provider(request: Request) -> QuoteProvider:
 
 QuoteProviderDep = Annotated[QuoteProvider, Depends(get_quote_provider)]
 
+CURRENT_PRICE_ALLOWED_SYMBOLS: frozenset[str] = frozenset({"2330", "2317", "0050", "00878"})
+
+
+def get_current_price_symbol(symbol: str) -> str:
+    if symbol not in CURRENT_PRICE_ALLOWED_SYMBOLS:
+        raise ApiError(
+            code=ErrorCode.CURRENT_PRICE_SYMBOL_NOT_ALLOWED,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            details={"symbol": symbol, "allowed": sorted(CURRENT_PRICE_ALLOWED_SYMBOLS)},
+        )
+    return symbol
+
+
+CurrentPriceSymbolDep = Annotated[str, Depends(get_current_price_symbol)]
+
 
 def get_current_price_provider(
+    _symbol: CurrentPriceSymbolDep,
     settings: SettingsDep,
     quote_provider: QuoteProviderDep,
 ) -> CurrentPriceProvider:
