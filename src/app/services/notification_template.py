@@ -104,7 +104,7 @@ def render_trailing_stop_triggered(
     if trail_mode == "percentage":
         mode_label = "百分比模式"
         trail_text = f"{format_price_str(trail_value).rstrip('0').rstrip('.')}%"
-        trigger_formula = f"最高 x {format_price_str(Decimal('100') - trail_value).rstrip('0').rstrip('.')}%"
+        trigger_formula = f"最高 × {format_price_str(Decimal('100') - trail_value).rstrip('0').rstrip('.')}%"
     else:
         mode_label = "固定點數模式"
         trail_text = f"NT${format_price_str(trail_value)}"

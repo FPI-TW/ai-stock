@@ -167,7 +167,7 @@ class TestRenderTrailingStopTriggered:
         assert title == "2330 移動出場已觸發"
         assert "策略：移動出場" in body
         assert "今日最高價：100.00" in body
-        assert "觸發價" in body
+        assert "觸發價（最高 × 95%）：95.00" in body
         assert "95.00" in body
         assert "實際觸發成交價：94.80（bid）" in body
         assert "僅通知" in body
