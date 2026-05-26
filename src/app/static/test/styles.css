@@ -1038,11 +1038,52 @@ textarea {
 /* User-view mode — iOS app feel                                              */
 /* ========================================================================= */
 
-#app[data-mode="user"] #main {
-  display: none;
+/* Mode switching — Dev / 使用者
+ *
+ * 把 #main 與 #user-view 都常駐 DOM、用 grid-area 疊在同一格，靠
+ * opacity + transform 做 iOS 風 cross-fade + 微 zoom 過渡。display
+ * 不是可動畫屬性，所以非當前 view 用 pointer-events: none + visibility
+ * + opacity:0 完全停用。
+ */
+
+#main,
+#user-view {
+  grid-row: 2;
+  grid-column: 1;
+  transition: opacity 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+              transform 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+              visibility 0s linear 0.32s;
 }
 
-#app[data-mode="dev"] #user-view,
+#app[data-mode="dev"] #main,
+#app[data-mode="user"] #user-view {
+  opacity: 1;
+  transform: none;
+  visibility: visible;
+  transition-delay: 0s;
+  pointer-events: auto;
+}
+
+#app[data-mode="user"] #main,
+#app[data-mode="dev"] #user-view {
+  opacity: 0;
+  transform: scale(0.985);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* 進入動畫起始狀態：稍微偏移以模擬「從另一邊滑進來」 */
+#app[data-mode="user"] #main {
+  transform: scale(0.985) translateY(-6px);
+}
+
+#app[data-mode="dev"] #user-view {
+  transform: scale(0.985) translateY(6px);
+}
+
+/* topbar 內 dev-only / user-only 元素：瞬間切換（避免 absolute 破 flex
+ * 排版）。主要 fade/scale 動畫由 #main / #user-view 撐起來，topbar 元素
+ * 看起來像是「跟著一起」改變即可。 */
 #app[data-mode="dev"] .topbar-user-only,
 #app[data-mode="user"] .topbar-dev-only {
   display: none !important;
@@ -1050,6 +1091,7 @@ textarea {
 
 #app[data-mode="user"] #topbar {
   background: rgba(255, 255, 255, 0.85);
+  transition: background 0.32s ease;
 }
 
 /* ---- Mode toggle (iOS segmented control) -------------------------------- */
@@ -1072,7 +1114,14 @@ textarea {
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.18s ease, color 0.18s ease, transform 0.1s ease;
+  transition: background 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+              color 0.2s ease,
+              box-shadow 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+              transform 0.1s ease;
+}
+
+.mode-toggle button:active {
+  transform: scale(0.96);
 }
 
 .mode-toggle button.active {
