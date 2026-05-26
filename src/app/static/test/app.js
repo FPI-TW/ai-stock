@@ -95,6 +95,11 @@ function renderEndpointList(filter = "") {
       const div = document.createElement("div");
       div.className = `endpoint-item ${ep.implemented ? "" : "disabled"}`;
       div.title = ep.implemented ? ep.label || "" : `${ep.label || ""} — 規劃中（${ep.ticket || ""}）`;
+      // method+path keys used by selectEndpoint to highlight the correct row
+      // (textContent.includes was matching any row whose path string contained
+      // the clicked path, so GET /trade-intents lit up POST /trade-intents).
+      div.dataset.endpointMethod = ep.method;
+      div.dataset.endpointPath = ep.path;
       const flag = ep.implemented
         ? `<span class="endpoint-status">✓</span>`
         : `<span class="endpoint-status">○</span>`;
@@ -138,12 +143,9 @@ function selectEndpoint(ep) {
   state.selected = ep;
 
   document.querySelectorAll(".endpoint-item.active").forEach((el) => el.classList.remove("active"));
-  for (const el of document.querySelectorAll(".endpoint-item")) {
-    if (el.textContent.includes(ep.path)) {
-      el.classList.add("active");
-      break;
-    }
-  }
+  const selector = `.endpoint-item[data-endpoint-method="${ep.method}"][data-endpoint-path="${CSS.escape(ep.path)}"]`;
+  const match = document.querySelector(selector);
+  if (match) match.classList.add("active");
 
   const methodEl = document.getElementById("req-method");
   methodEl.textContent = ep.method;
