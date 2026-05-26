@@ -18,6 +18,11 @@ def test_test_page_served_in_local_mode(client_factory: ClientFactory) -> None:
     assert "ai-stock /test" in body
     assert "/test-assets/app.js" in body
     assert "/test-assets/styles.css" in body
+    # User-view mode sentinels (added in /test 加 使用者視角 模式 PR)
+    assert 'id="user-view"' in body
+    assert 'id="toast-container"' in body
+    assert 'id="sheet-overlay"' in body
+    assert "使用者" in body  # mode toggle label
 
 
 def test_test_assets_served_in_local_mode(client_factory: ClientFactory) -> None:
@@ -25,6 +30,7 @@ def test_test_assets_served_in_local_mode(client_factory: ClientFactory) -> None
     assert client.get("/test-assets/app.js").status_code == 200
     assert client.get("/test-assets/styles.css").status_code == 200
     assert client.get("/test-assets/endpoints.js").status_code == 200
+    assert client.get("/test-assets/user-view.js").status_code == 200
 
 
 def test_test_assets_reject_path_traversal(client_factory: ClientFactory) -> None:
