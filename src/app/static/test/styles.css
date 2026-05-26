@@ -283,18 +283,35 @@ textarea {
 .topbar-identity select {
   appearance: none;
   -webkit-appearance: none;
-  background: transparent
-    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' width='10' height='10'><path fill='rgba(60,60,67,0.6)' d='M6 8L1.5 3.5h9z'/></svg>")
-    no-repeat right 6px center;
-  background-size: 10px;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='14' height='14'><path fill='none' stroke='rgba(60,60,67,0.6)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M4 6.5l4 4 4-4'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0 center;
+  background-size: 14px;
   border: 0;
   outline: 0;
-  padding: 0 18px 0 0;
+  padding: 4px 22px 4px 0;
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
   cursor: pointer;
   font-family: inherit;
+  border-radius: 6px;
+  transition: background-color 0.15s ease;
+}
+
+.topbar-identity select:hover {
+  background-color: var(--bg-hover);
+  padding-left: 6px;
+  padding-right: 24px;
+  margin-left: -6px;
+}
+
+.topbar-identity select:focus-visible {
+  background-color: var(--bg-active);
+  padding-left: 6px;
+  padding-right: 24px;
+  margin-left: -6px;
 }
 
 /* ---- Actions ---------------------------------------------------------- */
@@ -730,21 +747,38 @@ textarea {
   appearance: none;
   -webkit-appearance: none;
   background-color: var(--bg-elevated);
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' width='10' height='10'><path fill='%23007aff' d='M6 8L1.5 3.5h9z'/></svg>");
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='14' height='14'><path fill='none' stroke='%23007aff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M4 6.5l4 4 4-4'/></svg>");
   background-repeat: no-repeat;
-  background-position: right 14px center;
-  background-size: 10px;
+  background-position: right 12px center;
+  background-size: 14px;
   color: var(--accent);
-  border: 1px solid rgba(0, 122, 255, 0.2);
-  padding: 9px 34px 9px 16px;
+  border: 1px solid rgba(0, 122, 255, 0.22);
+  padding: 9px 36px 9px 16px;
   border-radius: var(--radius-pill);
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
+  font-family: inherit;
+  outline: 0;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
 #example-select:hover {
   background-color: rgba(0, 122, 255, 0.08);
+  border-color: rgba(0, 122, 255, 0.35);
+}
+
+#example-select:focus-visible {
+  background-color: rgba(0, 122, 255, 0.1);
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+
+#example-select option {
+  background: var(--bg-elevated);
+  color: var(--text);
+  padding: 6px 12px;
+  font-weight: 500;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1718,16 +1752,35 @@ textarea {
   font-size: 13px;
   outline: 0;
   transition: box-shadow 0.15s ease, background 0.15s ease;
+  color: var(--text);
+}
+
+.param-field select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='14' height='14'><path fill='none' stroke='rgba(60,60,67,0.6)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M4 6.5l4 4 4-4'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 14px;
+  padding-right: 32px;
+  cursor: pointer;
+  font-family: inherit;
 }
 
 .param-field input:focus,
 .param-field select:focus {
-  background: var(--bg-elevated);
+  background-color: var(--bg-elevated);
   box-shadow: var(--shadow-focus);
 }
 
 .param-field input::placeholder {
   color: var(--text-tertiary);
+}
+
+.param-field select option {
+  background: var(--bg-elevated);
+  color: var(--text);
+  padding: 6px 12px;
 }
 
 #path-params-section[hidden],
