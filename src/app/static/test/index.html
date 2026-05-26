@@ -3,24 +3,26 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#ffffff" />
   <title>ai-stock /test</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="/test-assets/styles.css" />
 </head>
 <body>
   <div id="app">
     <header id="topbar">
       <h1>ai-stock /test</h1>
-      <span class="field">Base:&nbsp;<strong id="base-url">—</strong></span>
-      <span class="field">User:&nbsp;
+      <span class="field">Base&nbsp;<strong id="base-url">—</strong></span>
+      <span class="field">User&nbsp;
         <select id="user-select" title="Sent as X-Local-User-Id header (LOCAL_MODE only)">
-          <option value="default">default (LOCAL_USER_ID)</option>
+          <option value="default">default</option>
         </select>
       </span>
-      <span class="field">Clock:&nbsp;<strong id="clock-display">system</strong></span>
-      <span class="field" style="margin-left:auto">
+      <span class="field">Clock&nbsp;<strong id="clock-display">system</strong></span>
+      <div class="topbar-actions">
         <button id="refresh-state-btn" title="GET /dev/server-state">Refresh state</button>
         <button id="reset-all-btn" title="Reset clock + clear history">Reset all</button>
-      </span>
+      </div>
     </header>
 
     <main id="main">
@@ -30,50 +32,54 @@
       </aside>
 
       <section id="request-pane">
-        <h2>
-          <span id="req-method" class="method">—</span>
-          <span id="req-path" class="path">select an endpoint</span>
-        </h2>
+        <div class="card">
+          <div class="pane-title">
+            <span id="req-method" class="method method-placeholder">—</span>
+            <span id="req-path" class="path path-placeholder">select an endpoint</span>
+          </div>
 
-        <label for="req-path-params">Path params</label>
-        <input id="req-path-params" type="text" placeholder='{"intent_id":"…"}' />
+          <label for="req-path-params">Path params</label>
+          <input id="req-path-params" type="text" placeholder='{"intent_id":"…"}' />
 
-        <label for="req-query">Query params</label>
-        <input id="req-query" type="text" placeholder='{"pageSize":50}' />
+          <label for="req-query">Query params</label>
+          <input id="req-query" type="text" placeholder='{"pageSize":50}' />
 
-        <label for="req-headers">Headers (JSON, in addition to X-Local-User-Id)</label>
-        <input id="req-headers" type="text" placeholder='{"X-Request-Id":"my-id"}' />
+          <label for="req-headers">Headers (JSON, in addition to X-Local-User-Id)</label>
+          <input id="req-headers" type="text" placeholder='{"X-Request-Id":"my-id"}' />
 
-        <label for="req-body">Body (JSON, ignored for GET)</label>
-        <textarea id="req-body" spellcheck="false"></textarea>
+          <label for="req-body">Body (JSON, ignored for GET)</label>
+          <textarea id="req-body" spellcheck="false"></textarea>
 
-        <div id="request-actions">
-          <button id="send-btn" disabled>▶ Send</button>
-          <select id="example-select" title="Fill body with an example">
-            <option value="">Fill example…</option>
-          </select>
+          <div id="request-actions">
+            <button id="send-btn" disabled>Send</button>
+            <select id="example-select" title="Fill body with an example">
+              <option value="">Fill example…</option>
+            </select>
+          </div>
         </div>
       </section>
 
       <section id="response-pane">
-        <div id="response-error-banner" class="hidden"></div>
-        <div id="response-meta">
-          <span class="status" id="resp-status">—</span>
-          <span class="duration" id="resp-duration"></span>
-          <span class="req-id" id="resp-req-id"></span>
+        <div class="card">
+          <div id="response-error-banner" class="hidden"></div>
+          <div id="response-meta">
+            <span class="status" id="resp-status">—</span>
+            <span class="duration" id="resp-duration"></span>
+            <span class="req-id" id="resp-req-id"></span>
+          </div>
+          <pre id="response-body">(no request sent yet)</pre>
+          <div class="history-title">History (last 5)</div>
+          <ul id="history-list"></ul>
         </div>
-        <pre id="response-body">(no request sent yet)</pre>
-        <h3 style="margin-top:16px;font-size:11px;text-transform:uppercase;color:var(--text-dim)">History (last 5)</h3>
-        <ul id="history-list"></ul>
       </section>
     </main>
 
     <footer id="demo-pane">
       <h2>Demo flows</h2>
       <div id="demo-buttons">
-        <button data-demo="buy_price_alert">▶ E2E: buy_price_alert 觸發</button>
-        <button data-demo="limit_buy_order">▶ E2E: limit_buy_order 觸發</button>
-        <button data-demo="multi_user">▶ Multi-user owner-scoping demo</button>
+        <button data-demo="buy_price_alert">E2E · buy_price_alert 觸發</button>
+        <button data-demo="limit_buy_order">E2E · limit_buy_order 觸發</button>
+        <button data-demo="multi_user">Multi-user owner-scoping</button>
       </div>
       <pre id="demo-log">(no demo run yet)</pre>
     </footer>

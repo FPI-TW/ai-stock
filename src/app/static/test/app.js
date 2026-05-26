@@ -80,24 +80,38 @@ function renderEndpointList(filter = "") {
   }
 
   for (const [group, items] of Object.entries(groups)) {
-    const h = document.createElement("h2");
-    h.textContent = group;
-    container.appendChild(h);
+    const section = document.createElement("section");
+    section.className = "ep-group";
+
+    const header = document.createElement("header");
+    header.className = "ep-group-title";
+    header.textContent = group;
+    section.appendChild(header);
+
+    const list = document.createElement("div");
+    list.className = "ep-group-items";
+
     for (const ep of items) {
       const div = document.createElement("div");
       div.className = `endpoint-item ${ep.implemented ? "" : "disabled"}`;
-      div.title = ep.label || "";
-      const flag = ep.implemented ? "✅" : "📝";
+      div.title = ep.implemented ? ep.label || "" : `${ep.label || ""} — 規劃中（${ep.ticket || ""}）`;
+      const flag = ep.implemented
+        ? `<span class="endpoint-status">✓</span>`
+        : `<span class="endpoint-status">○</span>`;
       div.innerHTML = `
         <span class="endpoint-method ${ep.method}">${ep.method}</span>
-        <span class="endpoint-path">${flag} ${ep.path}</span>
+        <span class="endpoint-path">${ep.path}</span>
         ${ep.ticket ? `<span class="endpoint-ticket">${ep.ticket}</span>` : ""}
+        ${flag}
       `;
       if (ep.implemented) {
         div.addEventListener("click", () => selectEndpoint(ep));
       }
-      container.appendChild(div);
+      list.appendChild(div);
     }
+
+    section.appendChild(list);
+    container.appendChild(section);
   }
 }
 
@@ -131,8 +145,12 @@ function selectEndpoint(ep) {
     }
   }
 
-  document.getElementById("req-method").textContent = ep.method;
-  document.getElementById("req-path").textContent = ep.path;
+  const methodEl = document.getElementById("req-method");
+  methodEl.textContent = ep.method;
+  methodEl.className = `method ${ep.method}`;
+  const pathEl = document.getElementById("req-path");
+  pathEl.textContent = ep.path;
+  pathEl.classList.remove("path-placeholder");
   document.getElementById("req-path-params").value = ep.pathParams ? JSON.stringify(ep.pathParams) : "";
   document.getElementById("req-query").value = ep.query ? JSON.stringify(ep.query) : "";
   document.getElementById("req-headers").value = "";
@@ -176,8 +194,8 @@ function renderHistory() {
     li.className = "history-item";
     li.innerHTML = `
       <span class="hi-status s${Math.floor(item.status / 100)}xx">${item.status}</span>
-      <span>${item.method}</span>
-      <span>${item.path}</span>
+      <span class="hi-method">${item.method}</span>
+      <span class="hi-path">${item.path}</span>
     `;
     li.addEventListener("click", () => {
       renderResponse(item.status, item.duration, item.requestId, item.body);

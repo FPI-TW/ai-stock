@@ -1,22 +1,61 @@
-/* ai-stock /test page — grid layout + dark theme.
- * No external CSS dependencies. Variables at :root for easy theming.
+/* ai-stock /test page — iOS-inspired light theme.
+ *
+ * Pure vanilla CSS. No external CSS dependencies, no build step.
+ * Design tokens are CSS variables on :root so a future dark-mode toggle
+ * can override them via a `[data-theme="dark"]` selector without touching
+ * any component rule.
  */
 
 :root {
-  --bg: #1a1d23;
-  --bg-elevated: #242830;
-  --bg-input: #1e2128;
-  --border: #2f343d;
-  --text: #e4e6eb;
-  --text-dim: #9aa0a8;
-  --accent: #4a9eff;
-  --accent-hover: #6ab1ff;
-  --success: #4caf50;
-  --warn: #ffa726;
-  --error: #ef5350;
-  --disabled: #4a4f57;
-  --mono: ui-monospace, "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+  /* color — iOS HIG light system */
+  --bg-grouped: rgb(242, 242, 247);
+  --bg-elevated: #ffffff;
+  --bg-input: rgba(120, 120, 128, 0.12);
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-active: rgba(0, 122, 255, 0.08);
+
+  --text: rgb(0, 0, 0);
+  --text-secondary: rgba(60, 60, 67, 0.6);
+  --text-tertiary: rgba(60, 60, 67, 0.3);
+  --separator: rgba(60, 60, 67, 0.12);
+
+  --accent: #007aff;
+  --accent-hover: #0040dd;
+  --success: #34c759;
+  --success-text: #248a3d;
+  --warn: #ff9500;
+  --warn-text: #c93400;
+  --error: #ff3b30;
+  --error-text: #d70015;
+
+  /* method badge tints */
+  --method-get-bg: rgba(52, 199, 89, 0.16);
+  --method-get-text: #248a3d;
+  --method-post-bg: rgba(0, 122, 255, 0.16);
+  --method-post-text: #0040dd;
+  --method-put-bg: rgba(255, 149, 0, 0.18);
+  --method-put-text: #c93400;
+  --method-delete-bg: rgba(255, 59, 48, 0.16);
+  --method-delete-text: #d70015;
+
+  /* typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+  /* shape */
+  --radius-card: 12px;
+  --radius-control: 10px;
+  --radius-pill: 999px;
+
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-elevated: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-focus: 0 0 0 4px rgba(0, 122, 255, 0.2);
 }
+
+/* ------------------------------------------------------------------------- */
+/* Reset + base                                                              */
+/* ------------------------------------------------------------------------- */
 
 * {
   box-sizing: border-box;
@@ -27,9 +66,19 @@
 html,
 body {
   height: 100%;
-  background: var(--bg);
+  background: var(--bg-grouped);
   color: var(--text);
-  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 15px/1.47 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
 }
 
 #app {
@@ -39,119 +88,194 @@ body {
   height: 100vh;
 }
 
-/* ---- top bar ----------------------------------------------------------*/
+/* ------------------------------------------------------------------------- */
+/* Top bar — frosted glass iOS navigation                                    */
+/* ------------------------------------------------------------------------- */
+
 #topbar {
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border);
-  padding: 8px 16px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
-  gap: 16px;
   align-items: center;
+  gap: 16px;
   flex-wrap: wrap;
+  height: 56px;
+  padding: 0 20px;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--separator);
 }
 
 #topbar h1 {
-  font-size: 14px;
+  font-size: 19px;
   font-weight: 600;
-  color: var(--text);
-  margin-right: 12px;
+  letter-spacing: -0.01em;
 }
 
 #topbar .field {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-dim);
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-control);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 #topbar .field strong {
   color: var(--text);
-  font-family: var(--mono);
-}
-
-#topbar select,
-#topbar input,
-#topbar button {
-  background: var(--bg-input);
-  color: var(--text);
-  border: 1px solid var(--border);
-  padding: 4px 8px;
-  border-radius: 4px;
+  font-family: var(--font-mono);
   font-size: 12px;
-  font-family: inherit;
+}
+
+#topbar .field select {
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--font-mono);
+}
+
+.topbar-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
 }
 
 #topbar button {
+  background: transparent;
+  color: var(--accent);
+  border: 0;
+  padding: 6px 12px;
+  border-radius: var(--radius-control);
+  font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
-  background: var(--bg);
 }
 
 #topbar button:hover {
-  border-color: var(--accent);
+  background: var(--bg-hover);
 }
 
-/* ---- main 3-col grid -------------------------------------------------*/
+#topbar #reset-all-btn {
+  color: var(--error);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Main 3-column layout                                                       */
+/* ------------------------------------------------------------------------- */
+
 #main {
   display: grid;
-  grid-template-columns: 280px 1fr 1fr;
+  grid-template-columns: 320px 1fr 1fr;
+  gap: 20px;
+  padding: 20px;
   overflow: hidden;
+  min-width: 0;
 }
 
 #endpoint-pane,
 #request-pane,
 #response-pane {
-  border-right: 1px solid var(--border);
   overflow: auto;
-  padding: 12px;
+  min-width: 0;
 }
 
-#response-pane {
-  border-right: none;
+/* Cards — shared elevated surface */
+.card {
+  background: var(--bg-elevated);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
 }
 
-/* ---- endpoint list ---------------------------------------------------*/
-#endpoint-pane h2 {
-  font-size: 11px;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  margin: 12px 0 6px;
-  letter-spacing: 0.05em;
-}
-
-#endpoint-pane h2:first-child {
-  margin-top: 0;
-}
+/* ------------------------------------------------------------------------- */
+/* Endpoint list — inset grouped table, like iOS Settings                    */
+/* ------------------------------------------------------------------------- */
 
 #endpoint-filter {
   width: 100%;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: var(--bg-elevated);
+  border: 0;
+  border-radius: var(--radius-control);
+  font-size: 14px;
+  outline: 0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.15s ease;
+}
+
+#endpoint-filter::placeholder {
+  color: var(--text-tertiary);
+}
+
+#endpoint-filter:focus {
+  box-shadow: var(--shadow-focus);
+}
+
+.ep-group {
+  margin-bottom: 20px;
+}
+
+.ep-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  padding: 0 16px 6px;
+}
+
+.ep-group-items {
+  background: var(--bg-elevated);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
 }
 
 .endpoint-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-family: var(--mono);
-  font-size: 12px;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--separator);
+  font-size: 14px;
   color: var(--text);
-  border: 1px solid transparent;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.12s ease;
+}
+
+.endpoint-item:last-child {
+  border-bottom: 0;
 }
 
 .endpoint-item:hover {
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
 }
 
 .endpoint-item.active {
-  background: var(--bg-elevated);
-  border-color: var(--accent);
+  background: var(--bg-active);
+}
+
+.endpoint-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent);
 }
 
 .endpoint-item.disabled {
-  color: var(--disabled);
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -160,262 +284,440 @@ body {
 }
 
 .endpoint-method {
-  font-weight: 600;
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: var(--bg-input);
-  color: var(--text-dim);
-  min-width: 38px;
+  display: inline-block;
+  min-width: 50px;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  font: 600 11px/1 var(--font-mono);
+  letter-spacing: 0.04em;
   text-align: center;
+  flex-shrink: 0;
 }
 
-.endpoint-method.GET { color: #66bb6a; }
-.endpoint-method.POST { color: #5c9eff; }
-.endpoint-method.PUT { color: #ffa726; }
-.endpoint-method.DELETE { color: #ef5350; }
+.endpoint-method.GET {
+  background: var(--method-get-bg);
+  color: var(--method-get-text);
+}
+
+.endpoint-method.POST {
+  background: var(--method-post-bg);
+  color: var(--method-post-text);
+}
+
+.endpoint-method.PUT {
+  background: var(--method-put-bg);
+  color: var(--method-put-text);
+}
+
+.endpoint-method.DELETE {
+  background: var(--method-delete-bg);
+  color: var(--method-delete-text);
+}
 
 .endpoint-path {
   flex: 1;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.endpoint-status {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.endpoint-ticket {
+  font: 500 10px/1 var(--font-mono);
+  letter-spacing: 0.04em;
+  padding: 3px 7px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 149, 0, 0.16);
+  color: var(--warn-text);
+  flex-shrink: 0;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Request pane — iOS form                                                   */
+/* ------------------------------------------------------------------------- */
+
+#request-pane .card,
+#response-pane .card {
+  padding: 20px;
+}
+
+.pane-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--separator);
+}
+
+.pane-title .method {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  font: 600 12px/1 var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
+.pane-title .method-placeholder {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.pane-title .method.GET    { background: var(--method-get-bg); color: var(--method-get-text); }
+.pane-title .method.POST   { background: var(--method-post-bg); color: var(--method-post-text); }
+.pane-title .method.PUT    { background: var(--method-put-bg); color: var(--method-put-text); }
+.pane-title .method.DELETE { background: var(--method-delete-bg); color: var(--method-delete-text); }
+
+.pane-title .path {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.endpoint-ticket {
-  font-size: 10px;
-  color: var(--warn);
-  background: rgba(255, 167, 38, 0.1);
-  padding: 1px 4px;
-  border-radius: 3px;
-}
-
-/* ---- request pane ----------------------------------------------------*/
-#request-pane h2 {
-  font-size: 13px;
-  margin-bottom: 12px;
-}
-
-#request-pane h2 .method {
-  font-family: var(--mono);
-  font-weight: 700;
-  margin-right: 8px;
-}
-
-#request-pane h2 .path {
-  font-family: var(--mono);
-  color: var(--text-dim);
+.pane-title .path-placeholder {
+  color: var(--text-tertiary);
+  font-weight: 400;
 }
 
 #request-pane label {
   display: block;
   font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
-  color: var(--text-dim);
-  margin: 12px 0 4px;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin: 14px 0 6px;
+}
+
+#request-pane label:first-of-type {
+  margin-top: 0;
 }
 
 #request-pane input[type="text"],
 #request-pane textarea {
   width: 100%;
   background: var(--bg-input);
+  border: 0;
+  border-radius: var(--radius-control);
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 6px 8px;
-  font-family: var(--mono);
-  font-size: 12px;
+  outline: 0;
+  transition: box-shadow 0.15s ease, background 0.15s ease;
+}
+
+#request-pane input[type="text"]:focus,
+#request-pane textarea:focus {
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-focus);
+}
+
+#request-pane input[type="text"]::placeholder,
+#request-pane textarea::placeholder {
+  color: var(--text-tertiary);
 }
 
 #request-pane textarea {
-  min-height: 200px;
+  min-height: 220px;
   resize: vertical;
+  line-height: 1.5;
 }
 
 #request-actions {
   display: flex;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 20px;
   align-items: center;
 }
 
 #send-btn {
   background: var(--accent);
   color: white;
-  border: none;
-  padding: 8px 16px;
-  border-radius: 4px;
+  border: 0;
+  padding: 10px 22px;
+  border-radius: var(--radius-pill);
   cursor: pointer;
+  font-size: 15px;
   font-weight: 600;
-  font-size: 13px;
+  transition: background 0.15s ease, transform 0.1s ease;
 }
 
-#send-btn:hover {
+#send-btn:hover:not(:disabled) {
   background: var(--accent-hover);
 }
 
+#send-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
 #send-btn:disabled {
-  background: var(--disabled);
+  background: var(--text-tertiary);
   cursor: not-allowed;
 }
 
 #example-select {
-  background: var(--bg-input);
-  color: var(--text);
-  border: 1px solid var(--border);
-  padding: 6px 10px;
-  border-radius: 4px;
+  background: var(--bg-elevated);
+  color: var(--accent);
+  border: 1px solid rgba(0, 122, 255, 0.2);
+  padding: 9px 14px;
+  border-radius: var(--radius-pill);
   cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
 }
 
-/* ---- response pane ---------------------------------------------------*/
-#response-meta {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  margin-bottom: 12px;
-  font-family: var(--mono);
-  font-size: 12px;
+#example-select:hover {
+  background: rgba(0, 122, 255, 0.08);
 }
 
-#response-meta .status {
-  font-weight: 700;
-  padding: 2px 8px;
-  border-radius: 3px;
-}
-
-#response-meta .status.s2xx { color: var(--success); background: rgba(76, 175, 80, 0.12); }
-#response-meta .status.s4xx { color: var(--warn); background: rgba(255, 167, 38, 0.12); }
-#response-meta .status.s5xx { color: var(--error); background: rgba(239, 83, 80, 0.12); }
-
-#response-meta .duration,
-#response-meta .req-id {
-  color: var(--text-dim);
-}
-
-#response-body {
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 12px;
-  font-family: var(--mono);
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 50vh;
-  overflow: auto;
-}
+/* ------------------------------------------------------------------------- */
+/* Response pane                                                              */
+/* ------------------------------------------------------------------------- */
 
 #response-error-banner {
-  background: rgba(239, 83, 80, 0.1);
-  border: 1px solid var(--error);
-  border-radius: 4px;
-  padding: 8px 12px;
-  margin-bottom: 12px;
-  font-family: var(--mono);
-  font-size: 12px;
+  background: rgba(255, 59, 48, 0.1);
+  border-left: 4px solid var(--error);
+  border-radius: var(--radius-control);
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--error-text);
 }
 
 #response-error-banner.hidden {
   display: none;
 }
 
-#history-list {
-  list-style: none;
-  margin-top: 16px;
-  max-height: 30vh;
-  overflow: auto;
+#response-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
 }
 
-#history-list h3 {
+#response-meta .status {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font: 600 12px/1 var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
+#response-meta .status.s2xx { background: var(--method-get-bg);  color: var(--success-text); }
+#response-meta .status.s4xx { background: var(--method-put-bg);  color: var(--warn-text); }
+#response-meta .status.s5xx { background: var(--method-delete-bg); color: var(--error-text); }
+#response-meta .status:not(.s2xx):not(.s4xx):not(.s5xx) {
+  background: var(--bg-input);
+  color: var(--text-secondary);
+}
+
+#response-meta .duration,
+#response-meta .req-id {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+#response-body {
+  background: var(--bg-grouped);
+  border-radius: var(--radius-control);
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 50vh;
+  overflow: auto;
+  color: var(--text);
+}
+
+.history-title {
+  margin-top: 20px;
   font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: 6px;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  padding: 0 4px 8px;
+}
+
+#history-list {
+  list-style: none;
+  background: var(--bg-grouped);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+  max-height: 30vh;
+  overflow-y: auto;
 }
 
 .history-item {
-  padding: 4px 8px;
-  border-radius: 3px;
-  cursor: pointer;
-  font-family: var(--mono);
-  font-size: 11px;
   display: flex;
-  gap: 8px;
   align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--separator);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.history-item:last-child {
+  border-bottom: 0;
 }
 
 .history-item:hover {
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
 }
 
 .history-item .hi-status {
   font-weight: 600;
   min-width: 36px;
+  text-align: center;
+  padding: 2px 6px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
 }
 
-.history-item .hi-status.s2xx { color: var(--success); }
-.history-item .hi-status.s4xx { color: var(--warn); }
-.history-item .hi-status.s5xx { color: var(--error); }
+.history-item .hi-status.s2xx { background: var(--method-get-bg);  color: var(--success-text); }
+.history-item .hi-status.s4xx { background: var(--method-put-bg);  color: var(--warn-text); }
+.history-item .hi-status.s5xx { background: var(--method-delete-bg); color: var(--error-text); }
 
-/* ---- demo flow panel -------------------------------------------------*/
+.history-item .hi-method {
+  color: var(--text-secondary);
+  font-weight: 500;
+  min-width: 40px;
+}
+
+.history-item .hi-path {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Demo flow panel                                                            */
+/* ------------------------------------------------------------------------- */
+
 #demo-pane {
   background: var(--bg-elevated);
-  border-top: 1px solid var(--border);
-  padding: 12px 16px;
+  border-top: 1px solid var(--separator);
+  padding: 16px 20px 20px;
   max-height: 240px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 #demo-pane h2 {
   font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
-  color: var(--text-dim);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
 }
 
 #demo-buttons {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
 #demo-buttons button {
   background: var(--bg-input);
-  color: var(--text);
-  border: 1px solid var(--border);
-  padding: 6px 12px;
-  border-radius: 4px;
+  color: var(--accent);
+  border: 0;
+  padding: 8px 16px;
+  border-radius: var(--radius-pill);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s ease, transform 0.1s ease;
 }
 
 #demo-buttons button:hover {
-  border-color: var(--accent);
+  background: rgba(0, 122, 255, 0.12);
+}
+
+#demo-buttons button:active {
+  transform: scale(0.97);
 }
 
 #demo-buttons button:disabled {
-  color: var(--disabled);
+  color: var(--text-tertiary);
   cursor: not-allowed;
 }
 
 #demo-log {
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 8px;
-  font-family: var(--mono);
-  font-size: 11px;
+  background: var(--bg-grouped);
+  border-radius: var(--radius-control);
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
   flex: 1;
   overflow: auto;
   white-space: pre-wrap;
-  color: var(--text-dim);
+  color: var(--text-secondary);
 }
 
-.log-line.ok { color: var(--success); }
-.log-line.warn { color: var(--warn); }
-.log-line.err { color: var(--error); }
+/* ------------------------------------------------------------------------- */
+/* Scrollbars — iOS feel                                                      */
+/* ------------------------------------------------------------------------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(60, 60, 67, 0.3) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(60, 60, 67, 0.3);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(60, 60, 67, 0.5);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Narrow viewport — keep usable down to ~960px                              */
+/* ------------------------------------------------------------------------- */
+
+@media (max-width: 1100px) {
+  #main {
+    grid-template-columns: 280px 1fr;
+  }
+  #response-pane {
+    grid-column: 1 / -1;
+  }
+}
