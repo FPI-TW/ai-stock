@@ -125,17 +125,18 @@ function renderUserSelect() {
   sel.innerHTML = "";
   const defaultOpt = document.createElement("option");
   defaultOpt.value = "default";
-  defaultOpt.textContent = "default (LOCAL_USER_ID)";
+  defaultOpt.textContent = "預設使用者";
   sel.appendChild(defaultOpt);
   for (const [label, uuid] of Object.entries(USERS)) {
     const opt = document.createElement("option");
     opt.value = label;
-    opt.textContent = `${label} (${uuid.slice(0, 8)}…)`;
+    opt.textContent = `${label} · ${uuid.slice(0, 8)}…`;
     sel.appendChild(opt);
   }
   sel.value = getSelectedUser();
   sel.addEventListener("change", () => {
     setSelectedUser(sel.value);
+    updateUserAvatars();
   });
 }
 
@@ -627,21 +628,72 @@ const DEMOS = {
 // ---------------------------------------------------------------------------
 
 async function refreshServerState() {
+  await Promise.all([pollServerHealth(), pollClockState()]);
+  updateUserAvatars();
+}
+
+async function pollServerHealth() {
+  const dot = document.getElementById("server-status-dot");
+  const label = document.getElementById("server-status-label");
+  if (!dot || !label) return;
+  try {
+    const resp = await fetch("/health", { headers: { "Content-Type": "application/json" } });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const body = await resp.json();
+    const dbOk = body?.data?.database === "ok";
+    dot.dataset.status = dbOk ? "ok" : "degraded";
+    label.textContent = dbOk ? "服務正常" : "DB 連線異常";
+  } catch (_) {
+    dot.dataset.status = "down";
+    label.textContent = "無法連線";
+  }
+}
+
+async function pollClockState() {
+  const display = document.getElementById("clock-display");
+  if (!display) return;
   try {
     const resp = await fetch("/dev/server-state", { headers: buildHeaders({}) });
     if (!resp.ok) {
-      document.getElementById("clock-display").textContent = "system (state n/a)";
+      display.textContent = "系統時間";
       return;
     }
     const body = await resp.json();
     const clock = body?.data?.clock;
-    const display = clock
-      ? `${clock.currentTaipei}${clock.isFrozen ? " 🧊" : ""}${clock.withinRegularSession ? " 盤中" : " 盤外"}`
-      : "system";
-    document.getElementById("clock-display").textContent = display;
+    if (!clock) {
+      display.textContent = "系統時間";
+      return;
+    }
+    const t = formatTaipeiTime(clock.currentTaipei);
+    const session = clock.withinRegularSession ? "盤中" : "盤外";
+    const frozen = clock.isFrozen ? "🧊 " : "";
+    display.textContent = `${frozen}${t} · ${session}`;
   } catch (_) {
-    document.getElementById("clock-display").textContent = "system";
+    display.textContent = "系統時間";
   }
+}
+
+function formatTaipeiTime(iso) {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString("zh-TW", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "Asia/Taipei",
+    });
+  } catch (_) {
+    return "系統時間";
+  }
+}
+
+function updateUserAvatars() {
+  const label = getSelectedUser();
+  const initial = label === "default" ? "D" : (label[0] || "?").toUpperCase();
+  const devAvatar = document.getElementById("dev-user-avatar");
+  const userAvatar = document.getElementById("user-mode-avatar");
+  if (devAvatar) devAvatar.textContent = initial;
+  if (userAvatar) userAvatar.textContent = initial;
 }
 
 // ---------------------------------------------------------------------------
