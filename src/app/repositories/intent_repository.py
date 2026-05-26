@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, SessionTransaction
+from sqlalchemy.sql import Select
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.db.models.core import Symbol, TradeIntent
@@ -21,7 +22,7 @@ from app.domain.trade_intent import (
 )
 
 
-def _to_domain(row: TradeIntent, security_type: SecurityType = SecurityType.STOCK) -> TradeIntentData:
+def _to_domain(row: TradeIntent, security_type: SecurityType) -> TradeIntentData:
     return TradeIntentData(
         id=row.id,
         owner_user_id=row.owner_user_id,
@@ -57,6 +58,10 @@ def _nullable_equals(column: object, value: object) -> ColumnElement[bool]:
     if value is None:
         return comparable.is_(None)
     return comparable == value
+
+
+def _select_intent_with_symbol_type() -> Select[tuple[TradeIntent, str]]:
+    return select(TradeIntent, Symbol.instrument_type).join(Symbol, TradeIntent.symbol == Symbol.symbol)
 
 
 class IntentRepository:
@@ -181,10 +186,13 @@ class IntentRepository:
         self._db.execute(update(TradeIntent).where(TradeIntent.id == intent_id).values(**values))
 
     def find_by_id(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
-        row = self._db.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one_or_none()
+        result = self._db.execute(_select_intent_with_symbol_type().where(TradeIntent.id == intent_id)).one_or_none()
+        if result is None:
+            raise IntentNotFoundError(intent_id)
+        row, instrument_type = result
         if row is None or row.owner_user_id != owner_user_id:
             raise IntentNotFoundError(intent_id)
-        return _to_domain(row)
+        return _to_domain(row, SecurityType(instrument_type))
 
     def list_by_owner(
         self,
@@ -196,7 +204,7 @@ class IntentRepository:
         effective_statuses = set(statuses) if statuses else None
         is_terminal_only = effective_statuses is not None and effective_statuses.issubset(TERMINAL_STATUSES)
 
-        stmt = select(TradeIntent).where(TradeIntent.owner_user_id == owner_user_id)
+        stmt = _select_intent_with_symbol_type().where(TradeIntent.owner_user_id == owner_user_id)
         if statuses:
             stmt = stmt.where(TradeIntent.status.in_(statuses))
 
@@ -242,12 +250,12 @@ class IntentRepository:
                     )
                 )
 
-        rows = list(self._db.execute(stmt.limit(page_size + 1)).scalars().all())
+        rows = list(self._db.execute(stmt.limit(page_size + 1)).all())
         has_more = len(rows) > page_size
         page = rows[:page_size]
 
-        next_cursor = str(page[-1].id) if has_more and page else None
-        return [_to_domain(r) for r in page], next_cursor
+        next_cursor = str(page[-1][0].id) if has_more and page else None
+        return [_to_domain(row, SecurityType(instrument_type)) for row, instrument_type in page], next_cursor
 
     def system_list_active_symbols(self) -> list[str]:
         """Return distinct symbols with at least one active intent (owner-agnostic).
@@ -271,9 +279,7 @@ class IntentRepository:
         if not symbols:
             return []
         rows = self._db.execute(
-            select(TradeIntent, Symbol.instrument_type)
-            .join(Symbol, TradeIntent.symbol == Symbol.symbol)
-            .where(
+            _select_intent_with_symbol_type().where(
                 TradeIntent.status == "active",
                 TradeIntent.symbol.in_(symbols),
             )
@@ -287,12 +293,15 @@ class IntentRepository:
         that subscription cleanup can run inside the same atomic unit.
         """
 
-        row = self._db.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one_or_none()
+        result = self._db.execute(_select_intent_with_symbol_type().where(TradeIntent.id == intent_id)).one_or_none()
+        if result is None:
+            raise IntentNotFoundError(intent_id)
+        row, instrument_type = result
         if row is None or row.owner_user_id != owner_user_id:
             raise IntentNotFoundError(intent_id)
         # already cancelled: idempotent — return current state without error
         if row.status == "cancelled":
-            return _to_domain(row)
+            return _to_domain(row, SecurityType(instrument_type))
         if row.status not in CANCELLABLE_STATUSES:
             raise CancelNotAllowedError(intent_id, row.status)
 
@@ -305,7 +314,7 @@ class IntentRepository:
         # refresh within the same transaction so func.now() values are read back
         # without a separate roundtrip after commit
         self._db.refresh(row)
-        return _to_domain(row)
+        return _to_domain(row, SecurityType(instrument_type))
 
     # ------------------------------------------------------------------
     # quote subscription reconciliation helpers
