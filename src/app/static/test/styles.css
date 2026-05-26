@@ -1167,6 +1167,14 @@ textarea {
   animation: overlay-in 0.18s ease;
 }
 
+/* CSS `display: flex` 會贏過 HTML `hidden` attribute（hidden 等於 user-agent
+ * `display: none`，被更高 specificity 的 #id rule 覆寫）。明確補回 hidden
+ * 行為，否則 modal 一進頁面就遮住整個畫面、JS 設 hidden = true 也沒用。 */
+#sheet-overlay[hidden],
+#switch-user-overlay[hidden] {
+  display: none !important;
+}
+
 @keyframes overlay-in {
   from { opacity: 0; }
   to { opacity: 1; }
