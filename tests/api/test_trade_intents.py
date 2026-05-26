@@ -61,6 +61,7 @@ def _make_intent(
     cancelled_at: datetime | None = None,
     trail_mode: str | None = None,
     trail_value: Decimal | None = None,
+    filled_quantity_lots: int = 0,
 ) -> TradeIntentData:
     now = datetime.now(tz=UTC)
     return TradeIntentData(
@@ -81,6 +82,7 @@ def _make_intent(
         cancelled_at=cancelled_at,
         trail_mode=trail_mode,
         trail_value=trail_value,
+        filled_quantity_lots=filled_quantity_lots,
     )
 
 
@@ -152,7 +154,27 @@ def test_create_limit_order_success(api_client: TestClient, mock_create_command:
     assert data["strategy"] == "limit_buy_order"
     assert data["transactionMode"] == "single_notification"
     assert data["notificationMode"] == "single"
+    assert data["filledQuantityLots"] == 0
     mock_create_command.execute.assert_called_once()
+
+
+def test_create_triggered_limit_order_returns_filled_quantity(
+    api_client: TestClient, mock_create_command: MagicMock
+) -> None:
+    mock_create_command.execute.return_value = _make_intent(
+        strategy="limit_buy_order",
+        status="triggered",
+        quantity_lots=2,
+        filled_quantity_lots=2,
+    )
+
+    response = api_client.post("/trade-intents", json={**_LIMIT_BUY_PAYLOAD, "quantityLots": 2})
+
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()["data"]
+    assert data["strategy"] == "limit_buy_order"
+    assert data["status"] == "triggered"
+    assert data["filledQuantityLots"] == data["quantityLots"]
 
 
 def test_create_trailing_stop_success(api_client: TestClient, mock_create_command: MagicMock) -> None:
