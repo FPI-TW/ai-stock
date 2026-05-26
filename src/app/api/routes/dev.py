@@ -71,7 +71,16 @@ def evaluate_quotes(
         if quote is None:
             continue
         result = evaluator.evaluate(quote, intent, now)
+        if result.baseline_updated_at is not None:
+            intent_repo.system_update_trailing_baseline(
+                intent.id,
+                result.baseline,
+                result.dynamic_trigger_price,
+                result.baseline_updated_at,
+            )
         if not result.should_trigger:
+            if result.baseline_updated_at is not None:
+                intent_repo._db.commit()  # noqa: SLF001
             continue
         if result.trigger_price is None or result.trigger_reference_price_type is None:
             raise RuntimeError(f"Evaluator returned should_trigger=True but trigger fields are None: {result}")

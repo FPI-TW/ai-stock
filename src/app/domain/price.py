@@ -58,10 +58,18 @@ class InvalidPriceError(ValueError):
 class InvalidTickSizeError(InvalidPriceError):
     """Price is parseable but not a valid multiple of its TWSE tick size."""
 
-    def __init__(self, value: object, reason: str, nearest_lower: Decimal, nearest_upper: Decimal) -> None:
+    def __init__(
+        self,
+        value: object,
+        reason: str,
+        nearest_lower: Decimal,
+        nearest_upper: Decimal,
+        field: str | None = None,
+    ) -> None:
         super().__init__(value, reason)
         self.nearest_lower = nearest_lower
         self.nearest_upper = nearest_upper
+        self.field = field
 
 
 class InvalidAmountError(ValueError):
@@ -143,6 +151,38 @@ class PriceService:
         tick = cls.lookup_tick_size(security_type, price)
         lower = (price // tick) * tick
         return lower if lower == price else lower + tick
+
+    @classmethod
+    def round_down_to_tick(cls, security_type: SecurityType, price: Decimal) -> Decimal:
+        """Round a positive price down to the nearest legal tick."""
+        return cls.nearest_lower(security_type, price)
+
+    @classmethod
+    def fixed_amount_tick_size(cls, security_type: SecurityType) -> Decimal:
+        """Return the conservative tick unit for fixed trailing offsets.
+
+        A fixed trail value is an offset, not an order price, so there is no
+        current price bucket at schema-validation time. V0.5 accepts offsets
+        aligned to a practical trading-price tick: 0.1 for stocks and 0.05 for
+        ETFs. This keeps obviously invalid values such as 0.07 out while still
+        allowing common offsets such as 0.5, 1, and 5.
+        """
+        if security_type == SecurityType.ETF:
+            return Decimal("0.05")
+        return Decimal("0.1")
+
+    @classmethod
+    def validate_fixed_amount_tick(cls, security_type: SecurityType, value: Decimal) -> None:
+        tick = cls.fixed_amount_tick_size(security_type)
+        if (value % tick) != Decimal("0"):
+            lower = (value // tick) * tick
+            raise InvalidTickSizeError(
+                str(value),
+                f"not a valid fixed amount tick multiple (tick size is {tick})",
+                nearest_lower=max(lower, tick),
+                nearest_upper=lower + tick,
+                field="trailValue",
+            )
 
     @classmethod
     def validate(cls, request: PriceRequest) -> Decimal:

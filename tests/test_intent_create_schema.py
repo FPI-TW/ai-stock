@@ -1,11 +1,4 @@
-"""Schema-layer contract tests for POST /trade-intents request body.
-
-V0.5 階段 `IntentCreateRequest` union 只開放 buy/sell_price_alert。
-Limit / TrailingStop 子 schema 定義保留供 BE-V0.5-15 / 16 接手時納入 union;
-本檔同時驗證:
-- union 對未開放 strategy 顯式拒絕 (避免 schema 通過後 command 邊界以 500 收尾)
-- 個別子 schema 已就緒,可由下游工單直接 import + 加入 union
-"""
+"""Schema-layer contract tests for POST /trade-intents request body."""
 
 from decimal import Decimal
 
@@ -38,40 +31,33 @@ def test_create_intent_union_dispatches_existing_price_alert() -> None:
     assert request.target_price == "600"
 
 
-def test_create_intent_union_rejects_limit_order_strategy() -> None:
-    """V0.5 階段 union 不含 limit_*_order;BE-V0.5-15 接手後再開放。"""
-    with pytest.raises(ValidationError) as exc:
-        _union_adapter.validate_python(
-            {
-                "symbol": "2330",
-                "strategy": "limit_buy_order",
-                "quantityLots": 1,
-                "targetPrice": "600",
-            }
-        )
+def test_create_intent_union_dispatches_limit_order_strategy() -> None:
+    request = _union_adapter.validate_python(
+        {
+            "symbol": "2330",
+            "strategy": "limit_buy_order",
+            "quantityLots": 1,
+            "targetPrice": "600",
+        }
+    )
 
-    error = exc.value.errors()[0]
-    assert error["type"] == "union_tag_invalid"
-    assert error["loc"] == ()
+    assert isinstance(request, LimitBuyOrderCreateRequest)
+    assert request.transaction_mode == "single_notification"
 
 
-def test_create_intent_union_rejects_trailing_stop_strategy() -> None:
-    """V0.5 階段 union 不含 trailing_stop_alert;BE-V0.5-16 接手後再開放。"""
-    with pytest.raises(ValidationError) as exc:
-        _union_adapter.validate_python(
-            {
-                "symbol": "2330",
-                "strategy": "trailing_stop_alert",
-                "positionSide": "long",
-                "quantityLots": 1,
-                "trailMode": "percentage",
-                "trailValue": "5.0",
-            }
-        )
+def test_create_intent_union_dispatches_trailing_stop_strategy() -> None:
+    request = _union_adapter.validate_python(
+        {
+            "symbol": "2330",
+            "strategy": "trailing_stop_alert",
+            "quantityLots": 1,
+            "trailMode": "percentage",
+            "trailValue": "5.0",
+        }
+    )
 
-    error = exc.value.errors()[0]
-    assert error["type"] == "union_tag_invalid"
-    assert error["loc"] == ()
+    assert isinstance(request, TrailingStopAlertCreateRequest)
+    assert request.trail_value == Decimal("5.0")
 
 
 def test_limit_buy_order_subschema_accepts_mode_defaults() -> None:
@@ -110,7 +96,6 @@ def test_trailing_stop_subschema_accepts_long_percentage() -> None:
         {
             "symbol": "2330",
             "strategy": "trailing_stop_alert",
-            "positionSide": "long",
             "quantityLots": 1,
             "trailMode": "percentage",
             "trailValue": "5.0",
@@ -126,7 +111,6 @@ def test_trailing_stop_subschema_rejects_target_price() -> None:
             {
                 "symbol": "2330",
                 "strategy": "trailing_stop_alert",
-                "positionSide": "long",
                 "quantityLots": 1,
                 "trailMode": "percentage",
                 "trailValue": "5.0",
@@ -139,16 +123,15 @@ def test_trailing_stop_subschema_rejects_target_price() -> None:
     assert error["type"] == "extra_forbidden"
 
 
-def test_trailing_stop_subschema_percentage_rejects_value_above_fifty() -> None:
+def test_trailing_stop_subschema_percentage_rejects_value_above_ten() -> None:
     with pytest.raises(ValidationError) as exc:
         _trailing_adapter.validate_python(
             {
                 "symbol": "2330",
                 "strategy": "trailing_stop_alert",
-                "positionSide": "long",
                 "quantityLots": 1,
                 "trailMode": "percentage",
-                "trailValue": "60",
+                "trailValue": "12",
             }
         )
 
@@ -162,7 +145,6 @@ def test_trailing_stop_subschema_fixed_amount_allows_values_above_fifty() -> Non
         {
             "symbol": "2330",
             "strategy": "trailing_stop_alert",
-            "positionSide": "short",
             "quantityLots": 1,
             "trailMode": "fixed_amount",
             "trailValue": "60",

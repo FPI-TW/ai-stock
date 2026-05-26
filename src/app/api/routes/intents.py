@@ -57,7 +57,11 @@ def create_intent(
             symbol=request.symbol,
             strategy=request.strategy,
             quantity_lots=request.quantity_lots,
-            target_price=request.target_price,
+            target_price=getattr(request, "target_price", None),
+            transaction_mode=getattr(request, "transaction_mode", "single_notification"),
+            notification_mode=getattr(request, "notification_mode", "single"),
+            trail_mode=getattr(request, "trail_mode", None),
+            trail_value=getattr(request, "trail_value", None),
             owner_user_id=user.user_id,
         )
     )

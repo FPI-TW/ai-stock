@@ -1,12 +1,15 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+from typing import cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
-from app.db.models.core import TradeIntent
+from app.db.models.core import Symbol, TradeIntent
+from app.domain.price import SecurityType
 from app.domain.trade_intent import (
     CANCELLABLE_STATUSES,
     TERMINAL_STATUSES,
@@ -18,7 +21,7 @@ from app.domain.trade_intent import (
 )
 
 
-def _to_domain(row: TradeIntent) -> TradeIntentData:
+def _to_domain(row: TradeIntent, security_type: SecurityType = SecurityType.STOCK) -> TradeIntentData:
     return TradeIntentData(
         id=row.id,
         owner_user_id=row.owner_user_id,
@@ -36,7 +39,24 @@ def _to_domain(row: TradeIntent) -> TradeIntentData:
         updated_at=row.updated_at,
         cancelled_at=row.cancelled_at,
         triggered_at=row.triggered_at,
+        transaction_mode=row.transaction_mode,
+        notification_mode=row.notification_mode,
+        filled_quantity_lots=row.filled_quantity_lots,
+        last_fill_at=row.last_fill_at,
+        trail_mode=row.trail_mode,
+        trail_value=row.trail_value,
+        baseline=row.baseline,
+        dynamic_trigger_price=row.dynamic_trigger_price,
+        baseline_updated_at=row.baseline_updated_at,
+        security_type=security_type,
     )
+
+
+def _nullable_equals(column: object, value: object) -> ColumnElement[bool]:
+    comparable = cast(ColumnElement[object], column)
+    if value is None:
+        return comparable.is_(None)
+    return comparable == value
 
 
 class IntentRepository:
@@ -53,13 +73,20 @@ class IntentRepository:
         symbol: str,
         strategy: str,
         quantity_lots: int,
-        target_price_original: Decimal,
-        target_price_effective: Decimal,
+        target_price_original: Decimal | None,
+        target_price_effective: Decimal | None,
         trigger_reference_price_type: str,
         trading_date: date,
         time_in_force: str,
         execution_mode: str,
         status: str,
+        transaction_mode: str = "single_notification",
+        notification_mode: str = "single",
+        trail_mode: str | None = None,
+        trail_value: Decimal | None = None,
+        baseline: Decimal | None = None,
+        dynamic_trigger_price: Decimal | None = None,
+        baseline_updated_at: datetime | None = None,
     ) -> UUID:
         """Add a new TradeIntent and flush; return its id.
 
@@ -82,7 +109,9 @@ class IntentRepository:
                     TradeIntent.owner_user_id == owner_user_id,
                     TradeIntent.symbol == symbol,
                     TradeIntent.strategy == strategy,
-                    TradeIntent.target_price_effective == target_price_effective,
+                    _nullable_equals(TradeIntent.target_price_effective, target_price_effective),
+                    _nullable_equals(TradeIntent.trail_mode, trail_mode),
+                    _nullable_equals(TradeIntent.trail_value, trail_value),
                     TradeIntent.quantity_lots == quantity_lots,
                     TradeIntent.trading_date == trading_date,
                     TradeIntent.status.in_(CANCELLABLE_STATUSES),
@@ -105,6 +134,13 @@ class IntentRepository:
             trading_date=trading_date,
             time_in_force=time_in_force,
             status=status,
+            transaction_mode=transaction_mode,
+            notification_mode=notification_mode,
+            trail_mode=trail_mode,
+            trail_value=trail_value,
+            baseline=baseline,
+            dynamic_trigger_price=dynamic_trigger_price,
+            baseline_updated_at=baseline_updated_at,
         )
         self._db.add(row)
         try:
@@ -112,6 +148,22 @@ class IntentRepository:
         except IntegrityError as exc:
             raise DuplicateIntentError(owner_user_id, symbol, strategy) from exc
         return row.id
+
+    def system_update_trailing_baseline(
+        self,
+        intent_id: UUID,
+        baseline: Decimal | None,
+        dynamic_trigger_price: Decimal | None,
+        baseline_updated_at: datetime | None,
+    ) -> None:
+        values: dict[str, object | None] = {
+            "baseline": baseline,
+            "dynamic_trigger_price": dynamic_trigger_price,
+            "updated_at": func.now(),
+        }
+        if baseline_updated_at is not None:
+            values["baseline_updated_at"] = baseline_updated_at
+        self._db.execute(update(TradeIntent).where(TradeIntent.id == intent_id).values(**values))
 
     def find_by_id(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
         row = self._db.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one_or_none()
@@ -203,17 +255,15 @@ class IntentRepository:
         """
         if not symbols:
             return []
-        rows = (
-            self._db.execute(
-                select(TradeIntent).where(
-                    TradeIntent.status == "active",
-                    TradeIntent.symbol.in_(symbols),
-                )
+        rows = self._db.execute(
+            select(TradeIntent, Symbol.instrument_type)
+            .join(Symbol, TradeIntent.symbol == Symbol.symbol)
+            .where(
+                TradeIntent.status == "active",
+                TradeIntent.symbol.in_(symbols),
             )
-            .scalars()
-            .all()
-        )
-        return [_to_domain(r) for r in rows]
+        ).all()
+        return [_to_domain(row, SecurityType(instrument_type)) for row, instrument_type in rows]
 
     def cancel(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
         """Set status='cancelled' and flush.

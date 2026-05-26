@@ -86,7 +86,16 @@ class QuoteEvaluationDispatcher:
             trigger_cmd = TriggerIntentCommand(db)
             for intent in intents:
                 result = self._evaluator.evaluate(snapshot, intent, now)
+                if result.baseline_updated_at is not None:
+                    repo.system_update_trailing_baseline(
+                        intent.id,
+                        result.baseline,
+                        result.dynamic_trigger_price,
+                        result.baseline_updated_at,
+                    )
                 if not result.should_trigger:
+                    if result.baseline_updated_at is not None:
+                        db.commit()
                     continue
                 if result.trigger_price is None or result.trigger_reference_price_type is None:
                     raise RuntimeError(f"Evaluator returned should_trigger=True but trigger fields are None: {result}")

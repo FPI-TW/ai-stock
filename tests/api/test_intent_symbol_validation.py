@@ -30,6 +30,16 @@ def _make_intent_mock(symbol: str = "2330") -> MagicMock:
     intent.time_in_force = "day"
     intent.execution_mode = "notify_only"
     intent.status = "active"
+    intent.cancelled_at = None
+    intent.transaction_mode = "single_notification"
+    intent.notification_mode = "single"
+    intent.filled_quantity_lots = 0
+    intent.last_fill_at = None
+    intent.trail_mode = None
+    intent.trail_value = None
+    intent.baseline = None
+    intent.dynamic_trigger_price = None
+    intent.baseline_updated_at = None
     return intent
 
 

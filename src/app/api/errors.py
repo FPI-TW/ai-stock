@@ -147,15 +147,18 @@ def register_exception_handlers(app: FastAPI) -> None:
     # InvalidTickSizeError 必須在 InvalidPriceError 之前註冊（子類別優先）
     @app.exception_handler(InvalidTickSizeError)
     async def invalid_tick_size_handler(request: Request, exc: InvalidTickSizeError) -> JSONResponse:
+        details: dict[str, Any] = {
+            "value": str(exc.value),
+            "nearest_lower": str(exc.nearest_lower),
+            "nearest_upper": str(exc.nearest_upper),
+        }
+        if exc.field is not None:
+            details["field"] = exc.field
         return build_error_response(
             request=request,
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.INVALID_TICK_SIZE,
-            details={
-                "value": str(exc.value),
-                "nearest_lower": str(exc.nearest_lower),
-                "nearest_upper": str(exc.nearest_upper),
-            },
+            details=details,
         )
 
     @app.exception_handler(InvalidPriceError)

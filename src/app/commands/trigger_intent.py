@@ -44,7 +44,11 @@ from app.db.models.core import TriggerEvent as TriggerEventRow
 from app.domain.notification import NotificationData
 from app.domain.trade_intent import IntentNotFoundError
 from app.domain.trigger_event import DuplicateTriggerError, TriggerError, TriggerEventData
-from app.services.notification_template import render_price_triggered
+from app.services.notification_template import (
+    render_limit_order_triggered,
+    render_price_triggered,
+    render_trailing_stop_triggered,
+)
 
 
 class IntentNotActiveError(TriggerError):
@@ -81,6 +85,9 @@ def _trigger_event_to_domain(row: TriggerEventRow) -> TriggerEventData:
         trigger_price=row.trigger_price,
         trigger_reference_price_type=row.trigger_reference_price_type,
         fallback_used=row.fallback_used,
+        filled_quantity_lots=row.filled_quantity_lots,
+        baseline_at_trigger=row.baseline_at_trigger,
+        dynamic_trigger_price_at_trigger=row.dynamic_trigger_price_at_trigger,
         triggered_at=row.triggered_at,
         created_at=row.created_at,
     )
@@ -119,13 +126,52 @@ def persist_trigger(
     values without us tracking them in Python.
     """
 
-    title, body = render_price_triggered(
-        symbol=intent.symbol,
-        strategy=intent.strategy,
-        target_price=intent.target_price_effective,
-        trigger_price=inp.trigger_price,
-        quote_time=inp.quote_time,
-    )
+    notification_type = "price_triggered"
+    target_price_effective = intent.target_price_effective
+    baseline_at_trigger = None
+    dynamic_trigger_price_at_trigger = None
+    if intent.strategy in {"limit_buy_order", "limit_sell_order"}:
+        if intent.target_price_effective is None:
+            raise RuntimeError("limit order trigger requires target_price_effective")
+        notification_type = "limit_order_triggered"
+        title, body = render_limit_order_triggered(
+            symbol=intent.symbol,
+            strategy=intent.strategy,
+            target_price=intent.target_price_effective,
+            trigger_price=inp.trigger_price,
+            filled_quantity_lots=intent.quantity_lots,
+            quantity_lots=intent.quantity_lots,
+            quote_time=inp.quote_time,
+        )
+    elif intent.strategy == "trailing_stop_alert":
+        if intent.baseline is None or intent.dynamic_trigger_price is None:
+            raise RuntimeError("trailing trigger requires baseline and dynamic_trigger_price")
+        notification_type = "trailing_stop_triggered"
+        target_price_effective = intent.dynamic_trigger_price
+        baseline_at_trigger = intent.baseline
+        dynamic_trigger_price_at_trigger = intent.dynamic_trigger_price
+        title, body = render_trailing_stop_triggered(
+            symbol=intent.symbol,
+            trail_mode=cast(str, intent.trail_mode),
+            trail_value=cast(Decimal, intent.trail_value),
+            baseline=intent.baseline,
+            dynamic_trigger_price=intent.dynamic_trigger_price,
+            trigger_price=inp.trigger_price,
+            trigger_reference_price_type=inp.trigger_reference_price_type,
+            quote_time=inp.quote_time,
+        )
+    else:
+        if intent.target_price_effective is None:
+            raise RuntimeError("price alert trigger requires target_price_effective")
+        title, body = render_price_triggered(
+            symbol=intent.symbol,
+            strategy=intent.strategy,
+            target_price=intent.target_price_effective,
+            trigger_price=inp.trigger_price,
+            quote_time=inp.quote_time,
+        )
+    if target_price_effective is None:
+        raise RuntimeError("trigger requires target_price_effective")
 
     trigger_row = TriggerEventRow(
         id=uuid4(),
@@ -133,16 +179,19 @@ def persist_trigger(
         owner_user_id=intent.owner_user_id,
         symbol=intent.symbol,
         quote_snapshot=inp.quote_snapshot,
-        target_price_effective=intent.target_price_effective,
+        target_price_effective=target_price_effective,
         trigger_price=inp.trigger_price,
         trigger_reference_price_type=inp.trigger_reference_price_type,
         fallback_used=inp.fallback_used,
+        filled_quantity_lots=intent.quantity_lots,
+        baseline_at_trigger=baseline_at_trigger,
+        dynamic_trigger_price_at_trigger=dynamic_trigger_price_at_trigger,
     )
     notification_row = NotificationRow(
         id=uuid4(),
         owner_user_id=intent.owner_user_id,
         trade_intent_id=intent.id,
-        type="price_triggered",
+        type=notification_type,
         rendered_title=title,
         rendered_body=body,
     )
@@ -156,7 +205,13 @@ def persist_trigger(
         db.execute(
             update(TradeIntent)
             .where(TradeIntent.id == intent.id, TradeIntent.status == "active")
-            .values(status="triggered", triggered_at=func.now(), updated_at=func.now()),
+            .values(
+                status="triggered",
+                triggered_at=func.now(),
+                updated_at=func.now(),
+                filled_quantity_lots=intent.quantity_lots,
+                last_fill_at=func.now(),
+            ),
         ),
     )
     # Defense-in-depth: if rowcount is 0 the status guard was bypassed
