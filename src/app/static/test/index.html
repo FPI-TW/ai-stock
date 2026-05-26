@@ -31,6 +31,8 @@
         <div id="endpoint-list"></div>
       </aside>
 
+      <div id="right-pane">
+       <div id="work-area">
       <section id="request-pane">
         <div class="card">
           <div class="pane-title">
@@ -75,17 +77,18 @@
           </div>
         </div>
       </section>
-    </main>
-
-    <footer id="demo-pane">
-      <h2>Demo flows</h2>
-      <div id="demo-buttons">
-        <button data-demo="buy_price_alert">E2E · buy_price_alert 觸發</button>
-        <button data-demo="limit_buy_order">E2E · limit_buy_order 觸發</button>
-        <button data-demo="multi_user">Multi-user owner-scoping</button>
+       </div>
+       <footer id="demo-pane">
+         <h2>Demo flows</h2>
+         <div id="demo-buttons">
+           <button data-demo="buy_price_alert">E2E · buy_price_alert 觸發</button>
+           <button data-demo="limit_buy_order">E2E · limit_buy_order 觸發</button>
+           <button data-demo="multi_user">Multi-user owner-scoping</button>
+         </div>
+         <pre id="demo-log">(no demo run yet)</pre>
+       </footer>
       </div>
-      <pre id="demo-log">(no demo run yet)</pre>
-    </footer>
+    </main>
   </div>
 
   <script type="module" src="/test-assets/app.js"></script>
