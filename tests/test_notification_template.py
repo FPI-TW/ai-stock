@@ -97,6 +97,16 @@ class TestRenderPriceTriggered:
                 quote_time=datetime(2026, 5, 11, 10, 0, 5, tzinfo=TAIPEI),
             )
 
+    def test_naive_quote_time_raises(self) -> None:
+        with pytest.raises(TypeError, match="timezone-aware"):
+            render_price_triggered(
+                symbol="2330",
+                strategy="buy_price_alert",
+                target_price=Decimal("100"),
+                trigger_price=Decimal("99"),
+                quote_time=datetime(2026, 5, 11, 10, 0, 5),
+            )
+
 
 class TestRenderLimitOrderTriggered:
     def test_limit_buy_body_contains_fill_and_disclaimer(self) -> None:
@@ -127,6 +137,18 @@ class TestRenderLimitOrderTriggered:
         )
 
         assert title == "2330 限價賣單已觸發"
+
+    def test_naive_quote_time_raises(self) -> None:
+        with pytest.raises(TypeError, match="timezone-aware"):
+            render_limit_order_triggered(
+                symbol="2330",
+                strategy="limit_buy_order",
+                target_price=Decimal("600"),
+                trigger_price=Decimal("599.5"),
+                filled_quantity_lots=1,
+                quantity_lots=1,
+                quote_time=datetime(2026, 5, 11, 10, 0, 5),
+            )
 
 
 class TestRenderTrailingStopTriggered:
@@ -167,10 +189,13 @@ class TestRenderTrailingStopTriggered:
 
     def test_naive_quote_time_raises(self) -> None:
         with pytest.raises(TypeError, match="timezone-aware"):
-            render_price_triggered(
+            render_trailing_stop_triggered(
                 symbol="2330",
-                strategy="buy_price_alert",
-                target_price=Decimal("100"),
-                trigger_price=Decimal("99"),
+                trail_mode="percentage",
+                trail_value=Decimal("5"),
+                baseline=Decimal("100"),
+                dynamic_trigger_price=Decimal("95"),
+                trigger_price=Decimal("94.8"),
+                trigger_reference_price_type="bid",
                 quote_time=datetime(2026, 5, 11, 10, 0, 5),
             )
