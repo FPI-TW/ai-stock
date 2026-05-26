@@ -47,16 +47,22 @@
             <span id="req-path" class="path path-placeholder">select an endpoint</span>
           </div>
           <div class="pane-body">
-            <label for="req-path-params">Path params</label>
-            <input id="req-path-params" type="text" placeholder='{"intent_id":"…"}' />
+            <div id="endpoint-description" class="endpoint-description" hidden></div>
 
-            <label for="req-query">Query params</label>
-            <input id="req-query" type="text" placeholder='{"pageSize":50}' />
+            <div id="path-params-section" hidden>
+              <label class="form-section-label">Path params</label>
+              <div id="path-params-fields"></div>
+            </div>
 
-            <label for="req-headers">Headers (JSON, in addition to X-Local-User-Id)</label>
+            <div id="query-params-section" hidden>
+              <label class="form-section-label">Query params <span class="hint">(空白即不送)</span></label>
+              <div id="query-params-fields"></div>
+            </div>
+
+            <label class="form-section-label" for="req-headers">額外 Headers (JSON，可空)</label>
             <input id="req-headers" type="text" placeholder='{"X-Request-Id":"my-id"}' />
 
-            <label for="req-body">Body (JSON, ignored for GET)</label>
+            <label class="form-section-label" for="req-body">Body (JSON, GET 會忽略)</label>
             <textarea id="req-body" spellcheck="false"></textarea>
 
             <div id="request-actions">
@@ -77,6 +83,10 @@
               <span class="status" id="resp-status">—</span>
               <span class="duration" id="resp-duration"></span>
               <span class="req-id" id="resp-req-id"></span>
+              <span class="response-actions">
+                <button type="button" id="copy-curl-btn" class="response-action-btn" title="複製為 cURL" disabled>cURL</button>
+                <button type="button" id="copy-body-btn" class="response-action-btn" title="複製 response body" disabled>Copy</button>
+              </span>
             </div>
             <pre id="response-body">(no request sent yet)</pre>
             <div class="history-title">History (last 5)</div>
@@ -107,9 +117,15 @@
 
         <section class="uv-section">
           <header class="uv-section-title">
-            <span>進行中</span>
+            <span>我的委託</span>
             <span class="uv-section-count" id="uv-intent-count">—</span>
           </header>
+          <div class="uv-filter" id="uv-intent-filter" role="tablist" aria-label="委託狀態過濾">
+            <button type="button" data-filter="all" class="active" role="tab">全部</button>
+            <button type="button" data-filter="active" role="tab">進行中</button>
+            <button type="button" data-filter="triggered" role="tab">已觸發</button>
+            <button type="button" data-filter="cancelled" role="tab">已取消</button>
+          </div>
           <div class="uv-list" id="uv-intent-list">
             <div class="uv-loading">載入中…</div>
           </div>
@@ -227,6 +243,32 @@
         <div class="switch-user-body">
           <p class="hint">不同身份各自獨立委託與通知，可 demo owner 隔離</p>
           <div id="switch-user-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Generic detail modal (intent / notification) -->
+    <div id="detail-overlay" hidden>
+      <div class="sheet sheet-compact" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+        <header class="sheet-header">
+          <button type="button" class="sheet-action" data-close-detail>關閉</button>
+          <h3 id="detail-title">詳細</h3>
+          <span></span>
+        </header>
+        <div class="sheet-step detail-body" id="detail-body"></div>
+      </div>
+    </div>
+
+    <!-- Custom confirm dialog -->
+    <div id="confirm-overlay" hidden>
+      <div class="sheet sheet-compact confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+        <div class="confirm-content">
+          <h3 id="confirm-title">確認</h3>
+          <p id="confirm-message"></p>
+        </div>
+        <div class="confirm-actions">
+          <button type="button" id="confirm-cancel" class="confirm-btn cancel">取消</button>
+          <button type="button" id="confirm-ok" class="confirm-btn destructive">確定</button>
         </div>
       </div>
     </div>
