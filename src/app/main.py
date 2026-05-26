@@ -1,8 +1,10 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.api.errors import register_exception_handlers
 from app.api.routes.dev import router as dev_router
@@ -10,6 +12,7 @@ from app.api.routes.health import router as health_router
 from app.api.routes.intents import router as intents_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes.symbols import router as symbols_router
+from app.api.routes.test_page import router as test_page_router
 from app.core.config import get_settings
 from app.core.ids import RequestIdMiddleware
 from app.domain.quote_evaluation import QuoteEvaluator
@@ -57,7 +60,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # of that symbol's active intents on a fresh short-lived session.
         # Without DATABASE_URL we have no intents to evaluate, so the listener
         # is only useful when the DB is configured.
-        session_service = TradingSessionService()
+        #
+        # Use the same TradingSessionService instance the API deps hand out
+        # (stored on app.state) so /dev/set-clock affects both API-driven
+        # evaluation and listener-driven evaluation. Without this the
+        # dispatcher would see system time, drop pushed quotes as stale, and
+        # the /test page demo flow would silently never trigger.
+        session_service = app.state.session_service
         dispatcher = QuoteEvaluationDispatcher(
             session_factory=session_factory,
             evaluator=QuoteEvaluator(session_service),
@@ -76,6 +85,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
     app.state.request_id_header = settings.request_id_header
     app.state.quote_provider = build_quote_provider(settings)
+    app.state.session_service = TradingSessionService()
     app.add_middleware(RequestIdMiddleware, header_name=settings.request_id_header)
     register_exception_handlers(app)
     app.include_router(health_router)
@@ -84,6 +94,12 @@ def create_app() -> FastAPI:
     app.include_router(notifications_router, prefix="/notifications", tags=["notifications"])
     if settings.local_mode:
         app.include_router(dev_router, prefix="/dev", tags=["dev"])
+        app.include_router(test_page_router, tags=["test-ui"])
+        app.mount(
+            "/test-assets",
+            StaticFiles(directory=Path(__file__).parent / "static" / "test"),
+            name="test-assets",
+        )
     return app
 
 
