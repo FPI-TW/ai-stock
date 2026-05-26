@@ -38,10 +38,16 @@
   --method-delete-bg: rgba(255, 59, 48, 0.16);
   --method-delete-text: #d70015;
 
-  /* typography */
+  /* typography — system stack + Traditional Chinese fallbacks so 繁體字 doesn't
+   * fall back to the browser default (DejaVu Sans / Noto Serif CJK on Linux),
+   * which clashes with the iOS aesthetic. Order matters: macOS first, then
+   * iOS-style web fonts, then Windows native, then Linux Noto. */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "PingFang TC", "Hiragino Sans TC", "Hiragino Sans CNS",
+    "Microsoft JhengHei", "Noto Sans TC", "Noto Sans CJK TC",
     "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas,
+    "Roboto Mono", "Liberation Mono", monospace;
 
   /* shape */
   --radius-card: 12px;
@@ -86,6 +92,11 @@ textarea {
   grid-template-rows: auto 1fr auto;
   grid-template-columns: 1fr;
   height: 100vh;
+  /* Without min-height: 0, the 1fr row would expand to fit its
+   * scrollable content (endpoint list 一拉長就把 demo panel 推出 viewport,
+   * 視覺上像是 demo 蓋住 endpoint list 底部). */
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -98,20 +109,30 @@ textarea {
   z-index: 10;
   display: flex;
   align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
+  gap: 12px;
   height: 56px;
   padding: 0 20px;
   background: rgba(255, 255, 255, 0.72);
   backdrop-filter: saturate(180%) blur(20px);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   border-bottom: 1px solid var(--separator);
+  flex-shrink: 0;
+  overflow: hidden;
 }
 
 #topbar h1 {
-  font-size: 19px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 700;
   letter-spacing: -0.01em;
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
+#topbar .field {
+  flex-shrink: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 #topbar .field {
@@ -133,9 +154,15 @@ textarea {
 }
 
 #topbar .field select {
-  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' width='10' height='10'><path fill='rgba(60,60,67,0.6)' d='M6 8L1.5 3.5h9z'/></svg>")
+    no-repeat right center;
+  background-size: 10px;
   border: 0;
   outline: 0;
+  padding-right: 14px;
   font-size: 13px;
   color: var(--text);
   cursor: pointer;
@@ -173,18 +200,36 @@ textarea {
 
 #main {
   display: grid;
-  grid-template-columns: 320px 1fr 1fr;
+  grid-template-columns: 340px 1fr 1fr;
   gap: 20px;
   padding: 20px;
   overflow: hidden;
   min-width: 0;
+  min-height: 0; /* allow inner panes to scroll independently */
 }
 
 #endpoint-pane,
 #request-pane,
 #response-pane {
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   min-width: 0;
+  min-height: 0;
+}
+
+#endpoint-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* compensate for the search input above */
+  padding-bottom: 4px;
+}
+
+#request-pane > .card,
+#response-pane > .card {
+  flex: 1;
+  overflow: auto;
 }
 
 /* Cards — shared elevated surface */
@@ -201,14 +246,18 @@ textarea {
 #endpoint-filter {
   width: 100%;
   margin-bottom: 16px;
-  padding: 10px 14px;
-  background: var(--bg-elevated);
+  padding: 10px 14px 10px 36px;
+  background-color: var(--bg-elevated);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='16' height='16'><path fill='rgba(60,60,67,0.4)' d='M11.74 10.34a6 6 0 1 0-1.4 1.4l3.46 3.45a1 1 0 1 0 1.41-1.41l-3.47-3.44zM7 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8z'/></svg>");
+  background-repeat: no-repeat;
+  background-position: 12px center;
   border: 0;
   border-radius: var(--radius-control);
   font-size: 14px;
   outline: 0;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
   transition: box-shadow 0.15s ease;
+  flex-shrink: 0;
 }
 
 #endpoint-filter::placeholder {
@@ -346,16 +395,25 @@ textarea {
 
 #request-pane .card,
 #response-pane .card {
-  padding: 20px;
+  padding: 0;
 }
 
 .pane-title {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 20px;
-  padding-bottom: 16px;
+  padding: 16px 20px 12px;
   border-bottom: 1px solid var(--separator);
+  background: var(--bg-elevated);
+  border-top-left-radius: var(--radius-card);
+  border-top-right-radius: var(--radius-card);
+}
+
+.pane-body {
+  padding: 16px 20px 20px;
 }
 
 .pane-title .method {
@@ -469,10 +527,16 @@ textarea {
 }
 
 #example-select {
-  background: var(--bg-elevated);
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--bg-elevated);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' width='10' height='10'><path fill='%23007aff' d='M6 8L1.5 3.5h9z'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 10px;
   color: var(--accent);
   border: 1px solid rgba(0, 122, 255, 0.2);
-  padding: 9px 14px;
+  padding: 9px 34px 9px 16px;
   border-radius: var(--radius-pill);
   cursor: pointer;
   font-size: 13px;
@@ -480,7 +544,7 @@ textarea {
 }
 
 #example-select:hover {
-  background: rgba(0, 122, 255, 0.08);
+  background-color: rgba(0, 122, 255, 0.08);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -542,9 +606,15 @@ textarea {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 50vh;
   overflow: auto;
   color: var(--text);
+  min-height: 80px;
+}
+
+#response-body:empty::before,
+#response-body[data-empty="true"] {
+  color: var(--text-tertiary);
+  font-style: italic;
 }
 
 .history-title {
@@ -561,9 +631,12 @@ textarea {
   list-style: none;
   background: var(--bg-grouped);
   border-radius: var(--radius-control);
-  overflow: hidden;
-  max-height: 30vh;
   overflow-y: auto;
+  max-height: 200px;
+}
+
+#history-list:empty {
+  display: none;
 }
 
 .history-item {
@@ -619,11 +692,13 @@ textarea {
 #demo-pane {
   background: var(--bg-elevated);
   border-top: 1px solid var(--separator);
-  padding: 16px 20px 20px;
-  max-height: 240px;
+  padding: 14px 20px 16px;
+  height: 200px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+  flex-shrink: 0;
+  min-height: 0;
 }
 
 #demo-pane h2 {
@@ -668,14 +743,16 @@ textarea {
 #demo-log {
   background: var(--bg-grouped);
   border-radius: var(--radius-control);
-  padding: 12px 14px;
+  padding: 10px 14px;
   font-family: var(--font-mono);
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.55;
   flex: 1;
   overflow: auto;
   white-space: pre-wrap;
   color: var(--text-secondary);
+  min-height: 0;
+  margin: 0;
 }
 
 /* ------------------------------------------------------------------------- */

@@ -37,39 +37,42 @@
             <span id="req-method" class="method method-placeholder">—</span>
             <span id="req-path" class="path path-placeholder">select an endpoint</span>
           </div>
+          <div class="pane-body">
+            <label for="req-path-params">Path params</label>
+            <input id="req-path-params" type="text" placeholder='{"intent_id":"…"}' />
 
-          <label for="req-path-params">Path params</label>
-          <input id="req-path-params" type="text" placeholder='{"intent_id":"…"}' />
+            <label for="req-query">Query params</label>
+            <input id="req-query" type="text" placeholder='{"pageSize":50}' />
 
-          <label for="req-query">Query params</label>
-          <input id="req-query" type="text" placeholder='{"pageSize":50}' />
+            <label for="req-headers">Headers (JSON, in addition to X-Local-User-Id)</label>
+            <input id="req-headers" type="text" placeholder='{"X-Request-Id":"my-id"}' />
 
-          <label for="req-headers">Headers (JSON, in addition to X-Local-User-Id)</label>
-          <input id="req-headers" type="text" placeholder='{"X-Request-Id":"my-id"}' />
+            <label for="req-body">Body (JSON, ignored for GET)</label>
+            <textarea id="req-body" spellcheck="false"></textarea>
 
-          <label for="req-body">Body (JSON, ignored for GET)</label>
-          <textarea id="req-body" spellcheck="false"></textarea>
-
-          <div id="request-actions">
-            <button id="send-btn" disabled>Send</button>
-            <select id="example-select" title="Fill body with an example">
-              <option value="">Fill example…</option>
-            </select>
+            <div id="request-actions">
+              <button id="send-btn" disabled>Send</button>
+              <select id="example-select" title="Fill body with an example">
+                <option value="">Fill example…</option>
+              </select>
+            </div>
           </div>
         </div>
       </section>
 
       <section id="response-pane">
         <div class="card">
-          <div id="response-error-banner" class="hidden"></div>
-          <div id="response-meta">
-            <span class="status" id="resp-status">—</span>
-            <span class="duration" id="resp-duration"></span>
-            <span class="req-id" id="resp-req-id"></span>
+          <div class="pane-body">
+            <div id="response-error-banner" class="hidden"></div>
+            <div id="response-meta">
+              <span class="status" id="resp-status">—</span>
+              <span class="duration" id="resp-duration"></span>
+              <span class="req-id" id="resp-req-id"></span>
+            </div>
+            <pre id="response-body">(no request sent yet)</pre>
+            <div class="history-title">History (last 5)</div>
+            <ul id="history-list"></ul>
           </div>
-          <pre id="response-body">(no request sent yet)</pre>
-          <div class="history-title">History (last 5)</div>
-          <ul id="history-list"></ul>
         </div>
       </section>
     </main>
