@@ -70,6 +70,28 @@ def to_taipei(raw_dt: Any) -> datetime:
     return raw_dt.astimezone(_TAIPEI_TZ)
 
 
+def timestamp_to_taipei(raw_ts: Any) -> datetime:
+    """Convert Shioaji snapshot timestamps into tz-aware Asia/Taipei datetimes.
+
+    Shioaji snapshot `ts` values are Unix timestamps and may be emitted in
+    seconds, milliseconds, microseconds, or nanoseconds depending on SDK path.
+    Normalise by magnitude before converting.
+    """
+
+    if not isinstance(raw_ts, int | float):
+        raise QuoteProviderUnavailableError("shioaji", f"unexpected snapshot ts type: {type(raw_ts).__name__}")
+
+    seconds = float(raw_ts)
+    abs_seconds = abs(seconds)
+    if abs_seconds >= 100_000_000_000_000_000:
+        seconds = seconds / 1_000_000_000
+    elif abs_seconds >= 100_000_000_000_000:
+        seconds = seconds / 1_000_000
+    elif abs_seconds >= 100_000_000_000:
+        seconds = seconds / 1_000
+    return datetime.fromtimestamp(seconds, tz=_UTC).astimezone(_TAIPEI_TZ)
+
+
 def now_utc() -> datetime:
     return datetime.now(tz=_UTC)
 

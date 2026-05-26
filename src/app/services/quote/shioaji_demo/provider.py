@@ -130,6 +130,15 @@ class ShioajiQuoteProvider(QuoteProvider):
                 raise QuoteUnavailableError(missing[0])
             return [self._snapshots[s] for s in symbols]
 
+    def get_current_price(self, symbol: str) -> QuoteSnapshot:
+        if symbol not in self._allowed:
+            raise SymbolNotAvailableInDemo(symbol, self._allowed)
+
+        with self._lock:
+            if not self._started:
+                raise QuoteProviderUnavailableError("shioaji", "provider not started; call startup() first")
+        return self._client.get_stock_snapshot(symbol)
+
     def subscribe(self, symbol: str) -> None:
         # Allowlist check first — the SDK never sees a rejected symbol.
         if symbol not in self._allowed:

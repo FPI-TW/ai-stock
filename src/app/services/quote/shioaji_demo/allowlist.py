@@ -4,7 +4,7 @@ from fastapi import status
 
 from app.services.quote.base import QuoteProviderError
 
-DEFAULT_DEMO_ALLOWED_SYMBOLS: frozenset[str] = frozenset({"2330", "2317", "0050", "00878", "9999"})
+DEFAULT_DEMO_ALLOWED_SYMBOLS: frozenset[str] = frozenset({"2330", "2317", "0050", "00878"})
 
 
 class SymbolNotAvailableInDemo(QuoteProviderError):

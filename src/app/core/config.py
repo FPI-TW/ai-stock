@@ -6,6 +6,8 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 QuoteProviderName = Literal["shioaji_demo", "in_memory"]
+REQUIRED_CURRENT_PRICE_PROVIDER: QuoteProviderName = "shioaji_demo"
+CURRENT_PRICE_SOURCE_NAME = "shioaji"
 
 
 class Settings(BaseSettings):

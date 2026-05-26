@@ -37,6 +37,10 @@ class InMemoryQuoteProvider(QuoteProvider):
                 raise QuoteUnavailableError(missing[0])
             return [self._snapshots[s] for s in symbols]
 
+    def get_current_price(self, symbol: str) -> QuoteSnapshot:
+        [snapshot] = self.get_quotes([symbol])
+        return snapshot
+
     def subscribe(self, symbol: str) -> None:
         with self._lock:
             self._subscribed.add(symbol)

@@ -33,6 +33,15 @@ def test_subscribe_allowed_symbol_calls_client() -> None:
     assert provider.active_subscriptions() == {"2330"}
 
 
+def test_current_price_allowed_symbol_calls_client_snapshot() -> None:
+    provider, client = _make_provider()
+    snapshot = MagicMock()
+    client.get_stock_snapshot.return_value = snapshot
+
+    assert provider.get_current_price("2330") is snapshot
+    client.get_stock_snapshot.assert_called_once_with("2330")
+
+
 def test_subscribe_disallowed_symbol_rejects_without_calling_client() -> None:
     provider, client = _make_provider()
     with pytest.raises(SymbolNotAvailableInDemo) as exc:
@@ -41,6 +50,13 @@ def test_subscribe_disallowed_symbol_rejects_without_calling_client() -> None:
     assert sorted(exc.value.allowed) == sorted(DEFAULT_DEMO_ALLOWED_SYMBOLS)
     client.subscribe.assert_not_called()
     assert provider.active_subscriptions() == set()
+
+
+def test_current_price_disallowed_symbol_rejects_without_calling_client() -> None:
+    provider, client = _make_provider()
+    with pytest.raises(SymbolNotAvailableInDemo):
+        provider.get_current_price("1101")
+    client.get_stock_snapshot.assert_not_called()
 
 
 def test_subscribe_with_custom_allowlist() -> None:

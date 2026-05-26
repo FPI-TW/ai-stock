@@ -64,7 +64,7 @@ def shioaji_provider() -> ShioajiQuoteProvider:
 
     provider = ShioajiQuoteProvider(
         client=MagicMock(),
-        allowed_symbols=frozenset({"2330", "2317", "0050", "00878", "9999"}),
+        allowed_symbols=frozenset({"2330", "2317", "0050", "00878"}),
         max_subscriptions=5,
     )
     provider.mark_started_for_tests()  # skip the SDK login path
@@ -142,14 +142,14 @@ def test_create_intent_beyond_5_subscriptions_returns_409(
     mock_intent_repo: MagicMock,
     shioaji_provider: ShioajiQuoteProvider,
 ) -> None:
+    shioaji_provider._allowed = frozenset(  # noqa: SLF001
+        {"2330", "2317", "0050", "00878", "2603", "6505"}
+    )
     # Saturate the quota with 5 unrelated subscriptions ahead of time.
-    for symbol in ("2330", "2317", "0050", "00878", "9999"):
+    for symbol in ("2330", "2317", "0050", "00878", "2603"):
         shioaji_provider.subscribe(symbol)
 
     # Now ask the API to create an intent on a 6th allowed symbol — quota should reject.
-    shioaji_provider._allowed = frozenset(  # noqa: SLF001
-        {"2330", "2317", "0050", "00878", "9999", "6505"}
-    )
     mock_symbol_service.get_tradable_symbol.return_value = _tradable_symbol("6505")
     intent_6505 = _intent("6505")
     mock_intent_repo.create.return_value = intent_6505.id

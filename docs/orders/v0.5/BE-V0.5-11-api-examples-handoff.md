@@ -46,7 +46,8 @@ docs/api/v0.5-local-flow.md
 - 不部署、不公開。
 - `/dev/*` endpoints 僅 local mode 可用。
 - Quote 來源為 Shioaji 即時行情訂閱（BE-V0.5-13），demo 等級最多同時訂閱 **5 檔**；超出會回 `QUOTE_SUBSCRIPTION_LIMIT_EXCEEDED`。
-- Shioaji demo 期間**可選標的固定為白名單**：`2330` / `2317` / `0050` / `00878` / `9999`（9999 為測試停牌用），其他 symbol 一律回 `SYMBOL_NOT_AVAILABLE_IN_DEMO`。白名單詳見 BE-V0.5-13；V1 licensed vendor 上線後解除。
+- `GET /quotes/current-price/{symbol}` 是 Shioaji 測試查價 API，僅允許 `2330` / `2317` / `0050` / `00878`。此 API 依賴 `QUOTE_PROVIDER=shioaji_demo`、Shioaji SDK 與 Shioaji 登入憑證，無法單獨存在；詳見 `docs/api-v0.5-shioaji-current-price.md`。
+- Shioaji demo 期間**可選標的固定為白名單**：`2330` / `2317` / `0050` / `00878`，其他 symbol 一律回 `SYMBOL_NOT_AVAILABLE_IN_DEMO`。`9999` 停牌測試標的改由前端阻擋，不列入 Shioaji demo provider 白名單。白名單詳見 BE-V0.5-13；V1 licensed vendor 上線後解除。
 - Shioaji 為展示用 quote 來源，非正式行情產品；V1 才會評估換 licensed vendor。
 - 需設定 `SHIOAJI_API_KEY` / `SHIOAJI_SECRET_KEY`，本地測試可改用 `QUOTE_PROVIDER=in_memory`。
 
@@ -81,6 +82,7 @@ docs/api/v0.5-local-flow.md
 - [ ] Error envelope examples 包含 V0.5 核心 error codes（含 `QUOTE_SUBSCRIPTION_LIMIT_EXCEEDED`、`QUOTE_PROVIDER_UNAVAILABLE`）。
 - [ ] 文件清楚標示 V0.5 無 auth、不部署、不公開。
 - [ ] 文件說明 Shioaji 5 檔訂閱上限與 `QUOTE_PROVIDER` 切換方式。
+- [ ] 文件說明 Shioaji 測試查價 API 依賴 Shioaji provider，且只能查 `2330` / `2317` / `0050` / `00878`。
 - [ ] 文件**不**出現 `POST /dev/quotes`（V0.5 不再提供本地 set quote endpoint）。
 - [ ] 前端可用 examples 跑通本地主流程。
 

@@ -19,11 +19,13 @@ from typing import Any
 
 import shioaji as sj
 
-from app.services.quote.base import QuoteProviderUnavailableError
+from app.services.quote.base import QuoteProviderUnavailableError, QuoteSnapshot, QuoteUnavailableError
 from app.services.quote.shioaji_demo.normalize import (
     BidAskPayload,
     TickPayload,
     first,
+    now_utc,
+    timestamp_to_taipei,
     to_decimal,
     to_taipei,
 )
@@ -120,6 +122,27 @@ class ShioajiClient:
         except Exception:  # pragma: no cover
             # Unsubscribe on shutdown is best-effort; logging-only would be too noisy.
             pass
+
+    def get_stock_snapshot(self, symbol: str) -> QuoteSnapshot:
+        api = self._require_api()
+        contract = self._resolve_contract(symbol)
+        try:
+            snapshots = api.snapshots([contract])
+        except Exception as exc:  # pragma: no cover
+            raise QuoteProviderUnavailableError("shioaji", f"snapshot failed for {symbol}: {exc!s}") from exc
+        if not snapshots:
+            raise QuoteUnavailableError(symbol)
+
+        snapshot = snapshots[0]
+        code = str(getattr(snapshot, "code", symbol) or symbol)
+        return QuoteSnapshot(
+            symbol=code,
+            bid_price=to_decimal(getattr(snapshot, "buy_price", None)),
+            ask_price=to_decimal(getattr(snapshot, "sell_price", None)),
+            last_price=to_decimal(getattr(snapshot, "close", None)),
+            quote_time=timestamp_to_taipei(getattr(snapshot, "ts", None)),
+            received_at=now_utc(),
+        )
 
     def _resolve_contract(self, symbol: str) -> Any:
         api = self._require_api()
