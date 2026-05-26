@@ -1,0 +1,505 @@
+// ai-stock /test page — single-page API tester.
+//
+// Pure vanilla JS (ES modules). No build step, no external libraries.
+// Loads the endpoint catalog from endpoints.js, renders the left pane,
+// builds requests, sends them via fetch, and shows the response.
+
+import { ENDPOINTS } from "/test-assets/endpoints.js";
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+const state = {
+  selected: null, // endpoint object
+  history: [], // last N responses
+};
+
+const MAX_HISTORY = 5;
+
+const USER_STORAGE_KEY = "ai-stock-test-users";
+const SELECTED_USER_KEY = "ai-stock-test-selected-user";
+
+// ---------------------------------------------------------------------------
+// User context (v1)
+// ---------------------------------------------------------------------------
+//
+// `default` means "do not send X-Local-User-Id header" → backend falls back
+// to the configured LOCAL_USER_ID. Other entries are arbitrary UUIDs minted
+// per browser session and persisted in localStorage so the same alice/bob
+// across tab reloads continues to own the same intents.
+
+function loadUsers() {
+  const raw = localStorage.getItem(USER_STORAGE_KEY);
+  if (raw) {
+    try {
+      return JSON.parse(raw);
+    } catch (_) {
+      // fall through to default below
+    }
+  }
+  const fresh = {
+    alice: crypto.randomUUID(),
+    bob: crypto.randomUUID(),
+    charlie: crypto.randomUUID(),
+  };
+  localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(fresh));
+  return fresh;
+}
+
+const USERS = loadUsers();
+
+function getSelectedUser() {
+  return localStorage.getItem(SELECTED_USER_KEY) || "default";
+}
+
+function setSelectedUser(label) {
+  localStorage.setItem(SELECTED_USER_KEY, label);
+}
+
+function currentUserUuid() {
+  const label = getSelectedUser();
+  return label === "default" ? null : USERS[label];
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+function renderEndpointList(filter = "") {
+  const container = document.getElementById("endpoint-list");
+  container.innerHTML = "";
+
+  const groups = {};
+  for (const ep of ENDPOINTS) {
+    if (filter) {
+      const haystack = `${ep.method} ${ep.path} ${ep.label || ""}`.toLowerCase();
+      if (!haystack.includes(filter.toLowerCase())) continue;
+    }
+    (groups[ep.group] ??= []).push(ep);
+  }
+
+  for (const [group, items] of Object.entries(groups)) {
+    const h = document.createElement("h2");
+    h.textContent = group;
+    container.appendChild(h);
+    for (const ep of items) {
+      const div = document.createElement("div");
+      div.className = `endpoint-item ${ep.implemented ? "" : "disabled"}`;
+      div.title = ep.label || "";
+      const flag = ep.implemented ? "✅" : "📝";
+      div.innerHTML = `
+        <span class="endpoint-method ${ep.method}">${ep.method}</span>
+        <span class="endpoint-path">${flag} ${ep.path}</span>
+        ${ep.ticket ? `<span class="endpoint-ticket">${ep.ticket}</span>` : ""}
+      `;
+      if (ep.implemented) {
+        div.addEventListener("click", () => selectEndpoint(ep));
+      }
+      container.appendChild(div);
+    }
+  }
+}
+
+function renderUserSelect() {
+  const sel = document.getElementById("user-select");
+  sel.innerHTML = "";
+  const defaultOpt = document.createElement("option");
+  defaultOpt.value = "default";
+  defaultOpt.textContent = "default (LOCAL_USER_ID)";
+  sel.appendChild(defaultOpt);
+  for (const [label, uuid] of Object.entries(USERS)) {
+    const opt = document.createElement("option");
+    opt.value = label;
+    opt.textContent = `${label} (${uuid.slice(0, 8)}…)`;
+    sel.appendChild(opt);
+  }
+  sel.value = getSelectedUser();
+  sel.addEventListener("change", () => {
+    setSelectedUser(sel.value);
+  });
+}
+
+function selectEndpoint(ep) {
+  state.selected = ep;
+
+  document.querySelectorAll(".endpoint-item.active").forEach((el) => el.classList.remove("active"));
+  for (const el of document.querySelectorAll(".endpoint-item")) {
+    if (el.textContent.includes(ep.path)) {
+      el.classList.add("active");
+      break;
+    }
+  }
+
+  document.getElementById("req-method").textContent = ep.method;
+  document.getElementById("req-path").textContent = ep.path;
+  document.getElementById("req-path-params").value = ep.pathParams ? JSON.stringify(ep.pathParams) : "";
+  document.getElementById("req-query").value = ep.query ? JSON.stringify(ep.query) : "";
+  document.getElementById("req-headers").value = "";
+  document.getElementById("req-body").value = "";
+  document.getElementById("send-btn").disabled = false;
+
+  const exampleSel = document.getElementById("example-select");
+  exampleSel.innerHTML = '<option value="">Fill example…</option>';
+  if (ep.examples) {
+    for (const name of Object.keys(ep.examples)) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      exampleSel.appendChild(opt);
+    }
+  }
+}
+
+function renderResponse(status, durationMs, requestId, body) {
+  const statusEl = document.getElementById("resp-status");
+  statusEl.textContent = status;
+  statusEl.className = `status s${Math.floor(status / 100)}xx`;
+  document.getElementById("resp-duration").textContent = `${durationMs}ms`;
+  document.getElementById("resp-req-id").textContent = requestId ? `req: ${requestId}` : "";
+  document.getElementById("response-body").textContent = typeof body === "string" ? body : JSON.stringify(body, null, 2);
+
+  const banner = document.getElementById("response-error-banner");
+  if (status >= 400 && body && body.error) {
+    banner.textContent = `${body.error.code}: ${body.error.message}`;
+    banner.classList.remove("hidden");
+  } else {
+    banner.classList.add("hidden");
+  }
+}
+
+function renderHistory() {
+  const list = document.getElementById("history-list");
+  list.innerHTML = "";
+  for (const item of state.history) {
+    const li = document.createElement("li");
+    li.className = "history-item";
+    li.innerHTML = `
+      <span class="hi-status s${Math.floor(item.status / 100)}xx">${item.status}</span>
+      <span>${item.method}</span>
+      <span>${item.path}</span>
+    `;
+    li.addEventListener("click", () => {
+      renderResponse(item.status, item.duration, item.requestId, item.body);
+    });
+    list.appendChild(li);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sending
+// ---------------------------------------------------------------------------
+
+function safeParseJson(str, fallback) {
+  if (!str) return fallback;
+  try {
+    return JSON.parse(str);
+  } catch (e) {
+    throw new Error(`invalid JSON: ${e.message}`);
+  }
+}
+
+function substitutePathParams(path, params) {
+  let out = path;
+  for (const [k, v] of Object.entries(params || {})) {
+    out = out.replace(`{${k}}`, encodeURIComponent(v));
+  }
+  return out;
+}
+
+function buildHeaders(extra) {
+  const headers = { "Content-Type": "application/json", ...extra };
+  const uuid = currentUserUuid();
+  if (uuid) headers["X-Local-User-Id"] = uuid;
+  return headers;
+}
+
+async function sendRequest({ method, path, pathParams, query, headers, body }) {
+  const url = new URL(substitutePathParams(path, pathParams), window.location.origin);
+  for (const [k, v] of Object.entries(query || {})) {
+    if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+  }
+  const init = {
+    method,
+    headers: buildHeaders(headers),
+  };
+  if (method !== "GET" && method !== "HEAD" && body !== undefined) {
+    init.body = typeof body === "string" ? body : JSON.stringify(body);
+  }
+  const t0 = performance.now();
+  const resp = await fetch(url.toString(), init);
+  const duration = Math.round(performance.now() - t0);
+  const requestId = resp.headers.get("x-request-id") || resp.headers.get("X-Request-Id");
+  let parsed;
+  const text = await resp.text();
+  try {
+    parsed = JSON.parse(text);
+  } catch (_) {
+    parsed = text;
+  }
+  const record = { status: resp.status, duration, requestId, body: parsed, method, path };
+  return record;
+}
+
+function pushHistory(record) {
+  state.history.unshift(record);
+  if (state.history.length > MAX_HISTORY) state.history.length = MAX_HISTORY;
+  renderHistory();
+}
+
+async function onSend() {
+  if (!state.selected) return;
+  const ep = state.selected;
+  let pathParams, query, headers, body;
+  try {
+    pathParams = safeParseJson(document.getElementById("req-path-params").value, {});
+    query = safeParseJson(document.getElementById("req-query").value, {});
+    headers = safeParseJson(document.getElementById("req-headers").value, {});
+    const bodyText = document.getElementById("req-body").value.trim();
+    body = bodyText ? safeParseJson(bodyText) : undefined;
+  } catch (e) {
+    renderResponse(0, 0, null, `client error: ${e.message}`);
+    return;
+  }
+  const btn = document.getElementById("send-btn");
+  btn.disabled = true;
+  try {
+    const record = await sendRequest({ method: ep.method, path: ep.path, pathParams, query, headers, body });
+    renderResponse(record.status, record.duration, record.requestId, record.body);
+    pushHistory(record);
+  } catch (e) {
+    renderResponse(0, 0, null, `network error: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function onExampleSelected(ev) {
+  if (!state.selected || !state.selected.examples) return;
+  const name = ev.target.value;
+  if (!name) return;
+  document.getElementById("req-body").value = JSON.stringify(state.selected.examples[name], null, 2);
+  ev.target.value = "";
+}
+
+// ---------------------------------------------------------------------------
+// Demo flows
+// ---------------------------------------------------------------------------
+
+function demoLog(line, klass = "") {
+  const pre = document.getElementById("demo-log");
+  const ts = new Date().toLocaleTimeString();
+  pre.textContent += `\n[${ts}] ${line}`;
+  if (klass) {
+    // Simple class-on-last-line trick: wrap the line in a span via innerHTML.
+    // Plain pre keeps formatting; styling only on selected lines.
+  }
+  pre.scrollTop = pre.scrollHeight;
+}
+
+function resetDemoLog() {
+  document.getElementById("demo-log").textContent = "(demo running…)";
+}
+
+async function demoBuyPriceAlert() {
+  resetDemoLog();
+  demoLog("step 1: create buy_price_alert intent 2330 @600");
+  const create = await sendRequest({
+    method: "POST",
+    path: "/trade-intents",
+    body: { strategy: "buy_price_alert", symbol: "2330", quantityLots: 1, targetPrice: "600" },
+  });
+  pushHistory(create);
+  if (create.status !== 201) {
+    demoLog(`  → ${create.status} ${JSON.stringify(create.body)}`, "err");
+    return;
+  }
+  const intentId = create.body.data.id;
+  demoLog(`  → 201 active intent ${intentId}`, "ok");
+
+  demoLog("step 2: push quote ask=599 (will trigger)");
+  const push = await sendRequest({
+    method: "POST",
+    path: "/dev/push-quote",
+    body: { symbol: "2330", askPrice: "599" },
+  });
+  pushHistory(push);
+  demoLog(`  → ${push.status}`, push.status === 200 ? "ok" : "err");
+
+  demoLog("step 3: poll notifications");
+  const notif = await sendRequest({ method: "GET", path: "/notifications", query: { unreadOnly: true, pageSize: 10 } });
+  pushHistory(notif);
+  const count = notif.body?.data?.length ?? 0;
+  demoLog(`  → ${notif.status} ${count} unread notification(s)`, count > 0 ? "ok" : "warn");
+}
+
+async function demoLimitBuyOrder() {
+  resetDemoLog();
+  demoLog("step 1: create limit_buy_order intent 2330 @600 qty 2");
+  const create = await sendRequest({
+    method: "POST",
+    path: "/trade-intents",
+    body: {
+      strategy: "limit_buy_order",
+      symbol: "2330",
+      quantityLots: 2,
+      targetPrice: "600",
+      transactionMode: "partial_fill_allowed",
+    },
+  });
+  pushHistory(create);
+  if (create.status !== 201) {
+    demoLog(`  → ${create.status} ${JSON.stringify(create.body)}`, "err");
+    return;
+  }
+  demoLog(`  → 201 intent ${create.body.data.id}, filledQuantityLots=${create.body.data.filledQuantityLots}`, "ok");
+
+  demoLog("step 2: push quote ask=599");
+  const push = await sendRequest({
+    method: "POST",
+    path: "/dev/push-quote",
+    body: { symbol: "2330", askPrice: "599" },
+  });
+  pushHistory(push);
+  demoLog(`  → ${push.status}`, push.status === 200 ? "ok" : "err");
+
+  demoLog("step 3: poll notifications");
+  const notif = await sendRequest({ method: "GET", path: "/notifications", query: { unreadOnly: true, pageSize: 10 } });
+  pushHistory(notif);
+  const lim = notif.body?.data?.find((n) => n.type === "limit_order_triggered");
+  if (lim) {
+    demoLog(`  → 200 limit_order_triggered: "${lim.renderedTitle}"`, "ok");
+  } else {
+    demoLog(`  → 200 but no limit_order_triggered notification found`, "warn");
+  }
+}
+
+async function demoMultiUser() {
+  resetDemoLog();
+  const initial = getSelectedUser();
+  try {
+    setSelectedUser("alice");
+    demoLog("user=alice: create intent 2330 @600");
+    const create = await sendRequest({
+      method: "POST",
+      path: "/trade-intents",
+      body: { strategy: "buy_price_alert", symbol: "2330", quantityLots: 1, targetPrice: "600" },
+    });
+    pushHistory(create);
+    if (create.status !== 201) {
+      demoLog(`  → ${create.status} ${JSON.stringify(create.body)}`, "err");
+      return;
+    }
+    demoLog(`  → 201 alice intent ${create.body.data.id}`, "ok");
+
+    setSelectedUser("bob");
+    demoLog("user=bob: list intents (should not see alice's)");
+    const bobList = await sendRequest({ method: "GET", path: "/trade-intents" });
+    pushHistory(bobList);
+    const bobCount = bobList.body?.data?.length ?? 0;
+    demoLog(`  → ${bobList.status} bob sees ${bobCount} intents`, bobCount === 0 ? "ok" : "err");
+
+    setSelectedUser("alice");
+    demoLog("user=alice: list intents (should see the new one)");
+    const aliceList = await sendRequest({ method: "GET", path: "/trade-intents" });
+    pushHistory(aliceList);
+    const found = (aliceList.body?.data || []).some((i) => i.id === create.body.data.id);
+    demoLog(`  → ${aliceList.status} alice ${found ? "sees" : "does NOT see"} the intent`, found ? "ok" : "err");
+  } finally {
+    setSelectedUser(initial);
+    document.getElementById("user-select").value = initial;
+  }
+}
+
+const DEMOS = {
+  buy_price_alert: demoBuyPriceAlert,
+  limit_buy_order: demoLimitBuyOrder,
+  multi_user: demoMultiUser,
+};
+
+// ---------------------------------------------------------------------------
+// Server state (v3)
+// ---------------------------------------------------------------------------
+
+async function refreshServerState() {
+  try {
+    const resp = await fetch("/dev/server-state", { headers: buildHeaders({}) });
+    if (!resp.ok) {
+      document.getElementById("clock-display").textContent = "system (state n/a)";
+      return;
+    }
+    const body = await resp.json();
+    const clock = body?.data?.clock;
+    const display = clock
+      ? `${clock.currentTaipei}${clock.isFrozen ? " 🧊" : ""}${clock.withinRegularSession ? " 盤中" : " 盤外"}`
+      : "system";
+    document.getElementById("clock-display").textContent = display;
+  } catch (_) {
+    document.getElementById("clock-display").textContent = "system";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// OpenAPI sanity check (v4)
+// ---------------------------------------------------------------------------
+
+async function openApiSanityCheck() {
+  try {
+    const resp = await fetch("/openapi.json");
+    if (!resp.ok) return;
+    const spec = await resp.json();
+    const known = new Set();
+    for (const [path, ops] of Object.entries(spec.paths || {})) {
+      for (const m of Object.keys(ops)) known.add(`${m.toUpperCase()} ${path}`);
+    }
+    for (const ep of ENDPOINTS) {
+      if (!ep.implemented) continue;
+      // Skip path-parameter endpoints; openapi uses `{intent_id}` matching ours.
+      const key = `${ep.method} ${ep.path}`;
+      if (!known.has(key)) {
+        console.warn(`[endpoints.js] ${key} marked implemented but missing from /openapi.json`);
+      }
+    }
+  } catch (e) {
+    console.warn("[endpoints.js] /openapi.json sanity check failed:", e.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrap
+// ---------------------------------------------------------------------------
+
+function init() {
+  document.getElementById("base-url").textContent = window.location.origin;
+  renderUserSelect();
+  renderEndpointList();
+  document.getElementById("endpoint-filter").addEventListener("input", (e) => {
+    renderEndpointList(e.target.value);
+  });
+  document.getElementById("send-btn").addEventListener("click", onSend);
+  document.getElementById("example-select").addEventListener("change", onExampleSelected);
+  document.getElementById("refresh-state-btn").addEventListener("click", refreshServerState);
+  document.getElementById("reset-all-btn").addEventListener("click", async () => {
+    state.history = [];
+    renderHistory();
+    document.getElementById("demo-log").textContent = "(reset)";
+    try {
+      await fetch("/dev/set-clock", { method: "POST", headers: buildHeaders({}), body: "{}" });
+    } catch (_) {}
+    refreshServerState();
+  });
+  for (const btn of document.querySelectorAll("#demo-buttons button")) {
+    btn.addEventListener("click", () => {
+      const fn = DEMOS[btn.dataset.demo];
+      if (fn) fn();
+    });
+  }
+  refreshServerState();
+  openApiSanityCheck();
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init);
+} else {
+  init();
+}

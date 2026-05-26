@@ -1,7 +1,8 @@
 from collections.abc import Callable, Generator
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import Depends, Request, status
+from fastapi import Depends, Header, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.errors import ApiError, ErrorCode
@@ -46,7 +47,23 @@ def get_symbol_service(db: DatabaseDep) -> SymbolService:
 SymbolServiceDep = Annotated[SymbolService, Depends(get_symbol_service)]
 
 
-def get_current_user(settings: SettingsDep) -> RequestUser:
+def get_current_user(
+    settings: SettingsDep,
+    x_local_user_id: Annotated[UUID | None, Header(alias="X-Local-User-Id")] = None,
+) -> RequestUser:
+    """Resolve the request's owner.
+
+    Production (``LOCAL_MODE=false``): always the configured ``LOCAL_USER_ID``;
+    the ``X-Local-User-Id`` header is silently ignored so a public deployment
+    cannot impersonate users by sending the header.
+
+    LOCAL_MODE: if the ``X-Local-User-Id`` header is present (and parses as
+    a UUID — FastAPI auto-returns 422 otherwise), use it as the request
+    owner. Used by the ``/test`` page to demo multi-user owner scoping
+    without any auth infrastructure.
+    """
+    if settings.local_mode and x_local_user_id is not None:
+        return RequestUser(user_id=x_local_user_id, role="local")
     return build_local_user(settings)
 
 
@@ -60,8 +77,19 @@ def get_intent_repository(db: DatabaseDep) -> IntentRepository:
 IntentRepoDep = Annotated[IntentRepository, Depends(get_intent_repository)]
 
 
-def get_trading_session_service() -> TradingSessionService:
-    return TradingSessionService()
+def get_trading_session_service(request: Request) -> TradingSessionService:
+    """Return the process-wide ``TradingSessionService`` stored on app.state.
+
+    ``create_app()`` instantiates it once so the API path, lifespan
+    dispatcher, and ``/dev/set-clock`` override all share the same clock.
+    Falls back to a fresh instance if no app.state entry exists (some unit
+    tests build a bare ``FastAPI`` without ``create_app``).
+    """
+    svc = getattr(request.app.state, "session_service", None)
+    if svc is None:
+        svc = TradingSessionService()
+        request.app.state.session_service = svc
+    return svc
 
 
 TradingSessionServiceDep = Annotated[TradingSessionService, Depends(get_trading_session_service)]
