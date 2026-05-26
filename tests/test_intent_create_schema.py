@@ -91,7 +91,7 @@ def test_limit_buy_order_subschema_rejects_per_fill_notification_mode() -> None:
     assert error["type"] == "literal_error"
 
 
-def test_trailing_stop_subschema_accepts_long_percentage() -> None:
+def test_trailing_stop_subschema_accepts_percentage() -> None:
     request = _trailing_adapter.validate_python(
         {
             "symbol": "2330",
@@ -140,7 +140,7 @@ def test_trailing_stop_subschema_percentage_rejects_value_above_ten() -> None:
     assert error["type"] == "value_error"
 
 
-def test_trailing_stop_subschema_fixed_amount_allows_values_above_fifty() -> None:
+def test_trailing_stop_subschema_fixed_amount_allows_values_above_percentage_limit() -> None:
     request = _trailing_adapter.validate_python(
         {
             "symbol": "2330",
