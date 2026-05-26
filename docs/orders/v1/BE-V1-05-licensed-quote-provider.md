@@ -13,7 +13,7 @@
 
 V0.5 使用 Shioaji demo（BE-V0.5-13）作為唯一 runtime quote source，並在工單裡明確說：
 
-> V1 切換到 licensed vendor 時，所有 symbol master 中的標的皆可選，本工單的 5 檔白名單失效。
+> V1 切換到 licensed vendor 時，所有 symbol master 中的標的皆可選，本工單的 4 檔白名單失效。
 > V1 新增 licensed provider 時，新增檔案 + 在 `factory.py` mapping 加一行 + **刪除 `shioaji_demo/` 整個資料夾**。
 
 BE-V1-05 就是執行這個切換。同時補齊 V0.5 沒做的：

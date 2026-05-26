@@ -13,7 +13,7 @@ def _make_provider(*, max_subs: int = 5) -> tuple[ShioajiQuoteProvider, MagicMoc
     client = MagicMock()
     provider = ShioajiQuoteProvider(
         client=client,
-        allowed_symbols=frozenset({"2330", "2317", "0050", "00878", "9999", "1101"}),
+        allowed_symbols=frozenset({"2330", "2317", "0050", "00878", "2603", "1101"}),
         max_subscriptions=max_subs,
     )
     provider.mark_started_for_tests()
@@ -22,14 +22,14 @@ def _make_provider(*, max_subs: int = 5) -> tuple[ShioajiQuoteProvider, MagicMoc
 
 def test_fifth_subscription_succeeds() -> None:
     provider, _ = _make_provider()
-    for symbol in ("2330", "2317", "0050", "00878", "9999"):
+    for symbol in ("2330", "2317", "0050", "00878", "2603"):
         provider.subscribe(symbol)
     assert len(provider.active_subscriptions()) == 5
 
 
 def test_sixth_subscription_raises_quota_error() -> None:
     provider, client = _make_provider()
-    for symbol in ("2330", "2317", "0050", "00878", "9999"):
+    for symbol in ("2330", "2317", "0050", "00878", "2603"):
         provider.subscribe(symbol)
 
     with pytest.raises(QuoteSubscriptionLimitExceeded) as exc:
@@ -43,7 +43,7 @@ def test_sixth_subscription_raises_quota_error() -> None:
 
 def test_unsubscribe_frees_quota() -> None:
     provider, _ = _make_provider()
-    for symbol in ("2330", "2317", "0050", "00878", "9999"):
+    for symbol in ("2330", "2317", "0050", "00878", "2603"):
         provider.subscribe(symbol)
 
     provider.unsubscribe("2330")

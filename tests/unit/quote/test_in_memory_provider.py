@@ -60,7 +60,7 @@ def test_in_memory_has_no_quota() -> None:
     """The 5-subscription limit is a demo-only concern; tests get unlimited symbols."""
 
     provider = InMemoryQuoteProvider()
-    for symbol in ("2330", "2317", "0050", "00878", "9999", "1101"):
+    for symbol in ("2330", "2317", "0050", "00878", "2603", "1101"):
         provider.subscribe(symbol)
     assert len(provider.active_subscriptions()) == 6
 

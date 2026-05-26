@@ -9,6 +9,7 @@ from app.api.routes.dev import router as dev_router
 from app.api.routes.health import router as health_router
 from app.api.routes.intents import router as intents_router
 from app.api.routes.notifications import router as notifications_router
+from app.api.routes.quotes import router as quotes_router
 from app.api.routes.symbols import router as symbols_router
 from app.core.config import get_settings
 from app.core.ids import RequestIdMiddleware
@@ -80,6 +81,7 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(symbols_router, prefix="/symbols", tags=["symbols"])
+    app.include_router(quotes_router, prefix="/quotes", tags=["quotes"])
     app.include_router(intents_router, prefix="/trade-intents", tags=["trade-intents"])
     app.include_router(notifications_router, prefix="/notifications", tags=["notifications"])
     if settings.local_mode:

@@ -4,7 +4,7 @@ from fastapi import status
 
 from app.services.quote.base import QuoteProviderError
 
-DEFAULT_DEMO_ALLOWED_SYMBOLS: frozenset[str] = frozenset({"2330", "2317", "0050", "00878", "9999"})
+DEFAULT_DEMO_ALLOWED_SYMBOLS: frozenset[str] = frozenset({"2330", "2317", "0050", "00878"})
 
 
 class SymbolNotAvailableInDemo(QuoteProviderError):
@@ -30,7 +30,7 @@ class SymbolNotAvailableInDemo(QuoteProviderError):
 def parse_allowlist_override(raw: str | None) -> frozenset[str]:
     """Parse the comma-separated `SHIOAJI_DEMO_ALLOWED_SYMBOLS` env into a frozenset.
 
-    Empty / unset → use the built-in 5-symbol default. Whitespace is stripped per token.
+    Empty / unset → use the built-in 4-symbol default. Whitespace is stripped per token.
     """
 
     if not raw:

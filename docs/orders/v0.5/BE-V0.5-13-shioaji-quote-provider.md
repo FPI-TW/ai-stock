@@ -89,7 +89,7 @@ app/services/quote/
 └── shioaji_demo/        # Shioaji demo 全部 hardcode 集中於此資料夾                 ← V1 rm -rf
     ├── __init__.py
     ├── provider.py      # ShioajiQuoteProvider（實作 QuoteProvider）
-    ├── allowlist.py     # 5 檔白名單常數 + SymbolNotAvailableInDemo
+    ├── allowlist.py     # demo 白名單常數 + SymbolNotAvailableInDemo
     ├── quota.py         # 5 檔配額管理 + QuoteSubscriptionLimitExceeded
     └── client.py        # Shioaji SDK login / callback 包裝
 ```
@@ -113,7 +113,7 @@ V1 新增 licensed provider 時：
 
 ### Demo 標的白名單
 
-V0.5 使用 Shioaji demo 期間，可選標的固定為以下 5 檔，**其餘一律拒絕**：
+V0.5 使用 Shioaji demo 期間，可選標的固定為以下 4 檔，**其餘一律拒絕**：
 
 | Symbol | 名稱 | 類別 | tradable_status | 用途 |
 |---|---|---|---|---|
@@ -121,11 +121,12 @@ V0.5 使用 Shioaji demo 期間，可選標的固定為以下 5 檔，**其餘�
 | `2317` | 鴻海 | stock | tradable | demo 主標的 |
 | `0050` | 元大台灣50 | etf | tradable | demo ETF |
 | `00878` | 國泰永續高股息 | etf | tradable | demo ETF |
-| `9999` | 測試停牌股票 | stock | halted | 測試 `SYMBOL_NOT_TRADABLE` 拒絕路徑 |
+
+`9999` 停牌測試標的改由前端阻擋，不列入 Shioaji demo provider 白名單，也不向 Shioaji 發出查價或訂閱請求。
 
 實作要求：
 
-- Provider 啟動時以該白名單 hardcode（或讀 `SHIOAJI_DEMO_ALLOWED_SYMBOLS` env，預設為上述 5 檔），不從 DB 動態取。
+- Provider 啟動時以該白名單 hardcode（或讀 `SHIOAJI_DEMO_ALLOWED_SYMBOLS` env，預設為上述 4 檔），不從 DB 動態取。
 - `subscribe(symbol)` 對白名單外的 symbol 直接拒絕，**不發出 Shioaji 訂閱請求**，回 `SYMBOL_NOT_AVAILABLE_IN_DEMO`。
 - `POST /trade-intents` 在 reconcile 觸發 subscribe 失敗時，把該錯誤一併轉成 API error 拒絕建單（與配額超出走同一條 transaction-rollback 路徑）。
 - V1 切換到 licensed vendor 時，本節整段隨 demo provider 移除；symbol master 即為唯一 allowlist。
@@ -137,7 +138,7 @@ V0.5 使用 Shioaji demo 期間，可選標的固定為以下 5 檔，**其餘�
 - `subscribe()` 若會超過上限，丟出 `QuoteSubscriptionLimitExceeded`。
 - 訂閱集合來源：當前 `active` 與 `scheduled` 狀態的 trade intent 所涉及的不重複 symbols。
 - 啟動時 reconcile 一次（讀 DB → 訂閱）。
-- 5 檔配額限制與白名單獨立：白名單先擋（symbol 是否允許），配額後擋（這 5 檔是否都在訂閱）。
+- 5 檔配額限制與白名單獨立：白名單先擋（symbol 是否允許），配額後擋（允許標的是否已達訂閱上限）。
 - 配額管理程式位於 `shioaji_demo/quota.py`，V1 licensed provider 若有自己的 quota 規則需獨立重新設計，不繼承本 demo 實作。
 
 ### Intent CRUD 整合（自 BE-V0.5-07 延後）
@@ -166,7 +167,7 @@ BE-V0.5-07 已 ship 但未含此整合，於本工單一併補：
 - `SHIOAJI_API_KEY` / `SHIOAJI_SECRET_KEY`：**僅在 `QUOTE_PROVIDER=shioaji_demo` 時讀取**；缺失則 demo provider 啟動失敗。其他 provider 不讀此 env，啟動不報缺。
 - `SHIOAJI_MAX_SUBSCRIPTIONS`：選用，預設 5。同上限定僅 `shioaji_demo` 讀。
 - `SHIOAJI_SIMULATION`：選用 boolean，呼叫 Shioaji simulation 模式時為 `true`，預設 `false`。同上限定僅 `shioaji_demo` 讀。
-- `SHIOAJI_DEMO_ALLOWED_SYMBOLS`：選用，逗號分隔 symbol list，預設為白名單 5 檔。同上限定僅 `shioaji_demo` 讀。
+- `SHIOAJI_DEMO_ALLOWED_SYMBOLS`：選用，逗號分隔 symbol list，預設為白名單 4 檔。同上限定僅 `shioaji_demo` 讀。
 
 切換 provider 不需修改 settings.py 之外的程式碼；所有 `SHIOAJI_*` env 與相關 config 都隨 `shioaji_demo/` 一併在 V1 移除。
 

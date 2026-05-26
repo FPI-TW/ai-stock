@@ -4,7 +4,7 @@ Everything Shioaji-specific lives in this directory:
 
 - `provider.py` — `ShioajiQuoteProvider`, implements the `QuoteProvider` protocol.
 - `client.py`   — the only module that imports the `shioaji` SDK.
-- `allowlist.py` — 5-symbol demo allowlist + `SymbolNotAvailableInDemo` error.
+- `allowlist.py` — 4-symbol demo allowlist + `SymbolNotAvailableInDemo` error.
 - `quota.py`   — 5-subscription quota + `QuoteSubscriptionLimitExceeded` error.
 
 The rest of the codebase must not import from here. V1 migration:
