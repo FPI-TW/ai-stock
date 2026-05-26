@@ -11,24 +11,51 @@
 <body>
   <div id="app" data-mode="dev">
     <header id="topbar">
-      <h1>ai-stock /test</h1>
+      <div class="topbar-brand">
+        <span class="brand-mark" aria-hidden="true">📊</span>
+        <div class="brand-text">
+          <span class="brand-name">AI Stock</span>
+          <span class="brand-sub">測試平台</span>
+        </div>
+      </div>
+
       <div class="mode-toggle" role="tablist" aria-label="檢視模式">
-        <button type="button" data-mode="dev" class="active" role="tab" aria-selected="true">Dev</button>
+        <button type="button" data-mode="dev" class="active" role="tab" aria-selected="true">開發者</button>
         <button type="button" data-mode="user" role="tab" aria-selected="false">使用者</button>
       </div>
-      <span class="field topbar-dev-only">Base&nbsp;<strong id="base-url">—</strong></span>
-      <span class="field topbar-dev-only">User&nbsp;
-        <select id="user-select" title="Sent as X-Local-User-Id header (LOCAL_MODE only)">
-          <option value="default">default</option>
+
+      <div class="topbar-status">
+        <span class="status-pill" id="server-status-pill" title="後端服務狀態">
+          <span class="status-dot" id="server-status-dot" data-status="unknown"></span>
+          <span class="status-label" id="server-status-label">檢查中…</span>
+        </span>
+        <span class="status-pill topbar-dev-only" id="clock-pill" title="目前系統時鐘">
+          <span class="status-icon" aria-hidden="true">🕐</span>
+          <span id="clock-display">系統時間</span>
+        </span>
+      </div>
+
+      <div class="topbar-spacer"></div>
+
+      <div class="topbar-identity topbar-dev-only">
+        <span class="identity-avatar" id="dev-user-avatar" aria-hidden="true">?</span>
+        <select id="user-select" title="送出時帶 X-Local-User-Id header（僅限 LOCAL_MODE）">
+          <option value="default">預設使用者</option>
         </select>
-      </span>
-      <span class="field topbar-dev-only">Clock&nbsp;<strong id="clock-display">system</strong></span>
-      <span class="field topbar-user-only">您好，<strong id="user-greeting">—</strong></span>
+      </div>
+      <div class="topbar-identity topbar-user-only">
+        <span class="identity-avatar" id="user-mode-avatar" aria-hidden="true">?</span>
+        <div class="identity-text">
+          <span class="identity-label">您好</span>
+          <strong id="user-greeting">—</strong>
+        </div>
+      </div>
+
       <div class="topbar-actions">
-        <button id="refresh-state-btn" class="topbar-dev-only" title="GET /dev/server-state">Refresh state</button>
-        <button id="reset-all-btn" class="topbar-dev-only" title="Reset clock + clear history">Reset all</button>
-        <button id="user-refresh-btn" class="topbar-user-only" title="重新整理 dashboard">重新整理</button>
-        <button id="user-switch-btn" class="topbar-user-only" title="切換身份">切換身份</button>
+        <button id="refresh-state-btn" class="icon-btn topbar-dev-only" title="重新整理 server 狀態" aria-label="重新整理狀態">↻</button>
+        <button id="reset-all-btn" class="icon-btn danger topbar-dev-only" title="重設時鐘並清空歷史" aria-label="全部重設">⟲</button>
+        <button id="user-refresh-btn" class="icon-btn topbar-user-only" title="重新整理 dashboard" aria-label="重新整理">↻</button>
+        <button id="user-switch-btn" class="topbar-user-only switch-identity-btn" title="切換身份">切換身份</button>
       </div>
     </header>
 
