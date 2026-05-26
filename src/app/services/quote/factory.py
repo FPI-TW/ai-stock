@@ -5,7 +5,7 @@ is **lazy-imported** — top-level `import` is forbidden so that:
 
 - `QUOTE_PROVIDER=in_memory` (CI / unit tests) does not pull in the Shioaji SDK.
 - V1 migration can `rm -rf shioaji_demo/` with only this file's mapping touched.
-- Missing Shioaji SDK produces a clear actionable error, not a stray ImportError.
+- A broken environment produces a clear actionable error, not a stray ImportError.
 """
 
 from app.core.config import Settings
@@ -26,7 +26,7 @@ def build_quote_provider(settings: Settings) -> QuoteProvider:
         except ImportError as exc:  # pragma: no cover - dependency-missing branch
             raise RuntimeError(
                 "QUOTE_PROVIDER=shioaji_demo but the `shioaji` package is not installed. "
-                "Run `uv sync --extra shioaji_demo` (or switch to QUOTE_PROVIDER=in_memory for CI)."
+                "Run `uv sync` to install required dependencies."
             ) from exc
         return ShioajiQuoteProvider.from_settings(settings)
 

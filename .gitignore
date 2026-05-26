@@ -13,3 +13,7 @@ TASK_TRACKER.md
 
 # Claude Code 個人 MCP server 設定（不強制全 team 安裝）
 .mcp.json
+
+# Logs
+logs/
+*.log
