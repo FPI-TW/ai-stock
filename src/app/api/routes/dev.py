@@ -66,6 +66,7 @@ def evaluate_quotes(
 
     now = session_service.now_taipei()
     triggered_ids: list[str] = []
+    has_pending_writes = False
     for intent in intents:
         quote = quotes_by_symbol.get(intent.symbol)
         if quote is None:
@@ -78,27 +79,31 @@ def evaluate_quotes(
                 result.dynamic_trigger_price,
                 result.baseline_updated_at,
             )
+            has_pending_writes = True
         if not result.should_trigger:
-            if result.baseline_updated_at is not None:
-                intent_repo.commit()
             continue
         if result.trigger_price is None or result.trigger_reference_price_type is None:
             raise RuntimeError(f"Evaluator returned should_trigger=True but trigger fields are None: {result}")
         try:
-            trigger_cmd.execute(
-                TriggerIntentInput(
-                    intent_id=intent.id,
-                    trigger_price=result.trigger_price,
-                    trigger_reference_price_type=result.trigger_reference_price_type,
-                    fallback_used=result.fallback_used,
-                    quote_snapshot=quote_snapshot_to_jsonb(quote),
-                    quote_time=quote.quote_time,
+            with intent_repo.begin_nested():
+                trigger_cmd.stage(
+                    TriggerIntentInput(
+                        intent_id=intent.id,
+                        trigger_price=result.trigger_price,
+                        trigger_reference_price_type=result.trigger_reference_price_type,
+                        fallback_used=result.fallback_used,
+                        quote_snapshot=quote_snapshot_to_jsonb(quote),
+                        quote_time=quote.quote_time,
+                    )
                 )
-            )
+            has_pending_writes = True
             triggered_ids.append(str(intent.id))
         except (IntentNotActiveError, IntentNotFoundError, DuplicateTriggerError) as exc:
             # Race between listing actives and acquiring FOR UPDATE; skip silently.
             logger.warning("trigger skipped for intent %s: %s", intent.id, exc)
+
+    if has_pending_writes:
+        intent_repo.commit()
 
     return EvaluateQuotesResponse(
         data=EvaluateQuotesData(

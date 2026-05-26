@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, SessionTransaction
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.db.models.core import Symbol, TradeIntent
@@ -71,11 +71,16 @@ class IntentRepository:
         """Commit pending repository writes.
 
         Most command paths own their transaction boundaries directly. This is
-        for system/dev evaluator paths that only have a repository dependency
-        but still need to persist non-trigger baseline updates.
+        for system/dev evaluator paths that batch baseline updates and trigger
+        writes from the same quote snapshot into one transaction.
         """
 
         self._db.commit()
+
+    def begin_nested(self) -> SessionTransaction:
+        """Open a savepoint on the repository session."""
+
+        return self._db.begin_nested()
 
     def create(
         self,

@@ -229,7 +229,15 @@ class TriggerIntentCommand:
     def __init__(self, db: Session) -> None:
         self._db = db
 
-    def execute(self, inp: TriggerIntentInput) -> TriggerIntentOutput:
+    def stage(self, inp: TriggerIntentInput) -> tuple[TriggerEventRow, NotificationRow]:
+        """Stage trigger_event + notification + intent update without committing.
+
+        System evaluator paths use this inside an outer transaction so baseline
+        updates and trigger writes from the same quote batch commit together.
+        Wrap this in `Session.begin_nested()` when a caller wants per-trigger
+        conflict isolation without aborting the whole batch.
+        """
+
         intent = self._db.execute(
             select(TradeIntent).where(TradeIntent.id == inp.intent_id).with_for_update()
         ).scalar_one_or_none()
@@ -238,21 +246,24 @@ class TriggerIntentCommand:
         if intent.status != "active":
             raise IntentNotActiveError(inp.intent_id, intent.status)
 
+        try:
+            return persist_trigger(self._db, intent, inp)
+        except IntegrityError as exc:
+            raise DuplicateTriggerError(inp.intent_id) from exc
+
+    def execute(self, inp: TriggerIntentInput) -> TriggerIntentOutput:
         # Wrap the whole write sequence: autoflush on `execute(update(...))`
         # can surface the UNIQUE violation before commit, so a commit-only
         # try/except would miss it.
         try:
-            trigger_row, notification_row = persist_trigger(self._db, intent, inp)
+            trigger_row, notification_row = self.stage(inp)
             self._db.commit()
             self._db.refresh(trigger_row)
             self._db.refresh(notification_row)
-        except IntegrityError as exc:
+        except DuplicateTriggerError:
             self._db.rollback()
-            raise DuplicateTriggerError(inp.intent_id) from exc
-        except IntentNotActiveError:
-            # Defense-in-depth: persist_trigger detected rowcount==0 on the
-            # status-guarded UPDATE. Roll back the staged trigger_event /
-            # notification before re-raising so the session is left clean.
+            raise
+        except (IntentNotActiveError, IntentNotFoundError):
             self._db.rollback()
             raise
 
