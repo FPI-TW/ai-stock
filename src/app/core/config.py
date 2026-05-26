@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     local_user_id: UUID | None = Field(default=None, alias="LOCAL_USER_ID")
     local_mode: bool = Field(default=True, alias="LOCAL_MODE")
     request_id_header: str = Field(default="X-Request-Id", alias="REQUEST_ID_HEADER")
+    cors_allow_origins: str = Field(
+        default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001",
+        alias="CORS_ALLOW_ORIGINS",
+    )
 
     # quote provider switch — single mechanism for choosing the runtime quote source.
     # V0.5 accepts: "shioaji_demo" (default, runtime) | "in_memory" (tests / CI).

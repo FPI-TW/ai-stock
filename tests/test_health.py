@@ -35,3 +35,18 @@ def test_health_database_unavailable_uses_error_envelope(client_factory: ClientF
             "requestId": "req-db-down",
         }
     }
+
+
+def test_cors_allows_local_frontend(client_factory: ClientFactory) -> None:
+    client: TestClient = client_factory(database_available=True)
+
+    response = client.options(
+        "/health",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
