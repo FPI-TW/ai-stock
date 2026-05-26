@@ -1,0 +1,559 @@
+// ai-stock /test — 使用者視角模式
+//
+// Dashboard + 下單 sheet flow，呼真實 V0.5 API。底層 user 切換沿用
+// app.js 的 X-Local-User-Id header 機制。
+//
+// 匯出：
+//   initUserView()       — 綁定全 view DOM event
+//   onEnterUserMode()    — 切到使用者模式時刷新 dashboard
+//   showToast(msg, type) — 也讓 app.js 可呼叫
+
+import { USERS, getSelectedUser, setSelectedUser, sendRequest } from "/test-assets/app.js";
+
+// ---------------------------------------------------------------------------
+// Strategy 中文 label — 與 notification_template.py 同步
+// ---------------------------------------------------------------------------
+
+const STRATEGY_LABEL = {
+  buy_price_alert: "買進到價提醒",
+  sell_price_alert: "賣出到價提醒",
+  limit_buy_order: "限價買單",
+  limit_sell_order: "限價賣單",
+};
+
+const STRATEGY_TRIGGER_DESC = {
+  buy_price_alert: "ask ≤ 目標價時通知",
+  sell_price_alert: "bid ≥ 目標價時通知",
+  limit_buy_order: "ask ≤ 目標價時觸發",
+  limit_sell_order: "bid ≥ 目標價時觸發",
+};
+
+const STATUS_LABEL = {
+  active: "進行中",
+  scheduled: "已排程",
+  triggered: "已觸發",
+  cancelled: "已取消",
+};
+
+// ---------------------------------------------------------------------------
+// Sheet state
+// ---------------------------------------------------------------------------
+
+const sheetState = {
+  step: 1,
+  symbol: null, // { symbol, displayName }
+  strategy: null,
+  quantityLots: 1,
+  targetPrice: "",
+  transactionMode: "single_notification",
+};
+
+let searchAbortController = null;
+let searchDebounceTimer = null;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function fmtRelativeTime(iso) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  const diffSec = Math.round((Date.now() - date.getTime()) / 1000);
+  if (diffSec < 60) return "剛剛";
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分鐘前`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} 小時前`;
+  if (diffSec < 86400 * 7) return `${Math.floor(diffSec / 86400)} 天前`;
+  return date.toLocaleDateString("zh-TW", { month: "short", day: "numeric" });
+}
+
+function fmtUserLabel(label) {
+  if (label === "default") return "預設使用者";
+  return label;
+}
+
+function currentUserName() {
+  const label = getSelectedUser();
+  return fmtUserLabel(label);
+}
+
+function el(tag, attrs = {}, children = []) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "className") node.className = v;
+    else if (k === "dataset") Object.assign(node.dataset, v);
+    else if (k === "onClick") node.addEventListener("click", v);
+    else if (k === "html") node.innerHTML = v;
+    else if (v === false || v === null || v === undefined) continue;
+    else node.setAttribute(k, String(v));
+  }
+  for (const child of [].concat(children)) {
+    if (child == null || child === false) continue;
+    node.appendChild(typeof child === "string" ? document.createTextNode(child) : child);
+  }
+  return node;
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard render
+// ---------------------------------------------------------------------------
+
+async function refreshDashboard() {
+  document.getElementById("user-greeting").textContent = currentUserName();
+  await Promise.all([refreshIntents(), refreshNotifications()]);
+}
+
+async function refreshIntents() {
+  const list = document.getElementById("uv-intent-list");
+  list.innerHTML = "";
+  list.appendChild(el("div", { className: "uv-loading" }, ["載入中…"]));
+
+  const resp = await sendRequest({
+    method: "GET",
+    path: "/trade-intents",
+    query: { pageSize: 100 },
+  });
+
+  list.innerHTML = "";
+  if (resp.status !== 200) {
+    list.appendChild(emptyState("⚠️", "讀取委託失敗", resp.body?.error?.message || `HTTP ${resp.status}`));
+    document.getElementById("uv-intent-count").textContent = "—";
+    return;
+  }
+
+  const intents = resp.body?.data || [];
+  const active = intents.filter((i) => i.status === "active" || i.status === "scheduled");
+  const others = intents.filter((i) => i.status === "triggered" || i.status === "cancelled");
+
+  document.getElementById("uv-intent-count").textContent = `${active.length} 進行 · ${others.length} 已結束`;
+
+  if (intents.length === 0) {
+    list.appendChild(emptyState("📋", "尚無委託", "點右上『+ 新增委託』開始建立"));
+    return;
+  }
+
+  for (const intent of active) list.appendChild(renderIntentCard(intent, { actionable: true }));
+  for (const intent of others.slice(0, 5)) list.appendChild(renderIntentCard(intent, { actionable: false }));
+}
+
+function renderIntentCard(intent, { actionable }) {
+  const strategy = STRATEGY_LABEL[intent.strategy] || intent.strategy;
+  const triggerDesc = STRATEGY_TRIGGER_DESC[intent.strategy] || "";
+  const status = intent.status;
+
+  const filledRow =
+    intent.filledQuantityLots > 0
+      ? el("div", { className: "intent-card-meta" }, [
+          el("span", {}, [
+            el("span", { className: "label" }, ["成交"]),
+            `${intent.filledQuantityLots} / ${intent.quantityLots} 張`,
+          ]),
+        ])
+      : null;
+
+  return el("article", { className: "intent-card" }, [
+    el("div", { className: "intent-card-row" }, [
+      el("div", { className: "intent-card-symbol" }, [intent.symbol]),
+      el("div", { className: "intent-card-strategy" }, [strategy]),
+      el("span", { className: `intent-card-status ${status}` }, [STATUS_LABEL[status] || status]),
+    ]),
+    el("div", { className: "intent-card-meta" }, [
+      el("span", {}, [el("span", { className: "label" }, ["目標"]), intent.targetPriceEffective]),
+      el("span", {}, [el("span", { className: "label" }, ["張數"]), `${intent.quantityLots}`]),
+      el("span", { className: "intent-card-strategy", style: "font-size:11px" }, [triggerDesc]),
+    ]),
+    filledRow,
+    el("div", { className: "intent-card-footer" }, [
+      el("span", {}, [`建立於 ${fmtRelativeTime(intent.createdAt)}`]),
+      actionable
+        ? el("button", {
+            className: "intent-card-cancel",
+            onClick: () => cancelIntent(intent.id, intent.symbol),
+          }, ["取消委託"])
+        : el("span", {}, [intent.cancelledAt ? `取消於 ${fmtRelativeTime(intent.cancelledAt)}` : ""]),
+    ]),
+  ]);
+}
+
+async function refreshNotifications() {
+  const list = document.getElementById("uv-notif-list");
+  list.innerHTML = "";
+  list.appendChild(el("div", { className: "uv-loading" }, ["載入中…"]));
+
+  const resp = await sendRequest({
+    method: "GET",
+    path: "/notifications",
+    query: { pageSize: 10 },
+  });
+
+  list.innerHTML = "";
+  if (resp.status !== 200) {
+    list.appendChild(emptyState("⚠️", "讀取通知失敗", resp.body?.error?.message || `HTTP ${resp.status}`));
+    document.getElementById("uv-notif-count").textContent = "—";
+    return;
+  }
+
+  const notifs = resp.body?.data || [];
+  const unread = notifs.filter((n) => !n.readAt).length;
+  document.getElementById("uv-notif-count").textContent = `${unread} 未讀 / ${notifs.length} 筆`;
+
+  if (notifs.length === 0) {
+    list.appendChild(emptyState("🔔", "尚無通知", "委託觸發後會在這裡顯示"));
+    return;
+  }
+
+  for (const notif of notifs) list.appendChild(renderNotifCard(notif));
+}
+
+function renderNotifCard(notif) {
+  const isLimit = notif.type === "limit_order_triggered";
+  const icon = isLimit ? "📊" : "📈";
+  const summary = (notif.renderedBody || "")
+    .split("\n")
+    .filter((line) => line.trim() && !line.startsWith("僅通知"))
+    .slice(0, 3)
+    .join(" · ");
+
+  const card = el("article", { className: `notif-card ${notif.readAt ? "" : "unread"}` }, [
+    el("div", { className: "notif-icon" }, [icon]),
+    el("div", { className: "notif-body" }, [
+      el("div", { className: "notif-title" }, [notif.renderedTitle]),
+      el("div", { className: "notif-summary" }, [summary]),
+    ]),
+    el("div", { className: "notif-time" }, [fmtRelativeTime(notif.createdAt)]),
+  ]);
+  if (!notif.readAt) {
+    card.style.cursor = "pointer";
+    card.addEventListener("click", () => markNotifRead(notif.id));
+  }
+  return card;
+}
+
+function emptyState(icon, title, hint) {
+  return el("div", { className: "uv-empty" }, [
+    el("div", { className: "uv-empty-icon" }, [icon]),
+    el("div", {}, [title]),
+    el("div", { className: "uv-empty-hint" }, [hint]),
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// Intent actions
+// ---------------------------------------------------------------------------
+
+async function cancelIntent(intentId, symbol) {
+  if (!confirm(`確定取消 ${symbol} 的委託？`)) return;
+  const resp = await sendRequest({
+    method: "POST",
+    path: `/trade-intents/${intentId}/cancel`,
+  });
+  if (resp.status === 200) {
+    showToast("已取消委託", "success");
+    refreshIntents();
+  } else {
+    showToast(resp.body?.error?.message || `取消失敗 (${resp.status})`, "error");
+  }
+}
+
+async function markNotifRead(notifId) {
+  const resp = await sendRequest({
+    method: "POST",
+    path: `/notifications/${notifId}/read`,
+  });
+  if (resp.status === 200) refreshNotifications();
+  else showToast(resp.body?.error?.message || `標已讀失敗 (${resp.status})`, "error");
+}
+
+// ---------------------------------------------------------------------------
+// Sheet — 下單 flow
+// ---------------------------------------------------------------------------
+
+function resetSheet() {
+  sheetState.step = 1;
+  sheetState.symbol = null;
+  sheetState.strategy = null;
+  sheetState.quantityLots = 1;
+  sheetState.targetPrice = "";
+  sheetState.transactionMode = "single_notification";
+
+  document.getElementById("symbol-search").value = "";
+  document.getElementById("symbol-results").innerHTML = "";
+  document.getElementById("symbol-selected").hidden = true;
+  document.getElementById("form-quantity").value = "1";
+  document.getElementById("form-target").value = "";
+  for (const r of document.querySelectorAll('input[name="strategy"]')) r.checked = false;
+  document.querySelector('input[name="transactionMode"][value="single_notification"]').checked = true;
+  document.getElementById("form-transaction-group").hidden = true;
+  showSheetStep(1);
+}
+
+function showSheetStep(step) {
+  sheetState.step = step;
+  for (const node of document.querySelectorAll(".sheet-step")) {
+    node.hidden = Number(node.dataset.step) !== step;
+  }
+  document.getElementById("sheet-back").hidden = step === 1;
+  document.getElementById("sheet-title").textContent = step === 3 ? "確認送出" : "新增委託";
+  const next = document.getElementById("sheet-next");
+  next.textContent = step === 3 ? "送出" : "下一步";
+  next.disabled = !validateStep(step);
+}
+
+function validateStep(step) {
+  if (step === 1) return sheetState.symbol !== null;
+  if (step === 2) {
+    if (!sheetState.strategy) return false;
+    if (!sheetState.targetPrice || Number(sheetState.targetPrice) <= 0) return false;
+    if (!Number.isInteger(Number(sheetState.quantityLots)) || Number(sheetState.quantityLots) <= 0) return false;
+    return true;
+  }
+  return true;
+}
+
+function openSheet() {
+  resetSheet();
+  document.getElementById("sheet-overlay").hidden = false;
+  setTimeout(() => document.getElementById("symbol-search").focus(), 50);
+}
+
+function closeSheet() {
+  document.getElementById("sheet-overlay").hidden = true;
+}
+
+async function searchSymbols(query) {
+  const results = document.getElementById("symbol-results");
+  if (!query || query.length < 1) {
+    results.innerHTML = "";
+    return;
+  }
+
+  if (searchAbortController) searchAbortController.abort();
+  searchAbortController = new AbortController();
+
+  const resp = await sendRequest({
+    method: "GET",
+    path: "/symbols",
+    query: { q: query, limit: 10 },
+  }).catch(() => null);
+
+  if (!resp || resp.status !== 200) {
+    results.innerHTML = "";
+    return;
+  }
+
+  results.innerHTML = "";
+  const items = resp.body?.data || [];
+  if (items.length === 0) {
+    results.appendChild(el("div", { className: "symbol-result-item" }, [
+      el("span", { className: "symbol-name" }, [`找不到符合「${query}」的標的`]),
+    ]));
+    return;
+  }
+  for (const sym of items) {
+    const item = el("div", { className: "symbol-result-item" }, [
+      el("span", { className: "symbol-code" }, [sym.symbol]),
+      el("span", { className: "symbol-name" }, [sym.displayName || sym.symbol]),
+      el("span", { className: "symbol-market" }, [sym.market || ""]),
+    ]);
+    item.addEventListener("click", () => selectSymbol(sym));
+    results.appendChild(item);
+  }
+}
+
+function selectSymbol(sym) {
+  sheetState.symbol = { symbol: sym.symbol, displayName: sym.displayName || sym.symbol };
+  document.getElementById("symbol-results").innerHTML = "";
+  document.getElementById("symbol-search").value = "";
+  const selected = document.getElementById("symbol-selected");
+  selected.innerHTML = "";
+  selected.appendChild(el("span", { className: "label" }, ["已選擇"]));
+  selected.appendChild(el("span", { className: "value" }, [`${sym.symbol} ${sym.displayName || ""}`]));
+  selected.hidden = false;
+  showSheetStep(1); // refresh next button state
+}
+
+function onStrategyChange(value) {
+  sheetState.strategy = value;
+  document.getElementById("form-transaction-group").hidden = !value?.startsWith("limit_");
+  document.getElementById("sheet-next").disabled = !validateStep(2);
+}
+
+function renderConfirmSummary() {
+  const dl = document.getElementById("confirm-summary");
+  dl.innerHTML = "";
+  const rows = [
+    ["標的", `${sheetState.symbol.symbol} ${sheetState.symbol.displayName || ""}`],
+    ["策略", STRATEGY_LABEL[sheetState.strategy]],
+    ["張數", `${sheetState.quantityLots} 張 (= ${sheetState.quantityLots * 1000} 股)`],
+    ["目標價", sheetState.targetPrice],
+    ["觸發條件", STRATEGY_TRIGGER_DESC[sheetState.strategy]],
+  ];
+  if (sheetState.strategy.startsWith("limit_")) {
+    const modeLabel =
+      sheetState.transactionMode === "partial_fill_allowed" ? "允許部分成交" : "單次通知";
+    rows.push(["交易模式", modeLabel]);
+  }
+  rows.push(["身份", currentUserName()]);
+  for (const [label, value] of rows) {
+    dl.appendChild(el("div", {}, [el("dt", {}, [label]), el("dd", {}, [value])]));
+  }
+}
+
+async function submitCreate() {
+  const body = {
+    strategy: sheetState.strategy,
+    symbol: sheetState.symbol.symbol,
+    quantityLots: Number(sheetState.quantityLots),
+    targetPrice: sheetState.targetPrice,
+  };
+  if (sheetState.strategy.startsWith("limit_")) {
+    body.transactionMode = sheetState.transactionMode;
+  }
+
+  const resp = await sendRequest({ method: "POST", path: "/trade-intents", body });
+  if (resp.status === 201) {
+    closeSheet();
+    showToast(`委託已建立 — ${resp.body.data.symbol} ${STRATEGY_LABEL[resp.body.data.strategy]}`, "success");
+    refreshDashboard();
+  } else {
+    const msg = resp.body?.error?.message || `建立失敗 (${resp.status})`;
+    showToast(msg, "error");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Toast
+// ---------------------------------------------------------------------------
+
+export function showToast(message, type = "info") {
+  const container = document.getElementById("toast-container");
+  if (!container) return;
+  const iconChar = type === "success" ? "✓" : type === "error" ? "!" : "i";
+  const toast = el("div", { className: `toast ${type}` }, [
+    el("div", { className: "toast-icon" }, [iconChar]),
+    el("div", { className: "toast-message" }, [message]),
+    el(
+      "button",
+      {
+        className: "toast-close",
+        "aria-label": "關閉",
+        onClick: () => dismissToast(toast),
+      },
+      ["×"]
+    ),
+  ]);
+  container.appendChild(toast);
+  if (type !== "error") {
+    setTimeout(() => dismissToast(toast), 3500);
+  }
+}
+
+function dismissToast(toast) {
+  if (!toast || toast.classList.contains("removing")) return;
+  toast.classList.add("removing");
+  setTimeout(() => toast.remove(), 250);
+}
+
+// ---------------------------------------------------------------------------
+// Switch-user modal
+// ---------------------------------------------------------------------------
+
+function openSwitchUser() {
+  const list = document.getElementById("switch-user-list");
+  list.innerHTML = "";
+  const current = getSelectedUser();
+
+  const entries = [["default", "預設使用者"]].concat(Object.entries(USERS).map(([label, uuid]) => [label, label, uuid]));
+
+  for (const [label, name, uuid] of entries) {
+    const isActive = label === current;
+    const item = el("div", { className: `switch-user-item ${isActive ? "active" : ""}` }, [
+      el("div", { className: "switch-user-avatar" }, [name[0]?.toUpperCase() || "?"]),
+      el("div", { className: "switch-user-info" }, [
+        el("div", { className: "switch-user-name" }, [name]),
+        el("div", { className: "switch-user-id" }, [uuid ? `${uuid.slice(0, 8)}…` : "LOCAL_USER_ID"]),
+      ]),
+      isActive ? el("span", { className: "switch-user-active" }, ["✓ 目前"]) : null,
+    ]);
+    item.addEventListener("click", () => {
+      setSelectedUser(label);
+      const sel = document.getElementById("user-select");
+      if (sel) sel.value = label;
+      closeSwitchUser();
+      showToast(`已切換為 ${name}`, "info");
+      refreshDashboard();
+    });
+    list.appendChild(item);
+  }
+
+  document.getElementById("switch-user-overlay").hidden = false;
+}
+
+function closeSwitchUser() {
+  document.getElementById("switch-user-overlay").hidden = true;
+}
+
+// ---------------------------------------------------------------------------
+// Exported lifecycle
+// ---------------------------------------------------------------------------
+
+export function initUserView() {
+  document.getElementById("uv-create-btn").addEventListener("click", openSheet);
+  document.getElementById("user-refresh-btn").addEventListener("click", refreshDashboard);
+  document.getElementById("user-switch-btn").addEventListener("click", openSwitchUser);
+
+  document.getElementById("sheet-cancel").addEventListener("click", closeSheet);
+  document.getElementById("sheet-back").addEventListener("click", () => {
+    if (sheetState.step > 1) showSheetStep(sheetState.step - 1);
+  });
+  document.getElementById("sheet-next").addEventListener("click", async () => {
+    if (sheetState.step === 1 && validateStep(1)) showSheetStep(2);
+    else if (sheetState.step === 2 && validateStep(2)) {
+      renderConfirmSummary();
+      showSheetStep(3);
+    } else if (sheetState.step === 3) {
+      await submitCreate();
+    }
+  });
+
+  document.getElementById("sheet-overlay").addEventListener("click", (ev) => {
+    if (ev.target.id === "sheet-overlay") closeSheet();
+  });
+  document.getElementById("switch-user-overlay").addEventListener("click", (ev) => {
+    if (ev.target.id === "switch-user-overlay" || ev.target.dataset?.closeSwitch !== undefined) closeSwitchUser();
+  });
+  for (const btn of document.querySelectorAll("[data-close-switch]")) {
+    btn.addEventListener("click", closeSwitchUser);
+  }
+
+  // Step 1: symbol search
+  document.getElementById("symbol-search").addEventListener("input", (ev) => {
+    sheetState.symbol = null;
+    document.getElementById("symbol-selected").hidden = true;
+    document.getElementById("sheet-next").disabled = true;
+    clearTimeout(searchDebounceTimer);
+    const q = ev.target.value.trim();
+    searchDebounceTimer = setTimeout(() => searchSymbols(q), 220);
+  });
+
+  // Step 2: form change handlers
+  for (const r of document.querySelectorAll('input[name="strategy"]')) {
+    r.addEventListener("change", (ev) => onStrategyChange(ev.target.value));
+  }
+  for (const r of document.querySelectorAll('input[name="transactionMode"]')) {
+    r.addEventListener("change", (ev) => {
+      sheetState.transactionMode = ev.target.value;
+    });
+  }
+  document.getElementById("form-quantity").addEventListener("input", (ev) => {
+    sheetState.quantityLots = ev.target.value;
+    document.getElementById("sheet-next").disabled = !validateStep(2);
+  });
+  document.getElementById("form-target").addEventListener("input", (ev) => {
+    sheetState.targetPrice = ev.target.value;
+    document.getElementById("sheet-next").disabled = !validateStep(2);
+  });
+}
+
+export function onEnterUserMode() {
+  refreshDashboard();
+}

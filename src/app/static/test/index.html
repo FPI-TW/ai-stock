@@ -9,19 +9,26 @@
   <link rel="stylesheet" href="/test-assets/styles.css" />
 </head>
 <body>
-  <div id="app">
+  <div id="app" data-mode="dev">
     <header id="topbar">
       <h1>ai-stock /test</h1>
-      <span class="field">Base&nbsp;<strong id="base-url">—</strong></span>
-      <span class="field">User&nbsp;
+      <div class="mode-toggle" role="tablist" aria-label="檢視模式">
+        <button type="button" data-mode="dev" class="active" role="tab" aria-selected="true">Dev</button>
+        <button type="button" data-mode="user" role="tab" aria-selected="false">使用者</button>
+      </div>
+      <span class="field topbar-dev-only">Base&nbsp;<strong id="base-url">—</strong></span>
+      <span class="field topbar-dev-only">User&nbsp;
         <select id="user-select" title="Sent as X-Local-User-Id header (LOCAL_MODE only)">
           <option value="default">default</option>
         </select>
       </span>
-      <span class="field">Clock&nbsp;<strong id="clock-display">system</strong></span>
+      <span class="field topbar-dev-only">Clock&nbsp;<strong id="clock-display">system</strong></span>
+      <span class="field topbar-user-only">您好，<strong id="user-greeting">—</strong></span>
       <div class="topbar-actions">
-        <button id="refresh-state-btn" title="GET /dev/server-state">Refresh state</button>
-        <button id="reset-all-btn" title="Reset clock + clear history">Reset all</button>
+        <button id="refresh-state-btn" class="topbar-dev-only" title="GET /dev/server-state">Refresh state</button>
+        <button id="reset-all-btn" class="topbar-dev-only" title="Reset clock + clear history">Reset all</button>
+        <button id="user-refresh-btn" class="topbar-user-only" title="重新整理 dashboard">重新整理</button>
+        <button id="user-switch-btn" class="topbar-user-only" title="切換身份">切換身份</button>
       </div>
     </header>
 
@@ -89,6 +96,143 @@
        </footer>
       </div>
     </main>
+
+    <!-- 使用者視角 — 切換 mode 後顯示 -->
+    <section id="user-view" aria-label="使用者視角 dashboard">
+      <div class="uv-container">
+        <header class="uv-header">
+          <h2>我的委託</h2>
+          <button type="button" id="uv-create-btn" class="uv-primary-btn">+ 新增委託</button>
+        </header>
+
+        <section class="uv-section">
+          <header class="uv-section-title">
+            <span>進行中</span>
+            <span class="uv-section-count" id="uv-intent-count">—</span>
+          </header>
+          <div class="uv-list" id="uv-intent-list">
+            <div class="uv-loading">載入中…</div>
+          </div>
+        </section>
+
+        <section class="uv-section">
+          <header class="uv-section-title">
+            <span>最近通知</span>
+            <span class="uv-section-count" id="uv-notif-count">—</span>
+          </header>
+          <div class="uv-list" id="uv-notif-list">
+            <div class="uv-loading">載入中…</div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <!-- 下單 bottom sheet -->
+    <div id="sheet-overlay" hidden>
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+        <div class="sheet-handle"></div>
+        <header class="sheet-header">
+          <button type="button" id="sheet-back" class="sheet-action" hidden>← 上一步</button>
+          <button type="button" id="sheet-cancel" class="sheet-action">取消</button>
+          <h3 id="sheet-title">新增委託</h3>
+          <button type="button" id="sheet-next" class="sheet-action primary">下一步</button>
+        </header>
+
+        <!-- Step 1: 選 symbol -->
+        <div class="sheet-step" data-step="1">
+          <div class="sheet-section-label">Step 1 · 選擇標的</div>
+          <input type="text" id="symbol-search" class="sheet-input" placeholder="🔍 搜尋代號或名稱（例：2330）" autocomplete="off" />
+          <div id="symbol-results" class="sheet-results"></div>
+          <div id="symbol-selected" class="sheet-selected" hidden></div>
+        </div>
+
+        <!-- Step 2: 設條件 -->
+        <div class="sheet-step" data-step="2" hidden>
+          <div class="sheet-section-label">Step 2 · 設定條件</div>
+
+          <div class="form-group">
+            <label>策略</label>
+            <div class="strategy-grid">
+              <label class="strategy-option">
+                <input type="radio" name="strategy" value="buy_price_alert" />
+                <div class="strategy-card">
+                  <div class="strategy-name">買進到價提醒</div>
+                  <div class="strategy-desc">ask ≤ 目標價時通知</div>
+                </div>
+              </label>
+              <label class="strategy-option">
+                <input type="radio" name="strategy" value="sell_price_alert" />
+                <div class="strategy-card">
+                  <div class="strategy-name">賣出到價提醒</div>
+                  <div class="strategy-desc">bid ≥ 目標價時通知</div>
+                </div>
+              </label>
+              <label class="strategy-option">
+                <input type="radio" name="strategy" value="limit_buy_order" />
+                <div class="strategy-card">
+                  <div class="strategy-name">限價買單</div>
+                  <div class="strategy-desc">ask ≤ 目標價時觸發</div>
+                </div>
+              </label>
+              <label class="strategy-option">
+                <input type="radio" name="strategy" value="limit_sell_order" />
+                <div class="strategy-card">
+                  <div class="strategy-name">限價賣單</div>
+                  <div class="strategy-desc">bid ≥ 目標價時觸發</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="form-quantity">張數 <span class="hint">(1 張 = 1000 股)</span></label>
+              <input type="number" id="form-quantity" min="1" value="1" />
+            </div>
+            <div class="form-group">
+              <label for="form-target">目標價</label>
+              <input type="text" id="form-target" inputmode="decimal" placeholder="例：600.00" />
+            </div>
+          </div>
+
+          <div class="form-group" id="form-transaction-group" hidden>
+            <label>交易模式 <span class="hint">(僅限價單)</span></label>
+            <div class="segment-control">
+              <label><input type="radio" name="transactionMode" value="single_notification" checked /><span>單次通知</span></label>
+              <label><input type="radio" name="transactionMode" value="partial_fill_allowed" /><span>允許部分成交</span></label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3: 確認 -->
+        <div class="sheet-step" data-step="3" hidden>
+          <div class="sheet-section-label">Step 3 · 確認送出</div>
+          <dl class="confirm-summary" id="confirm-summary"></dl>
+          <div class="disclaimer">
+            <strong>⚠️ 僅通知、未下單、不保證成交</strong>
+            <p>本平台為通知型委託，觸發後請自行至券商 app 執行下單。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 身份切換 modal -->
+    <div id="switch-user-overlay" hidden>
+      <div class="sheet sheet-compact" role="dialog" aria-modal="true">
+        <header class="sheet-header">
+          <button type="button" class="sheet-action" data-close-switch>取消</button>
+          <h3>切換身份</h3>
+          <span></span>
+        </header>
+        <div class="switch-user-body">
+          <p class="hint">不同身份各自獨立委託與通知，可 demo owner 隔離</p>
+          <div id="switch-user-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast container -->
+    <div id="toast-container" aria-live="polite"></div>
   </div>
 
   <script type="module" src="/test-assets/app.js"></script>

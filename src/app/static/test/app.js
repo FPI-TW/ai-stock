@@ -47,13 +47,13 @@ function loadUsers() {
   return fresh;
 }
 
-const USERS = loadUsers();
+export const USERS = loadUsers();
 
-function getSelectedUser() {
+export function getSelectedUser() {
   return localStorage.getItem(SELECTED_USER_KEY) || "default";
 }
 
-function setSelectedUser(label) {
+export function setSelectedUser(label) {
   localStorage.setItem(SELECTED_USER_KEY, label);
 }
 
@@ -232,7 +232,7 @@ function buildHeaders(extra) {
   return headers;
 }
 
-async function sendRequest({ method, path, pathParams, query, headers, body }) {
+export async function sendRequest({ method, path, pathParams, query, headers, body }) {
   const url = new URL(substitutePathParams(path, pathParams), window.location.origin);
   for (const [k, v] of Object.entries(query || {})) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
@@ -514,6 +514,36 @@ function init() {
   }
   refreshServerState();
   openApiSanityCheck();
+  initUserViewMode();
+}
+
+// ---------------------------------------------------------------------------
+// User-view mode integration
+// ---------------------------------------------------------------------------
+
+async function initUserViewMode() {
+  // dynamic import keeps Dev-only sessions from paying the parse cost
+  const uv = await import("/test-assets/user-view.js");
+  uv.initUserView();
+
+  const savedMode = localStorage.getItem("ai-stock-test-mode") || "dev";
+  applyMode(savedMode, uv);
+
+  for (const btn of document.querySelectorAll(".mode-toggle button")) {
+    btn.addEventListener("click", () => applyMode(btn.dataset.mode, uv));
+  }
+}
+
+function applyMode(mode, uv) {
+  const app = document.getElementById("app");
+  app.dataset.mode = mode;
+  localStorage.setItem("ai-stock-test-mode", mode);
+  for (const btn of document.querySelectorAll(".mode-toggle button")) {
+    const isActive = btn.dataset.mode === mode;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-selected", String(isActive));
+  }
+  if (mode === "user") uv.onEnterUserMode();
 }
 
 if (document.readyState === "loading") {
