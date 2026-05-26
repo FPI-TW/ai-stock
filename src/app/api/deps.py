@@ -1,13 +1,14 @@
 from collections.abc import Callable, Generator
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Request, status
 from sqlalchemy.orm import Session
 
+from app.api.errors import ApiError, ErrorCode
 from app.commands.notification import MarkNotificationReadCommand
 from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand
 from app.commands.trigger_intent import TriggerIntentCommand
-from app.core.config import Settings, get_settings
+from app.core.config import REQUIRED_CURRENT_PRICE_PROVIDER, Settings, get_settings
 from app.core.security import RequestUser, build_local_user
 from app.db.session import check_database_connectivity, get_session_factory
 from app.domain.quote_evaluation import QuoteEvaluator
@@ -16,6 +17,7 @@ from app.repositories.intent_repository import IntentRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.services.quote.base import QuoteProvider
+from app.services.quote.current_price import CurrentPriceProvider
 from app.services.symbol import SymbolService
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -82,6 +84,30 @@ def get_quote_provider(request: Request) -> QuoteProvider:
 
 
 QuoteProviderDep = Annotated[QuoteProvider, Depends(get_quote_provider)]
+
+
+def get_current_price_provider(
+    settings: SettingsDep,
+    quote_provider: QuoteProviderDep,
+) -> CurrentPriceProvider:
+    if settings.quote_provider != REQUIRED_CURRENT_PRICE_PROVIDER:
+        raise ApiError(
+            code=ErrorCode.QUOTE_PROVIDER_UNAVAILABLE,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            message="此測試 API 依賴 broker demo quote provider，無法在其他 provider 下使用",
+            details={"requiredProvider": REQUIRED_CURRENT_PRICE_PROVIDER, "currentProvider": settings.quote_provider},
+        )
+    if not isinstance(quote_provider, CurrentPriceProvider):
+        raise ApiError(
+            code=ErrorCode.QUOTE_PROVIDER_UNAVAILABLE,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            message="目前 quote provider 不支援測試查價能力",
+            details={"requiredCapability": "current_price", "currentProvider": settings.quote_provider},
+        )
+    return quote_provider
+
+
+CurrentPriceProviderDep = Annotated[CurrentPriceProvider, Depends(get_current_price_provider)]
 
 
 def get_trigger_intent_command(db: DatabaseDep) -> TriggerIntentCommand:

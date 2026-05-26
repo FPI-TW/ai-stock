@@ -71,7 +71,7 @@ V0.5 已落地的設計決策影響 V1 工單拆解：
 - **Quote provider demo/production 切分**（BE-V0.5-13）：上層 evaluator / intent service / API 只 import `app.services.quote.base` 與 `factory`，所有 Shioaji-specific 邏輯集中於 `app/services/quote/shioaji_demo/`。BE-V1-05 切換 licensed provider 時，新增檔案 + 從 factory mapping 刪除 demo provider + 刪除 `shioaji_demo/` 整個資料夾即可，**上層程式碼不動**。
 - **Trigger transaction**（BE-V0.5-09）：原子寫入 `trade_intents` / `trigger_events` / `notifications` 三表的邊界清楚，BE-V1-06 把第 5 步 `notifications` 寫入改為寫 `outbox_events`，由 notification worker 派生 `notification_deliveries`。
 - **Trading session**（BE-V0.5-06）：目前是 hardcode 9:00–13:30。BE-V1-04 接 market calendar importer 與 admin override，evaluator 與 day intent expiry / scheduled activation 都改為查 calendar service。
-- **Symbol master**（BE-V0.5-04）：目前 5 檔 hardcoded seed。BE-V1-03 接 TWSE ISIN 匯入 + admin override readiness，需保留 BE-V0.5-13 demo allowlist 與 symbol seed 內容一致的不變式。
+- **Symbol master**（BE-V0.5-04）：目前 5 檔 hardcoded seed，其中 `9999` 是 halted 測試資料。BE-V1-03 接 TWSE ISIN 匯入 + admin override readiness 時，需保留 BE-V0.5-13 的 4 檔 demo allowlist 仍存在於 symbol master；demo allowlist 不再要求與 seed 完全一致。
 - **Owner scope**（BE-V0.5-03）：API 已不接受 client 傳入 `owner_user_id`，BE-V1-01/02 把 placeholder 替換為 auth context；所有既有 query / repository 不必改 owner-scoping 邏輯。
 - **Decimal price + tick-size**（BE-V0.5-05）：BE-V1-09 的 round-away-from-trigger 直接擴充 tick-size service，不另開模組。
 - **CSV 入口**（BE-V0.5-14）：V0.5 已提供 `POST /trade-intents/batch`（前端解析、loop `CreateTradeIntent`、20 row 上限、無 preview/draft/idempotency）。BE-V1-10 在其上補 preview/draft TTL、idempotency、bracket row、batch limit 100，並評估是否棄用 `/trade-intents/batch` 統一改走 `/trade-intents/csv/*`。

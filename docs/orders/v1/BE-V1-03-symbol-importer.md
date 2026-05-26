@@ -17,7 +17,7 @@ BE-V0.5-04 提供了 5 檔 hardcoded symbol seed 與 `SymbolService` lookup。V1
 - Primary source = TWSE ISIN code list。
 - 停復牌、停止買賣、不可交易等狀態可由交易所公告、行情來源 status 欄位或 admin override 補充。
 - 策略引擎只讀內部 `symbol_master`。
-- Symbol master 同時也是 BE-V0.5-13 demo allowlist 的母集合（demo 白名單必須是 master 中 tradable 標的）。
+- Symbol master 同時也是 BE-V0.5-13 demo allowlist 的母集合（demo 白名單 4 檔必須是 master 中 tradable 標的）。`9999` 仍可存在於 V0.5 seed 作為 halted 測試資料，但不屬於 demo allowlist。
 
 本工單只實作 importer 與 admin override schema，正式 admin UI / API 由 BE-V1-14 接手。
 
@@ -29,7 +29,7 @@ BE-V0.5-04 提供了 5 檔 hardcoded symbol seed 與 `SymbolService` lookup。V1
 - Importer 流程：fetch → normalize → diff → upsert（保留 admin override 不被 source 覆蓋）。
 - Scheduled job 介面：每日盤前一次（時間由 BE-V1-04 calendar 與 BE-V1-15 scheduler 提供）。
 - Admin override placeholder：欄位與不可被覆寫的 invariant 就位，正式 endpoint 留 BE-V1-14。
-- 與 BE-V0.5-13 demo allowlist 對齊：BE-V0.5-13 的 5 檔在 V1 import 後必須仍存在於 master（不被 importer 刪掉）。
+- 與 BE-V0.5-13 demo allowlist 對齊：BE-V0.5-13 的 4 檔 demo allowlist 在 V1 import 後必須仍存在於 master（不被 importer 刪掉）。V0.5 seed 內的 `9999` 是 halted 測試資料，與 demo allowlist 分開處理。
 
 ## 非目標
 
@@ -137,7 +137,7 @@ class SymbolImporter:
 
 - `override_tradable_status` 只能由 admin endpoint 寫入（BE-V1-14）。
 - Importer **永不**寫 `override_*` 欄位。
-- 若 admin override 將 symbol 設為 `unsupported`，BE-V0.5-13 demo allowlist 仍可保留該 symbol 為 `halted` 測試用，但 `effective_tradable_status` 必須對齊。
+- 若 admin override 將 symbol 設為 `unsupported`，該 symbol 不應被視為 BE-V0.5-13 demo allowlist 成員；`9999` halted 測試資料也不列入 demo allowlist。
 
 ## API
 
@@ -165,7 +165,7 @@ class SymbolImporter:
 - [ ] `SymbolImporter.run()` 可從 TWSE ISIN 抓 raw data 並寫入；失敗時 report `status = failed` 且 transaction rollback。
 - [ ] Admin override 欄位不會被 importer 覆寫（regression test）。
 - [ ] `effective_tradable_status` 對外正確顯示 override 值。
-- [ ] BE-V0.5-13 demo allowlist 5 檔在 import 後仍存在（halted 也 OK，至少 row 存在）。
+- [ ] BE-V0.5-13 demo allowlist 4 檔在 import 後仍存在且保持可交易；V0.5 seed 的 `9999` 可保留為 halted 測試資料，但不是 demo allowlist 成員。
 - [ ] Source 消失的 symbol 被標 `unsupported`，不 hard delete（FK 保留）。
 - [ ] `POST /admin/symbols/import` 由 `user` role 呼叫回 403。
 
