@@ -84,25 +84,38 @@ class QuoteEvaluationDispatcher:
                 return
 
             trigger_cmd = TriggerIntentCommand(db)
+            has_pending_writes = False
             for intent in intents:
                 result = self._evaluator.evaluate(snapshot, intent, now)
+                if result.baseline_updated_at is not None:
+                    repo.system_update_trailing_baseline(
+                        intent.id,
+                        result.baseline,
+                        result.dynamic_trigger_price,
+                        result.baseline_updated_at,
+                    )
+                    has_pending_writes = True
                 if not result.should_trigger:
                     continue
                 if result.trigger_price is None or result.trigger_reference_price_type is None:
                     raise RuntimeError(f"Evaluator returned should_trigger=True but trigger fields are None: {result}")
                 try:
-                    trigger_cmd.execute(
-                        TriggerIntentInput(
-                            intent_id=intent.id,
-                            trigger_price=result.trigger_price,
-                            trigger_reference_price_type=result.trigger_reference_price_type,
-                            fallback_used=result.fallback_used,
-                            quote_snapshot=quote_snapshot_to_jsonb(snapshot),
-                            quote_time=snapshot.quote_time,
+                    with repo.begin_nested():
+                        trigger_cmd.stage(
+                            TriggerIntentInput(
+                                intent_id=intent.id,
+                                trigger_price=result.trigger_price,
+                                trigger_reference_price_type=result.trigger_reference_price_type,
+                                fallback_used=result.fallback_used,
+                                quote_snapshot=quote_snapshot_to_jsonb(snapshot),
+                                quote_time=snapshot.quote_time,
+                            )
                         )
-                    )
+                    has_pending_writes = True
                 except (IntentNotActiveError, IntentNotFoundError, DuplicateTriggerError) as exc:
                     # Race between listing actives and acquiring FOR UPDATE,
                     # or another callback already triggered this intent —
                     # safe to skip silently.
                     logger.warning("dispatch trigger skipped for intent %s: %s", intent.id, exc)
+            if has_pending_writes:
+                repo.commit()

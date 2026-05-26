@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -28,6 +29,9 @@ _TIME_IN_FORCE = "day"
 _TRIGGER_REF: dict[str, str] = {
     "buy_price_alert": "ask",
     "sell_price_alert": "bid",
+    "limit_buy_order": "ask",
+    "limit_sell_order": "bid",
+    "trailing_stop_alert": "bid",
 }
 
 
@@ -36,8 +40,12 @@ class CreateTradeIntentInput:
     symbol: str
     strategy: str
     quantity_lots: int
-    target_price: str  # kept as str to preserve decimal precision
     owner_user_id: UUID
+    target_price: str | None = None  # kept as str to preserve decimal precision
+    transaction_mode: str = "single_notification"
+    notification_mode: str = "single"
+    trail_mode: str | None = None
+    trail_value: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -91,18 +99,29 @@ class CreateTradeIntentCommand:
             # 1. validate symbol existence and tradability
             symbol_obj = self._symbol_service.get_tradable_symbol(inp.symbol)
 
-            # 2. validate price and tick size via PriceService
+            # 2. validate price / trailing settings via PriceService
             try:
                 security_type = SecurityType(symbol_obj.instrument_type)
             except ValueError:
                 raise InvalidTypeError(symbol_obj.instrument_type, "must be stock or etf") from None
-            effective_price = PriceService.validate(
-                PriceRequest(
-                    type=security_type,
-                    price=inp.target_price,
-                    amount=inp.quantity_lots,
+            effective_price: Decimal | None = None
+            trail_value: Decimal | None = None
+            if inp.strategy == "trailing_stop_alert":
+                if inp.trail_mode is None or inp.trail_value is None:
+                    raise ValueError("trailing_stop_alert requires trail_mode and trail_value")
+                trail_value = inp.trail_value
+                if inp.trail_mode == "fixed_amount":
+                    PriceService.validate_fixed_amount_tick(security_type, inp.trail_value)
+            else:
+                if inp.target_price is None:
+                    raise ValueError(f"{inp.strategy} requires target_price")
+                effective_price = PriceService.validate(
+                    PriceRequest(
+                        type=security_type,
+                        price=inp.target_price,
+                        amount=inp.quantity_lots,
+                    )
                 )
-            )
 
             # 3. determine trading_date and initial status
             now = self._session_service.now_taipei()
@@ -127,6 +146,10 @@ class CreateTradeIntentCommand:
                 time_in_force=_TIME_IN_FORCE,
                 execution_mode=_EXECUTION_MODE,
                 status=initial_status,
+                transaction_mode=inp.transaction_mode,
+                notification_mode=inp.notification_mode,
+                trail_mode=inp.trail_mode,
+                trail_value=trail_value,
             )
 
             # 5. reconcile subscription before commit — fail here rolls back the intent
@@ -138,7 +161,7 @@ class CreateTradeIntentCommand:
             #    Folded into this transaction so dispatcher can never observe
             #    an active-but-pre-trigger window.
             if initial_status == "active":
-                self._apply_inline_trigger_if_quote_met(intent_id, inp.symbol, now)
+                self._apply_inline_trigger_if_quote_met(intent_id, inp.symbol, now, security_type)
 
             self._db.commit()
         except Exception:
@@ -155,6 +178,7 @@ class CreateTradeIntentCommand:
         intent_id: UUID,
         symbol: str,
         now: datetime,
+        security_type: SecurityType,
     ) -> None:
         """Evaluate current quote and, if condition met, write trigger rows in this tx.
 
@@ -204,10 +228,24 @@ class CreateTradeIntentCommand:
             # consulted by the evaluator so we leave them as-is.
             created_at=intent_row.created_at,
             updated_at=intent_row.updated_at,
+            transaction_mode=intent_row.transaction_mode,
+            notification_mode=intent_row.notification_mode,
+            filled_quantity_lots=intent_row.filled_quantity_lots,
+            last_fill_at=intent_row.last_fill_at,
+            trail_mode=intent_row.trail_mode,
+            trail_value=intent_row.trail_value,
+            baseline=intent_row.baseline,
+            dynamic_trigger_price=intent_row.dynamic_trigger_price,
+            baseline_updated_at=intent_row.baseline_updated_at,
+            security_type=security_type,
         )
 
         quote = quotes[0]
         result = self._evaluator.evaluate(quote, intent_domain, now)
+        if result.baseline_updated_at is not None:
+            intent_row.baseline = result.baseline
+            intent_row.dynamic_trigger_price = result.dynamic_trigger_price
+            intent_row.baseline_updated_at = result.baseline_updated_at
         if not result.should_trigger:
             return
 

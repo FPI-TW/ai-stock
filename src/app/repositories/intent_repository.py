@@ -1,12 +1,16 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+from typing import cast
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, SessionTransaction
+from sqlalchemy.sql import Select
+from sqlalchemy.sql.elements import ColumnElement
 
-from app.db.models.core import TradeIntent
+from app.db.models.core import Symbol, TradeIntent
+from app.domain.price import SecurityType
 from app.domain.trade_intent import (
     CANCELLABLE_STATUSES,
     TERMINAL_STATUSES,
@@ -18,7 +22,7 @@ from app.domain.trade_intent import (
 )
 
 
-def _to_domain(row: TradeIntent) -> TradeIntentData:
+def _to_domain(row: TradeIntent, security_type: SecurityType) -> TradeIntentData:
     return TradeIntentData(
         id=row.id,
         owner_user_id=row.owner_user_id,
@@ -36,7 +40,28 @@ def _to_domain(row: TradeIntent) -> TradeIntentData:
         updated_at=row.updated_at,
         cancelled_at=row.cancelled_at,
         triggered_at=row.triggered_at,
+        transaction_mode=row.transaction_mode,
+        notification_mode=row.notification_mode,
+        filled_quantity_lots=row.filled_quantity_lots,
+        last_fill_at=row.last_fill_at,
+        trail_mode=row.trail_mode,
+        trail_value=row.trail_value,
+        baseline=row.baseline,
+        dynamic_trigger_price=row.dynamic_trigger_price,
+        baseline_updated_at=row.baseline_updated_at,
+        security_type=security_type,
     )
+
+
+def _nullable_equals(column: object, value: object) -> ColumnElement[bool]:
+    comparable = cast(ColumnElement[object], column)
+    if value is None:
+        return comparable.is_(None)
+    return comparable == value
+
+
+def _select_intent_with_symbol_type() -> Select[tuple[TradeIntent, str]]:
+    return select(TradeIntent, Symbol.instrument_type).join(Symbol, TradeIntent.symbol == Symbol.symbol)
 
 
 class IntentRepository:
@@ -47,19 +72,41 @@ class IntentRepository:
     # public API
     # ------------------------------------------------------------------
 
+    def commit(self) -> None:
+        """Commit pending repository writes.
+
+        Most command paths own their transaction boundaries directly. This is
+        for system/dev evaluator paths that batch baseline updates and trigger
+        writes from the same quote snapshot into one transaction.
+        """
+
+        self._db.commit()
+
+    def begin_nested(self) -> SessionTransaction:
+        """Open a savepoint on the repository session."""
+
+        return self._db.begin_nested()
+
     def create(
         self,
         owner_user_id: UUID,
         symbol: str,
         strategy: str,
         quantity_lots: int,
-        target_price_original: Decimal,
-        target_price_effective: Decimal,
+        target_price_original: Decimal | None,
+        target_price_effective: Decimal | None,
         trigger_reference_price_type: str,
         trading_date: date,
         time_in_force: str,
         execution_mode: str,
         status: str,
+        transaction_mode: str = "single_notification",
+        notification_mode: str = "single",
+        trail_mode: str | None = None,
+        trail_value: Decimal | None = None,
+        baseline: Decimal | None = None,
+        dynamic_trigger_price: Decimal | None = None,
+        baseline_updated_at: datetime | None = None,
     ) -> UUID:
         """Add a new TradeIntent and flush; return its id.
 
@@ -82,7 +129,9 @@ class IntentRepository:
                     TradeIntent.owner_user_id == owner_user_id,
                     TradeIntent.symbol == symbol,
                     TradeIntent.strategy == strategy,
-                    TradeIntent.target_price_effective == target_price_effective,
+                    _nullable_equals(TradeIntent.target_price_effective, target_price_effective),
+                    _nullable_equals(TradeIntent.trail_mode, trail_mode),
+                    _nullable_equals(TradeIntent.trail_value, trail_value),
                     TradeIntent.quantity_lots == quantity_lots,
                     TradeIntent.trading_date == trading_date,
                     TradeIntent.status.in_(CANCELLABLE_STATUSES),
@@ -105,6 +154,13 @@ class IntentRepository:
             trading_date=trading_date,
             time_in_force=time_in_force,
             status=status,
+            transaction_mode=transaction_mode,
+            notification_mode=notification_mode,
+            trail_mode=trail_mode,
+            trail_value=trail_value,
+            baseline=baseline,
+            dynamic_trigger_price=dynamic_trigger_price,
+            baseline_updated_at=baseline_updated_at,
         )
         self._db.add(row)
         try:
@@ -113,11 +169,30 @@ class IntentRepository:
             raise DuplicateIntentError(owner_user_id, symbol, strategy) from exc
         return row.id
 
+    def system_update_trailing_baseline(
+        self,
+        intent_id: UUID,
+        baseline: Decimal | None,
+        dynamic_trigger_price: Decimal | None,
+        baseline_updated_at: datetime | None,
+    ) -> None:
+        values: dict[str, object | None] = {
+            "baseline": baseline,
+            "dynamic_trigger_price": dynamic_trigger_price,
+            "updated_at": func.now(),
+        }
+        if baseline_updated_at is not None:
+            values["baseline_updated_at"] = baseline_updated_at
+        self._db.execute(update(TradeIntent).where(TradeIntent.id == intent_id).values(**values))
+
     def find_by_id(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
-        row = self._db.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one_or_none()
+        result = self._db.execute(_select_intent_with_symbol_type().where(TradeIntent.id == intent_id)).one_or_none()
+        if result is None:
+            raise IntentNotFoundError(intent_id)
+        row, instrument_type = result
         if row is None or row.owner_user_id != owner_user_id:
             raise IntentNotFoundError(intent_id)
-        return _to_domain(row)
+        return _to_domain(row, SecurityType(instrument_type))
 
     def list_by_owner(
         self,
@@ -129,7 +204,7 @@ class IntentRepository:
         effective_statuses = set(statuses) if statuses else None
         is_terminal_only = effective_statuses is not None and effective_statuses.issubset(TERMINAL_STATUSES)
 
-        stmt = select(TradeIntent).where(TradeIntent.owner_user_id == owner_user_id)
+        stmt = _select_intent_with_symbol_type().where(TradeIntent.owner_user_id == owner_user_id)
         if statuses:
             stmt = stmt.where(TradeIntent.status.in_(statuses))
 
@@ -175,12 +250,12 @@ class IntentRepository:
                     )
                 )
 
-        rows = list(self._db.execute(stmt.limit(page_size + 1)).scalars().all())
+        rows = list(self._db.execute(stmt.limit(page_size + 1)).all())
         has_more = len(rows) > page_size
         page = rows[:page_size]
 
-        next_cursor = str(page[-1].id) if has_more and page else None
-        return [_to_domain(r) for r in page], next_cursor
+        next_cursor = str(page[-1][0].id) if has_more and page else None
+        return [_to_domain(row, SecurityType(instrument_type)) for row, instrument_type in page], next_cursor
 
     def system_list_active_symbols(self) -> list[str]:
         """Return distinct symbols with at least one active intent (owner-agnostic).
@@ -203,17 +278,13 @@ class IntentRepository:
         """
         if not symbols:
             return []
-        rows = (
-            self._db.execute(
-                select(TradeIntent).where(
-                    TradeIntent.status == "active",
-                    TradeIntent.symbol.in_(symbols),
-                )
+        rows = self._db.execute(
+            _select_intent_with_symbol_type().where(
+                TradeIntent.status == "active",
+                TradeIntent.symbol.in_(symbols),
             )
-            .scalars()
-            .all()
-        )
-        return [_to_domain(r) for r in rows]
+        ).all()
+        return [_to_domain(row, SecurityType(instrument_type)) for row, instrument_type in rows]
 
     def cancel(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
         """Set status='cancelled' and flush.
@@ -222,12 +293,15 @@ class IntentRepository:
         that subscription cleanup can run inside the same atomic unit.
         """
 
-        row = self._db.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one_or_none()
+        result = self._db.execute(_select_intent_with_symbol_type().where(TradeIntent.id == intent_id)).one_or_none()
+        if result is None:
+            raise IntentNotFoundError(intent_id)
+        row, instrument_type = result
         if row is None or row.owner_user_id != owner_user_id:
             raise IntentNotFoundError(intent_id)
         # already cancelled: idempotent — return current state without error
         if row.status == "cancelled":
-            return _to_domain(row)
+            return _to_domain(row, SecurityType(instrument_type))
         if row.status not in CANCELLABLE_STATUSES:
             raise CancelNotAllowedError(intent_id, row.status)
 
@@ -240,7 +314,7 @@ class IntentRepository:
         # refresh within the same transaction so func.now() values are read back
         # without a separate roundtrip after commit
         self._db.refresh(row)
-        return _to_domain(row)
+        return _to_domain(row, SecurityType(instrument_type))
 
     # ------------------------------------------------------------------
     # quote subscription reconciliation helpers

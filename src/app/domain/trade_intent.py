@@ -3,9 +3,13 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
+from app.domain.price import SecurityType
+
 CANCELLABLE_STATUSES = frozenset({"active", "scheduled"})
 TERMINAL_STATUSES = frozenset({"triggered", "cancelled"})
 VALID_STATUSES = frozenset({"active", "scheduled", "triggered", "cancelled"})
+BUY_SIDE_STRATEGIES = frozenset({"buy_price_alert", "limit_buy_order"})
+SELL_SIDE_STRATEGIES = frozenset({"sell_price_alert", "limit_sell_order", "trailing_stop_alert"})
 
 
 class IntentError(Exception):
@@ -39,6 +43,14 @@ class InvalidCursorError(IntentError):
         super().__init__(f"Cursor not found or expired: {cursor_id}")
 
 
+def derive_order_side(strategy: str) -> str:
+    if strategy in BUY_SIDE_STRATEGIES:
+        return "buy"
+    if strategy in SELL_SIDE_STRATEGIES:
+        return "sell"
+    raise ValueError(f"Unsupported strategy: {strategy}")
+
+
 @dataclass(frozen=True)
 class TradeIntentData:
     id: UUID
@@ -47,8 +59,8 @@ class TradeIntentData:
     strategy: str
     execution_mode: str
     quantity_lots: int
-    target_price_original: Decimal
-    target_price_effective: Decimal
+    target_price_original: Decimal | None
+    target_price_effective: Decimal | None
     trigger_reference_price_type: str
     trading_date: date
     time_in_force: str
@@ -57,3 +69,13 @@ class TradeIntentData:
     updated_at: datetime
     cancelled_at: datetime | None = None
     triggered_at: datetime | None = None
+    transaction_mode: str = "single_notification"
+    notification_mode: str = "single"
+    filled_quantity_lots: int = 0
+    last_fill_at: datetime | None = None
+    trail_mode: str | None = None
+    trail_value: Decimal | None = None
+    baseline: Decimal | None = None
+    dynamic_trigger_price: Decimal | None = None
+    baseline_updated_at: datetime | None = None
+    security_type: SecurityType = SecurityType.STOCK

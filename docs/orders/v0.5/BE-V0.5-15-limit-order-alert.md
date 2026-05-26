@@ -167,7 +167,7 @@ Schema 規則（由 Pydantic 強制，無需 controller 額外 validation）：
   - 必填：`symbol`, `quantityLots`, `targetPrice`
   - 選填：`transactionMode: Literal['single_notification', 'partial_fill_allowed']`，缺失預設 `single_notification`
   - 選填：`notificationMode: Literal['single']`，缺失預設 `single`
-  - 不在欄位清單的 key（如錯填 `trailValue` / `positionSide`）由 `extra=forbid` 拒絕
+  - 不在欄位清單的 key（如錯填 `trailValue` / `trailMode`）由 `extra=forbid` 拒絕
 - 既有 `buy_price_alert` / `sell_price_alert` 子 schema 不含 `transactionMode` / `notificationMode` 欄位；client 多帶會被 `extra=forbid` 拒絕（既有 behavior 不變，因為沒帶仍正常）
 - 違反 schema 一律回 422 `VALIDATION_ERROR`，envelope `details.loc` 指明錯誤欄位（沿用 BE-V0.5-01 envelope）；不再為 schema 組合錯誤新增 strategy-specific error code
 

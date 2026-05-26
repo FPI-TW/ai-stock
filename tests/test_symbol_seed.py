@@ -1,23 +1,39 @@
 from collections.abc import Generator
+from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.models.core import Symbol
 from app.db.seed import seed_symbols
-from app.db.session import get_engine
+
+
+def _alembic_config() -> Config:
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", get_settings().database_url or "")
+    return config
 
 
 @pytest.fixture(scope="module")
 def seed_engine() -> Generator[Engine]:
-    """Integration test engine. Assumes alembic upgrade head 已執行。"""
-    engine = get_engine()
-    if engine is None:
+    config = _alembic_config()
+    database_url = get_settings().database_url
+    if database_url is None:
         pytest.skip("DATABASE_URL not configured")
-    yield engine
+    command.downgrade(config, "base")
+    command.upgrade(config, "head")
+    engine = create_engine(database_url)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        command.downgrade(config, "base")
 
 
 @pytest.mark.integration

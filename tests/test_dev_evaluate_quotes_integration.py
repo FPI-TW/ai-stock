@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_quote_provider, get_trading_session_service
 from app.core.config import get_settings
-from app.db.models.core import Notification, Symbol, TriggerEvent
+from app.db.models.core import Notification, Symbol, TradeIntent, TriggerEvent
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
 from app.repositories.intent_repository import IntentRepository
@@ -122,8 +122,10 @@ def _create_active_intent(
     *,
     owner_user_id: UUID,
     symbol: str = "2330",
-    target_price: str = "100.0000",
+    target_price: str | None = "100.0000",
     strategy: str = "buy_price_alert",
+    trail_mode: str | None = None,
+    trail_value: str | None = None,
 ) -> UUID:
     # PR #12 made IntentRepository.create flush-only and return UUID;
     # the test must commit so the HTTP endpoint (separate session) can see it.
@@ -132,13 +134,15 @@ def _create_active_intent(
         symbol=symbol,
         strategy=strategy,
         quantity_lots=1,
-        target_price_original=Decimal(target_price),
-        target_price_effective=Decimal(target_price),
+        target_price_original=Decimal(target_price) if target_price is not None else None,
+        target_price_effective=Decimal(target_price) if target_price is not None else None,
         trigger_reference_price_type="ask" if "buy" in strategy else "bid",
         trading_date=date(2026, 5, 11),
         time_in_force="day",
         execution_mode="notify_only",
         status="active",
+        trail_mode=trail_mode,
+        trail_value=Decimal(trail_value) if trail_value is not None else None,
     )
     db.commit()
     return intent_id
@@ -229,6 +233,82 @@ def test_evaluate_sell_bid_above_target_triggers_intent(
     assert trigger_row.trigger_reference_price_type == "bid"
     assert trigger_row.fallback_used is False
     assert trigger_row.quote_snapshot["bid_price"] == "101.0000"
+
+
+@pytest.mark.integration
+def test_evaluate_limit_buy_triggers_and_records_fill(
+    db_session: Session,
+    client: TestClient,
+    repo: IntentRepository,
+    quote_provider: InMemoryQuoteProvider,
+) -> None:
+    owner = uuid4()
+    intent_id = _create_active_intent(
+        repo,
+        db_session,
+        owner_user_id=owner,
+        target_price="100.0000",
+        strategy="limit_buy_order",
+    )
+    quote_provider.push_quote(_snapshot("2330", ask="99.0000"))
+
+    response = client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["triggeredIntentIds"] == [str(intent_id)]
+    intent_after = repo.find_by_id(intent_id, owner)
+    assert intent_after.status == "triggered"
+    assert intent_after.filled_quantity_lots == 1
+
+    trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
+    assert trigger_row.filled_quantity_lots == 1
+    notification_row = db_session.execute(
+        select(Notification).where(Notification.trade_intent_id == intent_id)
+    ).scalar_one()
+    assert notification_row.type == "limit_order_triggered"
+    assert "成交 1 張 / 委託 1 張" in notification_row.rendered_body
+
+
+@pytest.mark.integration
+def test_evaluate_trailing_percentage_updates_baseline_then_triggers(
+    db_session: Session,
+    client: TestClient,
+    repo: IntentRepository,
+    quote_provider: InMemoryQuoteProvider,
+) -> None:
+    owner = uuid4()
+    intent_id = _create_active_intent(
+        repo,
+        db_session,
+        owner_user_id=owner,
+        target_price=None,
+        strategy="trailing_stop_alert",
+        trail_mode="percentage",
+        trail_value="5.0000",
+    )
+    quote_provider.push_quote(_snapshot("2330", bid="96.0000", ask="101.0000", last="100.0000"))
+
+    response = client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["triggeredIntentIds"] == []
+    intent_row = db_session.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one()
+    assert intent_row.baseline == Decimal("100.0000")
+    assert intent_row.dynamic_trigger_price == Decimal("95.0000")
+
+    quote_provider.push_quote(_snapshot("2330", bid="94.0000", ask="95.0000", last="94.0000"))
+    response = client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["triggeredIntentIds"] == [str(intent_id)]
+    trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
+    assert trigger_row.baseline_at_trigger == Decimal("100.0000")
+    assert trigger_row.dynamic_trigger_price_at_trigger == Decimal("95.0000")
+    notification_row = db_session.execute(
+        select(Notification).where(Notification.trade_intent_id == intent_id)
+    ).scalar_one()
+    assert notification_row.type == "trailing_stop_triggered"
+    assert "今日最高價：100.00" in notification_row.rendered_body
 
 
 @pytest.mark.integration

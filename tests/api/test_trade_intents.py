@@ -45,7 +45,6 @@ _LIMIT_BUY_PAYLOAD = {
 _TRAILING_STOP_PAYLOAD = {
     "symbol": "2330",
     "strategy": "trailing_stop_alert",
-    "positionSide": "long",
     "quantityLots": 1,
     "trailMode": "percentage",
     "trailValue": "5.0",
@@ -58,8 +57,11 @@ def _make_intent(
     status: str = "active",
     symbol: str = "2330",
     quantity_lots: int = 1,
-    price: str = "600",
+    price: str | None = "600",
     cancelled_at: datetime | None = None,
+    trail_mode: str | None = None,
+    trail_value: Decimal | None = None,
+    filled_quantity_lots: int = 0,
 ) -> TradeIntentData:
     now = datetime.now(tz=UTC)
     return TradeIntentData(
@@ -69,8 +71,8 @@ def _make_intent(
         strategy=strategy,
         execution_mode="notify_only",
         quantity_lots=quantity_lots,
-        target_price_original=Decimal(price),
-        target_price_effective=Decimal(price),
+        target_price_original=Decimal(price) if price is not None else None,
+        target_price_effective=Decimal(price) if price is not None else None,
         trigger_reference_price_type="ask" if "buy" in strategy else "bid",
         trading_date=date.today(),
         time_in_force="day",
@@ -78,6 +80,9 @@ def _make_intent(
         created_at=now,
         updated_at=now,
         cancelled_at=cancelled_at,
+        trail_mode=trail_mode,
+        trail_value=trail_value,
+        filled_quantity_lots=filled_quantity_lots,
     )
 
 
@@ -139,26 +144,56 @@ def test_create_sell_alert_success(api_client: TestClient, mock_create_command: 
     assert data["quantityLots"] == 2
 
 
-def test_create_limit_order_rejected_until_v0_5_15(api_client: TestClient, mock_create_command: MagicMock) -> None:
-    """V0.5 union 暫不開放 limit_*_order;BE-V0.5-15 接手後改為 201。
+def test_create_limit_order_success(api_client: TestClient, mock_create_command: MagicMock) -> None:
+    mock_create_command.execute.return_value = _make_intent(strategy="limit_buy_order")
 
-    避免 schema 通過後 command 邊界以 500 收尾。子 schema 行為由
-    tests/test_intent_create_schema.py 直接驗證。
-    """
     response = api_client.post("/trade-intents", json=_LIMIT_BUY_PAYLOAD)
 
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
-    mock_create_command.execute.assert_not_called()
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()["data"]
+    assert data["strategy"] == "limit_buy_order"
+    assert data["transactionMode"] == "single_notification"
+    assert data["notificationMode"] == "single"
+    assert data["filledQuantityLots"] == 0
+    mock_create_command.execute.assert_called_once()
 
 
-def test_create_trailing_stop_rejected_until_v0_5_16(api_client: TestClient, mock_create_command: MagicMock) -> None:
-    """V0.5 union 暫不開放 trailing_stop_alert;BE-V0.5-16 接手後改為 201。"""
+def test_create_triggered_limit_order_returns_filled_quantity(
+    api_client: TestClient, mock_create_command: MagicMock
+) -> None:
+    mock_create_command.execute.return_value = _make_intent(
+        strategy="limit_buy_order",
+        status="triggered",
+        quantity_lots=2,
+        filled_quantity_lots=2,
+    )
+
+    response = api_client.post("/trade-intents", json={**_LIMIT_BUY_PAYLOAD, "quantityLots": 2})
+
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()["data"]
+    assert data["strategy"] == "limit_buy_order"
+    assert data["status"] == "triggered"
+    assert data["filledQuantityLots"] == data["quantityLots"]
+
+
+def test_create_trailing_stop_success(api_client: TestClient, mock_create_command: MagicMock) -> None:
+    mock_create_command.execute.return_value = _make_intent(
+        strategy="trailing_stop_alert",
+        price=None,
+        trail_mode="percentage",
+        trail_value=Decimal("5.0"),
+    )
+
     response = api_client.post("/trade-intents", json=_TRAILING_STOP_PAYLOAD)
 
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
-    mock_create_command.execute.assert_not_called()
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()["data"]
+    assert data["strategy"] == "trailing_stop_alert"
+    assert data["targetPriceOriginal"] is None
+    assert data["trailMode"] == "percentage"
+    assert data["trailValue"] == "5.00"
+    mock_create_command.execute.assert_called_once()
 
 
 def test_create_intent_rejects_owner_user_id_in_payload(api_client: TestClient) -> None:

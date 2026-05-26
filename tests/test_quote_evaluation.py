@@ -22,6 +22,10 @@ SESSION_QUOTE_TIME = datetime(2026, 5, 11, 9, 59, 55, tzinfo=TAIPEI)  # 5s befor
 def make_intent(
     strategy: str = "buy_price_alert",
     target: Decimal = Decimal("100"),
+    trail_mode: str | None = None,
+    trail_value: Decimal | None = None,
+    baseline: Decimal | None = None,
+    dynamic_trigger_price: Decimal | None = None,
 ) -> TradeIntentData:
     return TradeIntentData(
         id=uuid4(),
@@ -38,6 +42,10 @@ def make_intent(
         status="active",
         created_at=SESSION_NOW,
         updated_at=SESSION_NOW,
+        trail_mode=trail_mode,
+        trail_value=trail_value,
+        baseline=baseline,
+        dynamic_trigger_price=dynamic_trigger_price,
     )
 
 
@@ -140,6 +148,129 @@ class TestSellPriceAlert:
         )
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.CONDITION_NOT_MET
+
+
+class TestLimitOrders:
+    def test_limit_buy_uses_buy_alert_rules(self, evaluator: QuoteEvaluator) -> None:
+        result = evaluator.evaluate(
+            _snapshot(ask_price=Decimal("99")),
+            make_intent("limit_buy_order"),
+            SESSION_NOW,
+        )
+
+        assert result.should_trigger
+        assert result.trigger_reference_price_type == "ask"
+
+    def test_limit_buy_falls_back_to_last(self, evaluator: QuoteEvaluator) -> None:
+        result = evaluator.evaluate(
+            _snapshot(last_price=Decimal("99")),
+            make_intent("limit_buy_order"),
+            SESSION_NOW,
+        )
+
+        assert result.should_trigger
+        assert result.trigger_reference_price_type == "last_fallback"
+        assert result.fallback_used is True
+
+    def test_limit_sell_uses_sell_alert_rules(self, evaluator: QuoteEvaluator) -> None:
+        result = evaluator.evaluate(
+            _snapshot(bid_price=Decimal("101")),
+            make_intent("limit_sell_order"),
+            SESSION_NOW,
+        )
+
+        assert result.should_trigger
+        assert result.trigger_reference_price_type == "bid"
+
+    def test_limit_sell_falls_back_to_last(self, evaluator: QuoteEvaluator) -> None:
+        result = evaluator.evaluate(
+            _snapshot(last_price=Decimal("101")),
+            make_intent("limit_sell_order"),
+            SESSION_NOW,
+        )
+
+        assert result.should_trigger
+        assert result.trigger_reference_price_type == "last_fallback"
+        assert result.fallback_used is True
+
+
+class TestTrailingStopAlert:
+    def test_initializes_baseline_from_last_and_dynamic_price(self, evaluator: QuoteEvaluator) -> None:
+        result = evaluator.evaluate(
+            _snapshot(bid_price=Decimal("96"), ask_price=Decimal("101"), last_price=Decimal("100")),
+            make_intent("trailing_stop_alert", trail_mode="percentage", trail_value=Decimal("5")),
+            SESSION_NOW,
+        )
+
+        assert not result.should_trigger
+        assert result.baseline == Decimal("100")
+        assert result.dynamic_trigger_price == Decimal("95.0")
+        assert result.baseline_updated_at == SESSION_NOW
+
+    def test_updates_baseline_only_on_higher_reference_price(self, evaluator: QuoteEvaluator) -> None:
+        intent = make_intent(
+            "trailing_stop_alert",
+            trail_mode="fixed_amount",
+            trail_value=Decimal("5"),
+            baseline=Decimal("100"),
+            dynamic_trigger_price=Decimal("95"),
+        )
+        result = evaluator.evaluate(
+            _snapshot(bid_price=Decimal("99"), ask_price=Decimal("100"), last_price=Decimal("110")),
+            intent,
+            SESSION_NOW,
+        )
+
+        assert result.baseline == Decimal("110")
+        assert result.dynamic_trigger_price == Decimal("105.0")
+        assert result.baseline_updated_at == SESSION_NOW
+
+    def test_lower_reference_keeps_existing_baseline(self, evaluator: QuoteEvaluator) -> None:
+        intent = make_intent(
+            "trailing_stop_alert",
+            trail_mode="percentage",
+            trail_value=Decimal("5"),
+            baseline=Decimal("100"),
+            dynamic_trigger_price=Decimal("95"),
+        )
+        result = evaluator.evaluate(
+            _snapshot(bid_price=Decimal("96"), last_price=Decimal("99")),
+            intent,
+            SESSION_NOW,
+        )
+
+        assert not result.should_trigger
+        assert result.baseline == Decimal("100")
+        assert result.dynamic_trigger_price == Decimal("95")
+        assert result.baseline_updated_at is None
+
+    def test_triggers_when_bid_reaches_dynamic_price(self, evaluator: QuoteEvaluator) -> None:
+        intent = make_intent(
+            "trailing_stop_alert",
+            trail_mode="percentage",
+            trail_value=Decimal("5"),
+            baseline=Decimal("100"),
+            dynamic_trigger_price=Decimal("95"),
+        )
+        result = evaluator.evaluate(_snapshot(bid_price=Decimal("94.9")), intent, SESSION_NOW)
+
+        assert result.should_trigger
+        assert result.trigger_price == Decimal("94.9")
+        assert result.trigger_reference_price_type == "bid"
+
+    def test_trailing_falls_back_to_last_when_bid_missing(self, evaluator: QuoteEvaluator) -> None:
+        intent = make_intent(
+            "trailing_stop_alert",
+            trail_mode="percentage",
+            trail_value=Decimal("5"),
+            baseline=Decimal("100"),
+            dynamic_trigger_price=Decimal("95"),
+        )
+        result = evaluator.evaluate(_snapshot(last_price=Decimal("94.9")), intent, SESSION_NOW)
+
+        assert result.should_trigger
+        assert result.trigger_reference_price_type == "last_fallback"
+        assert result.fallback_used is True
 
     def test_missing_bid_falls_back_to_last(self, evaluator: QuoteEvaluator) -> None:
         result = evaluator.evaluate(

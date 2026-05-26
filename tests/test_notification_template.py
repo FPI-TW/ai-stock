@@ -6,10 +6,15 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.services.notification_template import render_price_triggered
+from app.services.notification_template import (
+    render_limit_order_triggered,
+    render_price_triggered,
+    render_trailing_stop_triggered,
+)
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 UTC = ZoneInfo("UTC")
+QUOTE_TIME = datetime(2026, 5, 11, 10, 0, 5, tzinfo=TAIPEI)
 
 
 class TestRenderPriceTriggered:
@@ -99,5 +104,98 @@ class TestRenderPriceTriggered:
                 strategy="buy_price_alert",
                 target_price=Decimal("100"),
                 trigger_price=Decimal("99"),
+                quote_time=datetime(2026, 5, 11, 10, 0, 5),
+            )
+
+
+class TestRenderLimitOrderTriggered:
+    def test_limit_buy_body_contains_fill_and_disclaimer(self) -> None:
+        title, body = render_limit_order_triggered(
+            symbol="2330",
+            strategy="limit_buy_order",
+            target_price=Decimal("600"),
+            trigger_price=Decimal("599.5"),
+            filled_quantity_lots=1,
+            quantity_lots=1,
+            quote_time=QUOTE_TIME,
+        )
+
+        assert title == "2330 限價買單已觸發"
+        assert "策略：限價買單" in body
+        assert "成交 1 張 / 委託 1 張" in body
+        assert "僅通知" in body
+
+    def test_limit_sell_title(self) -> None:
+        title, _ = render_limit_order_triggered(
+            symbol="2330",
+            strategy="limit_sell_order",
+            target_price=Decimal("600"),
+            trigger_price=Decimal("601"),
+            filled_quantity_lots=2,
+            quantity_lots=2,
+            quote_time=QUOTE_TIME,
+        )
+
+        assert title == "2330 限價賣單已觸發"
+
+    def test_naive_quote_time_raises(self) -> None:
+        with pytest.raises(TypeError, match="timezone-aware"):
+            render_limit_order_triggered(
+                symbol="2330",
+                strategy="limit_buy_order",
+                target_price=Decimal("600"),
+                trigger_price=Decimal("599.5"),
+                filled_quantity_lots=1,
+                quantity_lots=1,
+                quote_time=datetime(2026, 5, 11, 10, 0, 5),
+            )
+
+
+class TestRenderTrailingStopTriggered:
+    def test_percentage_body_contains_baseline_dynamic_price_and_disclaimer(self) -> None:
+        title, body = render_trailing_stop_triggered(
+            symbol="2330",
+            trail_mode="percentage",
+            trail_value=Decimal("5"),
+            baseline=Decimal("100"),
+            dynamic_trigger_price=Decimal("95"),
+            trigger_price=Decimal("94.8"),
+            trigger_reference_price_type="bid",
+            quote_time=QUOTE_TIME,
+        )
+
+        assert title == "2330 移動出場已觸發"
+        assert "策略：移動出場" in body
+        assert "今日最高價：100.00" in body
+        assert "觸發價（最高 × 95%）：95.00" in body
+        assert "95.00" in body
+        assert "實際觸發成交價：94.80（bid）" in body
+        assert "僅通知" in body
+
+    def test_fixed_amount_body_contains_mode(self) -> None:
+        _, body = render_trailing_stop_triggered(
+            symbol="2330",
+            trail_mode="fixed_amount",
+            trail_value=Decimal("5"),
+            baseline=Decimal("100"),
+            dynamic_trigger_price=Decimal("95"),
+            trigger_price=Decimal("94.8"),
+            trigger_reference_price_type="bid",
+            quote_time=QUOTE_TIME,
+        )
+
+        assert "固定點數模式" in body
+        assert "NT$5.00" in body
+
+    def test_naive_quote_time_raises(self) -> None:
+        with pytest.raises(TypeError, match="timezone-aware"):
+            render_trailing_stop_triggered(
+                symbol="2330",
+                trail_mode="percentage",
+                trail_value=Decimal("5"),
+                baseline=Decimal("100"),
+                dynamic_trigger_price=Decimal("95"),
+                trigger_price=Decimal("94.8"),
+                trigger_reference_price_type="bid",
                 quote_time=datetime(2026, 5, 11, 10, 0, 5),
             )

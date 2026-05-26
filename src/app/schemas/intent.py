@@ -50,14 +50,13 @@ class LimitSellOrderCreateRequest(_LimitOrderCreateRequest):
 
 class TrailingStopAlertCreateRequest(_BaseIntentCreateRequest):
     strategy: Literal["trailing_stop_alert"]
-    position_side: Literal["long", "short"] = Field(validation_alias="positionSide")
     trail_mode: Literal["percentage", "fixed_amount"] = Field(validation_alias="trailMode")
     trail_value: Decimal = Field(validation_alias="trailValue", gt=0)
 
     @model_validator(mode="after")
     def _validate_percentage_trail_value(self) -> "TrailingStopAlertCreateRequest":
-        if self.trail_mode == "percentage" and self.trail_value > Decimal("50"):
-            message = "trailValue must be less than or equal to 50 when trailMode is percentage"
+        if self.trail_mode == "percentage" and self.trail_value > Decimal("10"):
+            message = "trailValue must be less than or equal to 10 when trailMode is percentage"
             raise ValidationError.from_exception_data(
                 self.__class__.__name__,
                 [
@@ -72,11 +71,12 @@ class TrailingStopAlertCreateRequest(_BaseIntentCreateRequest):
         return self
 
 
-# V0.5 階段 union 只暴露已實作的 strategy。
-# LimitBuy/Sell 與 TrailingStop 子 schema 定義保留供 BE-V0.5-15 / 16 接手納入 union;
-# evaluator / migration 上線前不開放,避免 schema 通過後 command 邊界以 500 收尾。
 type IntentCreateRequest = Annotated[
-    BuyPriceAlertCreateRequest | SellPriceAlertCreateRequest,
+    BuyPriceAlertCreateRequest
+    | SellPriceAlertCreateRequest
+    | LimitBuyOrderCreateRequest
+    | LimitSellOrderCreateRequest
+    | TrailingStopAlertCreateRequest,
     Field(discriminator="strategy"),
 ]
 
@@ -93,12 +93,21 @@ class IntentResponseData(BaseModel):
     symbol: str
     strategy: str
     quantity_lots: int = Field(serialization_alias="quantityLots")
-    target_price_original: str = Field(serialization_alias="targetPriceOriginal")
-    target_price_effective: str = Field(serialization_alias="targetPriceEffective")
+    target_price_original: str | None = Field(serialization_alias="targetPriceOriginal")
+    target_price_effective: str | None = Field(serialization_alias="targetPriceEffective")
     trading_date: date = Field(serialization_alias="tradingDate")
     time_in_force: str = Field(serialization_alias="timeInForce")
     execution_mode: str = Field(serialization_alias="executionMode")
     status: str
+    transaction_mode: str = Field(serialization_alias="transactionMode")
+    notification_mode: str = Field(serialization_alias="notificationMode")
+    filled_quantity_lots: int = Field(serialization_alias="filledQuantityLots")
+    last_fill_at: datetime | None = Field(default=None, serialization_alias="lastFillAt")
+    trail_mode: str | None = Field(default=None, serialization_alias="trailMode")
+    trail_value: str | None = Field(default=None, serialization_alias="trailValue")
+    baseline: str | None = None
+    dynamic_trigger_price: str | None = Field(default=None, serialization_alias="dynamicTriggerPrice")
+    baseline_updated_at: datetime | None = Field(default=None, serialization_alias="baselineUpdatedAt")
     created_at: datetime = Field(serialization_alias="createdAt")
     cancelled_at: datetime | None = Field(default=None, serialization_alias="cancelledAt")
 
@@ -118,17 +127,32 @@ class IntentDetailResponse(BaseModel):
 
 
 def map_to_response_data(intent: TradeIntentData) -> IntentResponseData:
+    target_price_original = (
+        format_price_str(intent.target_price_original) if intent.target_price_original is not None else None
+    )
+    target_price_effective = (
+        format_price_str(intent.target_price_effective) if intent.target_price_effective is not None else None
+    )
     return IntentResponseData(
         id=intent.id,
         symbol=intent.symbol,
         strategy=intent.strategy,
         quantity_lots=intent.quantity_lots,
-        target_price_original=format_price_str(intent.target_price_original),
-        target_price_effective=format_price_str(intent.target_price_effective),
+        target_price_original=target_price_original,
+        target_price_effective=target_price_effective,
         trading_date=intent.trading_date,
         time_in_force=intent.time_in_force,
         execution_mode=intent.execution_mode,
         status=intent.status,
+        transaction_mode=intent.transaction_mode,
+        notification_mode=intent.notification_mode,
+        filled_quantity_lots=intent.filled_quantity_lots,
+        last_fill_at=intent.last_fill_at,
+        trail_mode=intent.trail_mode,
+        trail_value=format_price_str(intent.trail_value) if intent.trail_value else None,
+        baseline=format_price_str(intent.baseline) if intent.baseline else None,
+        dynamic_trigger_price=format_price_str(intent.dynamic_trigger_price) if intent.dynamic_trigger_price else None,
+        baseline_updated_at=intent.baseline_updated_at,
         created_at=intent.created_at,
         cancelled_at=intent.cancelled_at,
     )

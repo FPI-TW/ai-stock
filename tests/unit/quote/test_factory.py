@@ -1,8 +1,7 @@
 """Factory smoke tests — ensures the lazy import contract holds.
 
-`shioaji_demo` must not be imported unless `QUOTE_PROVIDER=shioaji_demo`. Without
-this guarantee, CI (which never installs the shioaji extra) would fail at app
-boot just by importing the factory.
+`shioaji_demo` must not be imported unless `QUOTE_PROVIDER=shioaji_demo`, so
+provider-specific import side effects stay out of in-memory test/runtime paths.
 """
 
 import sys

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.models.core import Symbol, TradeIntent
+from app.domain.price import SecurityType
 from app.domain.trade_intent import (
     DuplicateIntentError,
     IntentNotFoundError,
@@ -43,6 +44,16 @@ def int_engine() -> Generator[Engine]:
                 display_name="台積電",
                 market="TWSE",
                 instrument_type="stock",
+                tradable_status="tradable",
+            )
+        )
+        session.add(
+            Symbol(
+                id=uuid4(),
+                symbol="0050",
+                display_name="元大台灣50",
+                market="TWSE",
+                instrument_type="etf",
                 tradable_status="tradable",
             )
         )
@@ -102,7 +113,7 @@ def _create(
     # Mimic the production command's commit boundary so server-side `func.now()`
     # values resolve per-statement instead of all sharing one transaction timestamp.
     # Tests that exercise ordering by `created_at` / `updated_at` rely on this.
-    repo._db.commit()  # noqa: SLF001
+    repo.commit()
     # Materialise after commit, matching `CreateTradeIntentCommand.execute`.
     return repo.find_by_id(intent_id, owner_user_id)
 
@@ -115,6 +126,26 @@ def test_find_by_id_wrong_owner_raises_not_found(repo: IntentRepository) -> None
 
     with pytest.raises(IntentNotFoundError):
         repo.find_by_id(intent.id, other)
+
+
+@pytest.mark.integration
+def test_find_by_id_preserves_symbol_security_type(repo: IntentRepository) -> None:
+    owner = uuid4()
+    intent = _create(repo, owner_user_id=owner, symbol="0050")
+
+    found = repo.find_by_id(intent.id, owner)
+
+    assert found.security_type is SecurityType.ETF
+
+
+@pytest.mark.integration
+def test_list_by_owner_preserves_symbol_security_type(repo: IntentRepository) -> None:
+    owner = uuid4()
+    _create(repo, owner_user_id=owner, symbol="0050")
+
+    results, _ = repo.list_by_owner(owner, statuses=["active"], cursor=None, page_size=10)
+
+    assert results[0].security_type is SecurityType.ETF
 
 
 @pytest.mark.integration

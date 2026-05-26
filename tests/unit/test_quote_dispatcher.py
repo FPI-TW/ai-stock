@@ -101,8 +101,9 @@ def test_dispatch_triggers_intent_when_evaluator_says_should_trigger(
 
     mock_repo.system_list_active_by_symbols.assert_called_once_with(["2330"])
     evaluator.evaluate.assert_called_once()
-    mock_cmd.execute.assert_called_once()
-    trigger_input = mock_cmd.execute.call_args[0][0]
+    mock_cmd.stage.assert_called_once()
+    mock_repo.commit.assert_called_once()
+    trigger_input = mock_cmd.stage.call_args[0][0]
     assert trigger_input.intent_id == intent.id
     assert trigger_input.trigger_price == Decimal("99")
     assert trigger_input.trigger_reference_price_type == "ask"
@@ -122,7 +123,7 @@ def test_dispatch_skips_when_no_active_intents(monkeypatch: pytest.MonkeyPatch, 
     dispatcher.dispatch(_snapshot())
 
     evaluator.evaluate.assert_not_called()
-    mock_cmd.execute.assert_not_called()
+    mock_cmd.stage.assert_not_called()
 
 
 def test_dispatch_does_not_trigger_when_condition_not_met(
@@ -141,7 +142,8 @@ def test_dispatch_does_not_trigger_when_condition_not_met(
     dispatcher.dispatch(_snapshot())
 
     evaluator.evaluate.assert_called_once()
-    mock_cmd.execute.assert_not_called()
+    mock_cmd.stage.assert_not_called()
+    mock_repo.commit.assert_not_called()
 
 
 def test_dispatch_swallows_unexpected_exception(monkeypatch: pytest.MonkeyPatch, mock_session: MagicMock) -> None:
