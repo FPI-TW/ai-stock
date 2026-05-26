@@ -727,8 +727,9 @@ async function openApiSanityCheck() {
 // ---------------------------------------------------------------------------
 
 function init() {
-  document.getElementById("base-url").textContent = window.location.origin;
+  // Base URL 已從 topbar 移除（資訊密度精簡）；保留註解標示位置。
   renderUserSelect();
+  updateUserAvatars();
   renderEndpointList();
   document.getElementById("endpoint-filter").addEventListener("input", (e) => {
     renderEndpointList(e.target.value);
