@@ -8,7 +8,16 @@
 //   onEnterUserMode()    — 切到使用者模式時刷新 dashboard
 //   showToast(msg, type) — 也讓 app.js 可呼叫
 
-import { USERS, getSelectedUser, setSelectedUser, sendRequest } from "/test-assets/app.js";
+import {
+  USERS,
+  getSelectedUser,
+  setSelectedUser,
+  sendRequest,
+  attachSegmentedIndicator,
+  attachPopover,
+  renderIdentityMenu,
+  syncDevUserSwitcher,
+} from "/test-assets/app.js";
 
 // ---------------------------------------------------------------------------
 // Strategy 中文 label — 與 notification_template.py 同步
@@ -71,7 +80,9 @@ function fmtRelativeTime(iso) {
 
 function fmtUserLabel(label) {
   if (label === "default") return "預設使用者";
-  return label;
+  // Match the title-cased form used by USER_DISPLAY_NAME in app.js so the
+  // topbar pill, dashboard greeting, and confirm-summary footer all agree.
+  return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
 function currentUserName() {
@@ -85,7 +96,6 @@ function el(tag, attrs = {}, children = []) {
     if (k === "className") node.className = v;
     else if (k === "dataset") Object.assign(node.dataset, v);
     else if (k === "onClick") node.addEventListener("click", v);
-    else if (k === "html") node.innerHTML = v;
     else if (v === false || v === null || v === undefined) continue;
     else node.setAttribute(k, String(v));
   }
@@ -118,7 +128,7 @@ async function refreshIntents() {
 
   if (resp.status !== 200) {
     list.innerHTML = "";
-    list.appendChild(emptyState("⚠️", "讀取委託失敗", resp.body?.error?.message || `HTTP ${resp.status}`));
+    list.appendChild(emptyState("", "讀取委託失敗", resp.body?.error?.message || `HTTP ${resp.status}`));
     document.getElementById("uv-intent-count").textContent = "—";
     return;
   }
@@ -145,12 +155,12 @@ function renderIntentsFiltered() {
   else visible = [...active, ...triggered, ...cancelled];
 
   if (lastIntentsList.length === 0) {
-    list.appendChild(emptyState("📋", "尚無委託", "點右上『+ 新增委託』開始建立"));
+    list.appendChild(emptyState("", "尚無委託", "點右上『+ 新增委託』開始建立"));
     return;
   }
   if (visible.length === 0) {
     const filterLabel = { active: "進行中", triggered: "已觸發", cancelled: "已取消" }[intentFilter];
-    list.appendChild(emptyState("📭", `沒有${filterLabel}的委託`, "切其他分類試試"));
+    list.appendChild(emptyState("", `沒有${filterLabel}的委託`, "切其他分類試試"));
     return;
   }
 
@@ -224,7 +234,7 @@ async function refreshNotifications() {
 
   list.innerHTML = "";
   if (resp.status !== 200) {
-    list.appendChild(emptyState("⚠️", "讀取通知失敗", resp.body?.error?.message || `HTTP ${resp.status}`));
+    list.appendChild(emptyState("", "讀取通知失敗", resp.body?.error?.message || `HTTP ${resp.status}`));
     document.getElementById("uv-notif-count").textContent = "—";
     return;
   }
@@ -234,7 +244,7 @@ async function refreshNotifications() {
   document.getElementById("uv-notif-count").textContent = `${unread} 未讀 / ${notifs.length} 筆`;
 
   if (notifs.length === 0) {
-    list.appendChild(emptyState("🔔", "尚無通知", "委託觸發後會在這裡顯示"));
+    list.appendChild(emptyState("", "尚無通知", "委託觸發後會在這裡顯示"));
     return;
   }
 
@@ -243,7 +253,7 @@ async function refreshNotifications() {
 
 function renderNotifCard(notif) {
   const isLimit = notif.type === "limit_order_triggered";
-  const icon = isLimit ? "📊" : "📈";
+  const iconLabel = isLimit ? "限" : "到";
   const summary = (notif.renderedBody || "")
     .split("\n")
     .filter((line) => line.trim() && !line.startsWith("僅通知"))
@@ -251,7 +261,7 @@ function renderNotifCard(notif) {
     .join(" · ");
 
   const card = el("article", { className: `notif-card ${notif.readAt ? "" : "unread"}`, role: "button", tabindex: "0" }, [
-    el("div", { className: "notif-icon" }, [icon]),
+    el("div", { className: `notif-icon ${isLimit ? "limit" : "alert"}` }, [iconLabel]),
     el("div", { className: "notif-body" }, [
       el("div", { className: "notif-title" }, [notif.renderedTitle]),
       el("div", { className: "notif-summary" }, [summary]),
@@ -269,10 +279,9 @@ function renderNotifCard(notif) {
   return card;
 }
 
-function emptyState(icon, title, hint) {
+function emptyState(_icon, title, hint) {
   return el("div", { className: "uv-empty" }, [
-    el("div", { className: "uv-empty-icon" }, [icon]),
-    el("div", {}, [title]),
+    el("div", { className: "uv-empty-title" }, [title]),
     el("div", { className: "uv-empty-hint" }, [hint]),
   ]);
 }
@@ -325,8 +334,8 @@ function resetSheet() {
   sheetState.transactionMode = "single_notification";
 
   document.getElementById("symbol-search").value = "";
-  document.getElementById("symbol-results").innerHTML = "";
   document.getElementById("symbol-selected").hidden = true;
+  showSymbolResultsHint();
   document.getElementById("form-quantity").value = "1";
   document.getElementById("form-target").value = "";
   for (const r of document.querySelectorAll('input[name="strategy"]')) r.checked = false;
@@ -340,7 +349,14 @@ function showSheetStep(step) {
   for (const node of document.querySelectorAll(".sheet-step")) {
     node.hidden = Number(node.dataset.step) !== step;
   }
+  for (const dot of document.querySelectorAll("#sheet-stepper .step-dot")) {
+    const dotStep = Number(dot.dataset.step);
+    dot.classList.toggle("active", dotStep === step);
+    dot.classList.toggle("completed", dotStep < step);
+  }
+  // single left action per step: step 1 shows 取消, step 2+ shows ← 上一步
   document.getElementById("sheet-back").hidden = step === 1;
+  document.getElementById("sheet-cancel").hidden = step !== 1;
   document.getElementById("sheet-title").textContent = step === 3 ? "確認送出" : "新增委託";
   const next = document.getElementById("sheet-next");
   next.textContent = step === 3 ? "送出" : "下一步";
@@ -368,41 +384,101 @@ function closeSheet() {
   document.getElementById("sheet-overlay").hidden = true;
 }
 
+function escapeHtmlLocal(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function highlightText(text, needle) {
+  const safe = escapeHtmlLocal(text);
+  if (!needle) return safe;
+  const idx = text.toLowerCase().indexOf(needle.toLowerCase());
+  if (idx < 0) return safe;
+  const end = idx + needle.length;
+  return (
+    escapeHtmlLocal(text.slice(0, idx)) +
+    `<mark class="symbol-match">${escapeHtmlLocal(text.slice(idx, end))}</mark>` +
+    escapeHtmlLocal(text.slice(end))
+  );
+}
+
+function showSymbolResultsHint() {
+  const results = document.getElementById("symbol-results");
+  results.classList.remove("hidden");
+  results.innerHTML = `
+    <div class="symbol-results-state">
+      <div class="symbol-results-state-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="7"/><line x1="20" y1="20" x2="16.5" y2="16.5"/>
+        </svg>
+      </div>
+      <div class="symbol-results-state-title">輸入代號或名稱開始搜尋</div>
+      <div class="symbol-results-state-hint">例如：2330、台積電</div>
+    </div>
+  `;
+}
+
 async function searchSymbols(query) {
   const results = document.getElementById("symbol-results");
+  results.classList.remove("hidden");
+
   if (!query || query.length < 1) {
-    results.innerHTML = "";
+    showSymbolResultsHint();
     return;
   }
 
   if (searchAbortController) searchAbortController.abort();
   searchAbortController = new AbortController();
+  const signal = searchAbortController.signal;
 
   const resp = await sendRequest({
     method: "GET",
     path: "/symbols",
     query: { q: query, limit: 10 },
-  }).catch(() => null);
+    signal,
+  }).catch((err) => {
+    if (err?.name === "AbortError") return "aborted";
+    return null;
+  });
 
+  if (resp === "aborted") return;
   if (!resp || resp.status !== 200) {
-    results.innerHTML = "";
+    results.innerHTML = `
+      <div class="symbol-results-state">
+        <div class="symbol-results-state-title">搜尋失敗</div>
+        <div class="symbol-results-state-hint">稍候再試一次</div>
+      </div>
+    `;
+    return;
+  }
+
+  const items = resp.body?.data || [];
+  if (items.length === 0) {
+    results.innerHTML = `
+      <div class="symbol-results-state">
+        <div class="symbol-results-state-title">找不到「${escapeHtmlLocal(query)}」</div>
+        <div class="symbol-results-state-hint">試試其他代號或中文名稱</div>
+      </div>
+    `;
     return;
   }
 
   results.innerHTML = "";
-  const items = resp.body?.data || [];
-  if (items.length === 0) {
-    results.appendChild(el("div", { className: "symbol-result-item" }, [
-      el("span", { className: "symbol-name" }, [`找不到符合「${query}」的標的`]),
-    ]));
-    return;
-  }
   for (const sym of items) {
-    const item = el("div", { className: "symbol-result-item" }, [
-      el("span", { className: "symbol-code" }, [sym.symbol]),
-      el("span", { className: "symbol-name" }, [sym.displayName || sym.symbol]),
-      el("span", { className: "symbol-market" }, [sym.market || ""]),
-    ]);
+    const code = sym.symbol;
+    const name = sym.displayName || code;
+    const initial = code.charAt(0).toUpperCase();
+    const item = document.createElement("div");
+    item.className = "symbol-result-item";
+    item.innerHTML = `
+      <span class="symbol-result-avatar">${escapeHtmlLocal(initial)}</span>
+      <div class="symbol-result-text">
+        <span class="symbol-result-code">${highlightText(code, query)}</span>
+        <span class="symbol-result-name">${highlightText(name, query)}</span>
+      </div>
+      ${sym.market ? `<span class="symbol-result-market">${escapeHtmlLocal(sym.market)}</span>` : ""}
+    `;
     item.addEventListener("click", () => selectSymbol(sym));
     results.appendChild(item);
   }
@@ -410,41 +486,91 @@ async function searchSymbols(query) {
 
 function selectSymbol(sym) {
   sheetState.symbol = { symbol: sym.symbol, displayName: sym.displayName || sym.symbol };
-  document.getElementById("symbol-results").innerHTML = "";
+  const results = document.getElementById("symbol-results");
+  results.innerHTML = "";
+  results.classList.add("hidden");
   document.getElementById("symbol-search").value = "";
   const selected = document.getElementById("symbol-selected");
+  const code = sym.symbol;
+  const name = sym.displayName || sym.symbol;
+  const initial = code.charAt(0).toUpperCase();
   selected.innerHTML = "";
-  selected.appendChild(el("span", { className: "label" }, ["已選擇"]));
-  selected.appendChild(el("span", { className: "value" }, [`${sym.symbol} ${sym.displayName || ""}`]));
+  selected.appendChild(el("span", { className: "symbol-selected-avatar" }, [initial]));
+  selected.appendChild(el("div", { className: "symbol-selected-text" }, [
+    el("span", { className: "symbol-selected-code" }, [code]),
+    el("span", { className: "symbol-selected-name" }, [name]),
+  ]));
+  const changeBtn = el("button", { className: "symbol-selected-change", type: "button" }, ["更換"]);
+  changeBtn.addEventListener("click", () => {
+    sheetState.symbol = null;
+    selected.hidden = true;
+    document.getElementById("sheet-next").disabled = true;
+    showSymbolResultsHint();
+    setTimeout(() => document.getElementById("symbol-search").focus(), 0);
+  });
+  selected.appendChild(changeBtn);
   selected.hidden = false;
   showSheetStep(1); // refresh next button state
 }
 
 function onStrategyChange(value) {
   sheetState.strategy = value;
-  document.getElementById("form-transaction-group").hidden = !value?.startsWith("limit_");
+  const group = document.getElementById("form-transaction-group");
+  group.hidden = !value?.startsWith("limit_");
   document.getElementById("sheet-next").disabled = !validateStep(2);
 }
 
 function renderConfirmSummary() {
-  const dl = document.getElementById("confirm-summary");
-  dl.innerHTML = "";
-  const rows = [
-    ["標的", `${sheetState.symbol.symbol} ${sheetState.symbol.displayName || ""}`],
-    ["策略", STRATEGY_LABEL[sheetState.strategy]],
-    ["張數", `${sheetState.quantityLots} 張 (= ${sheetState.quantityLots * 1000} 股)`],
-    ["目標價", sheetState.targetPrice],
-    ["觸發條件", STRATEGY_TRIGGER_DESC[sheetState.strategy]],
-  ];
-  if (sheetState.strategy.startsWith("limit_")) {
-    const modeLabel =
-      sheetState.transactionMode === "partial_fill_allowed" ? "允許部分成交" : "單次通知";
-    rows.push(["交易模式", modeLabel]);
+  const container = document.getElementById("confirm-summary");
+  container.innerHTML = "";
+
+  const strategy = sheetState.strategy;
+  const isBuy = strategy.startsWith("buy_") || strategy === "limit_buy_order";
+  const isLimit = strategy.startsWith("limit_");
+  const code = sheetState.symbol.symbol;
+  const name = sheetState.symbol.displayName || code;
+  const initial = code.charAt(0).toUpperCase();
+
+  const header = el("div", { className: "confirm-card-header" }, [
+    el("span", { className: `confirm-card-avatar ${isBuy ? "buy" : "sell"}` }, [initial]),
+    el("div", { className: "confirm-card-symbol" }, [
+      el("span", { className: "code" }, [code]),
+      el("span", { className: "name" }, [name]),
+    ]),
+    el("span", { className: `confirm-card-strategy ${isBuy ? "buy" : "sell"}` }, [STRATEGY_LABEL[strategy]]),
+  ]);
+
+  const trigger = el("div", { className: "confirm-card-trigger" }, [
+    STRATEGY_TRIGGER_DESC[strategy].replace("目標價", `${sheetState.targetPrice}`),
+  ]);
+
+  const grid = el("div", { className: "confirm-card-grid" }, [
+    el("div", { className: "confirm-stat" }, [
+      el("span", { className: "label" }, ["目標價"]),
+      el("span", { className: "value" }, [sheetState.targetPrice]),
+    ]),
+    el("div", { className: "confirm-stat" }, [
+      el("span", { className: "label" }, ["張數"]),
+      el("span", { className: "value" }, [
+        `${sheetState.quantityLots}`,
+        el("small", {}, [` 張 · ${(sheetState.quantityLots * 1000).toLocaleString()} 股`]),
+      ]),
+    ]),
+  ]);
+  if (isLimit) {
+    const modeLabel = sheetState.transactionMode === "partial_fill_allowed" ? "允許部分成交" : "單次通知";
+    grid.appendChild(el("div", { className: "confirm-stat" }, [
+      el("span", { className: "label" }, ["交易模式"]),
+      el("span", { className: "value small" }, [modeLabel]),
+    ]));
   }
-  rows.push(["身份", currentUserName()]);
-  for (const [label, value] of rows) {
-    dl.appendChild(el("div", {}, [el("dt", {}, [label]), el("dd", {}, [value])]));
-  }
+
+  const meta = el("div", { className: "confirm-card-meta" }, [
+    el("span", { className: "label" }, ["送出身份"]),
+    el("strong", {}, [currentUserName()]),
+  ]);
+
+  container.appendChild(el("div", { className: "confirm-card" }, [header, trigger, grid, meta]));
 }
 
 async function submitCreate() {
@@ -639,7 +765,7 @@ function customConfirm({ title = "確認", message = "", okText = "確定", canc
 
 export function closeAllModals() {
   let closed = false;
-  for (const id of ["detail-overlay", "switch-user-overlay", "sheet-overlay"]) {
+  for (const id of ["detail-overlay", "sheet-overlay"]) {
     const node = document.getElementById(id);
     if (node && !node.hidden) {
       node.hidden = true;
@@ -655,42 +781,25 @@ export function closeAllModals() {
 }
 
 // ---------------------------------------------------------------------------
-// Switch-user modal
+// User-mode identity popover (mirrors dev mode switcher)
 // ---------------------------------------------------------------------------
 
-function openSwitchUser() {
-  const list = document.getElementById("switch-user-list");
-  list.innerHTML = "";
-  const current = getSelectedUser();
+let userModePopover = null;
 
-  const entries = [["default", "預設使用者"]].concat(Object.entries(USERS).map(([label, uuid]) => [label, label, uuid]));
-
-  for (const [label, name, uuid] of entries) {
-    const isActive = label === current;
-    const item = el("div", { className: `switch-user-item ${isActive ? "active" : ""}` }, [
-      el("div", { className: "switch-user-avatar" }, [name[0]?.toUpperCase() || "?"]),
-      el("div", { className: "switch-user-info" }, [
-        el("div", { className: "switch-user-name" }, [name]),
-        el("div", { className: "switch-user-id" }, [uuid ? `${uuid.slice(0, 8)}…` : "LOCAL_USER_ID"]),
-      ]),
-      isActive ? el("span", { className: "switch-user-active" }, ["✓ 目前"]) : null,
-    ]);
-    item.addEventListener("click", () => {
-      setSelectedUser(label);
-      const sel = document.getElementById("user-select");
-      if (sel) sel.value = label;
-      closeSwitchUser();
-      showToast(`已切換為 ${name}`, "info");
-      refreshDashboard();
-    });
-    list.appendChild(item);
-  }
-
-  document.getElementById("switch-user-overlay").hidden = false;
-}
-
-function closeSwitchUser() {
-  document.getElementById("switch-user-overlay").hidden = true;
+function initUserModeSwitcher() {
+  const trigger = document.getElementById("user-mode-trigger");
+  const menu = document.getElementById("user-mode-menu");
+  if (!trigger || !menu) return;
+  userModePopover = attachPopover(trigger, menu, { align: "right" });
+  renderIdentityMenu(menu, (label) => {
+    setSelectedUser(label);
+    syncDevUserSwitcher();
+    userModePopover.close();
+    showToast(`已切換為 ${trigger.querySelector("strong")?.textContent || label}`, "info");
+    refreshDashboard();
+  });
+  // Items were just created; sync active/avatar state into them.
+  syncDevUserSwitcher();
 }
 
 // ---------------------------------------------------------------------------
@@ -700,15 +809,18 @@ function closeSwitchUser() {
 export function initUserView() {
   document.getElementById("uv-create-btn").addEventListener("click", openSheet);
   document.getElementById("user-refresh-btn").addEventListener("click", refreshDashboard);
-  document.getElementById("user-switch-btn").addEventListener("click", openSwitchUser);
+  initUserModeSwitcher();
 
   // filter chips
-  for (const btn of document.querySelectorAll("#uv-intent-filter button")) {
+  const intentFilterGroup = document.getElementById("uv-intent-filter");
+  const repositionIntentIndicator = attachSegmentedIndicator(intentFilterGroup);
+  for (const btn of intentFilterGroup.querySelectorAll("button")) {
     btn.addEventListener("click", () => {
       intentFilter = btn.dataset.filter;
-      for (const b of document.querySelectorAll("#uv-intent-filter button")) {
+      for (const b of intentFilterGroup.querySelectorAll("button")) {
         b.classList.toggle("active", b === btn);
       }
+      repositionIntentIndicator();
       renderIntentsFiltered();
     });
   }
@@ -738,12 +850,6 @@ export function initUserView() {
   document.getElementById("sheet-overlay").addEventListener("click", (ev) => {
     if (ev.target.id === "sheet-overlay") closeSheet();
   });
-  document.getElementById("switch-user-overlay").addEventListener("click", (ev) => {
-    if (ev.target.id === "switch-user-overlay" || ev.target.dataset?.closeSwitch !== undefined) closeSwitchUser();
-  });
-  for (const btn of document.querySelectorAll("[data-close-switch]")) {
-    btn.addEventListener("click", closeSwitchUser);
-  }
 
   // Step 1: symbol search
   document.getElementById("symbol-search").addEventListener("input", (ev) => {
