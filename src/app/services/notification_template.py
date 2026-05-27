@@ -31,6 +31,17 @@ _TRIGGER_REF_LABELS = {
 _DISCLAIMER = "僅通知、未下單、不保證成交。"
 
 
+def _format_compact_decimal(value: Decimal) -> str:
+    """Render a Decimal without trailing zeros (e.g. ``5`` not ``5.00``).
+
+    `format_price_str` always pads to ≥2 decimals, which suits prices but
+    reads oddly for percentages and the (100 ± trail) values embedded in the
+    trailing notification formula. This compacts to the user-entered shape.
+    """
+    s = f"{value.normalize():f}"
+    return s.rstrip("0").rstrip(".") if "." in s else s
+
+
 def render_price_triggered(
     *,
     symbol: str,
@@ -93,26 +104,12 @@ def render_trailing_stop_triggered(
     ref_label = _TRIGGER_REF_LABELS[trigger_reference_price_type]
 
     if trail_mode == "percentage":
-        # `format_price_str` always shows ≥2 decimals; trail % display prefers
-        # the user-entered shape (e.g. "5" not "5.00") so we strip trailing
-        # zeros / dot manually.
-        trail_display = f"{trail_value.normalize():f}"
-        if "." in trail_display:
-            trail_display = trail_display.rstrip("0").rstrip(".")
-        trail_line = f"移動幅度：{trail_display}%（百分比模式）"
+        trail_line = f"移動幅度：{_format_compact_decimal(trail_value)}%（百分比模式）"
         if position_side == "long":
             # long pct: dynamic = watermark × (1 − trail/100) → 顯示為 "最高 × (100-trail)%"
-            remaining = Decimal(100) - trail_value
-            remaining_display = f"{remaining.normalize():f}"
-            if "." in remaining_display:
-                remaining_display = remaining_display.rstrip("0").rstrip(".")
-            formula = f"最高 × {remaining_display}%"
+            formula = f"最高 × {_format_compact_decimal(Decimal(100) - trail_value)}%"
         else:
-            total = Decimal(100) + trail_value
-            total_display = f"{total.normalize():f}"
-            if "." in total_display:
-                total_display = total_display.rstrip("0").rstrip(".")
-            formula = f"最低 × {total_display}%"
+            formula = f"最低 × {_format_compact_decimal(Decimal(100) + trail_value)}%"
     else:
         trail_line = f"移動幅度：NT${format_price_str(trail_value)}（固定金額模式）"
         if position_side == "long":
