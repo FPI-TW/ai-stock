@@ -12,6 +12,10 @@
 
 - `make typecheck` 執行 `uv run mypy src tests`。
 - `make check` 執行非 PostgreSQL 品質門檻：`lint`、`format-check`、`typecheck`、`test`。
+  pytest 預設 `-m 'not integration and not ui'`，排除 integration 與 UI smoke。
 - mypy baseline 覆蓋 `src` 與 `tests`，使用 `mypy_path = "src"`，要求 typed function definitions 並檢查 untyped function bodies。
 - 目前不要直接開 `strict = true` 或 `disallow_any_*`；Alembic、SQLAlchemy、pytest fixture 的型別硬化要分階段做。
 - `make test-integration` 需要 local PostgreSQL，維持和 `make check` 分開。
+- `make test-ui` 為 Playwright 端對端 smoke（`tests/ui/`），需 local PostgreSQL + chromium，
+  一次性安裝 `uv run playwright install chromium`。pre-push hook 會跑 `make pre-push-check`
+  （= `test` + `test-ui`）；缺 prereq 的環境可用 `SKIP=pytest-ui git push` 暫過。
