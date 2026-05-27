@@ -1,4 +1,4 @@
-.PHONY: install install-hooks dev lint format format-check typecheck commit-check pre-push-check check migrate downgrade test test-integration check-shioaji-isolation
+.PHONY: install install-hooks dev lint format format-check typecheck commit-check pre-push-check check migrate downgrade test test-integration test-ui check-shioaji-isolation
 
 DATABASE_URL ?= postgresql+psycopg://ai_stock:ai_stock@localhost:5432/ai_stock
 
@@ -27,7 +27,7 @@ typecheck:
 
 commit-check: format lint format-check typecheck
 
-pre-push-check: test
+pre-push-check: test test-ui
 
 check: lint format-check typecheck check-shioaji-isolation test
 
@@ -55,3 +55,8 @@ test:
 
 test-integration:
 	DATABASE_URL=$(DATABASE_URL) uv run pytest -m integration -s
+
+# End-to-end UI smoke tests (Playwright). Requires the same local PostgreSQL
+# as test-integration plus chromium (one-time: `uv run playwright install chromium`).
+test-ui:
+	DATABASE_URL=$(DATABASE_URL) uv run pytest -m ui -s
