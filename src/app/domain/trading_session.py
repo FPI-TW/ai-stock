@@ -37,6 +37,20 @@ class TradingSessionService:
     def __init__(self, clock: Callable[[], datetime] | None = None) -> None:
         self._clock = clock
 
+    def set_clock(self, clock: Callable[[], datetime] | None) -> None:
+        """Swap or clear the injected clock.
+
+        Used by ``/dev/set-clock`` in LOCAL_MODE to freeze / advance time
+        without rebuilding the service or its consumers (dispatcher,
+        evaluator, create / cancel commands all hold the same instance via
+        ``app.state.session_service``). Pass ``None`` to fall back to the
+        system clock.
+        """
+        self._clock = clock
+
+    def is_frozen(self) -> bool:
+        return self._clock is not None
+
     def now_taipei(self) -> datetime:
         if self._clock is not None:
             return self._clock().astimezone(TAIPEI_TZ)

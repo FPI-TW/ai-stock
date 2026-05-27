@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#ffffff" />
+  <title>ai-stock /test</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/test-assets/styles.css" />
+</head>
+<body>
+  <div id="app" data-mode="dev">
+    <header id="topbar">
+      <div class="topbar-brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="4 17 9 11 13 14 20 7"></polyline>
+            <polyline points="15 7 20 7 20 12"></polyline>
+          </svg>
+        </span>
+        <div class="brand-text">
+          <span class="brand-name">AI Stock</span>
+          <span class="brand-sub">測試平台</span>
+        </div>
+      </div>
+
+      <div class="mode-toggle" role="tablist" aria-label="檢視模式">
+        <button type="button" data-mode="dev" class="active" role="tab" aria-selected="true">開發者</button>
+        <button type="button" data-mode="user" role="tab" aria-selected="false">使用者</button>
+        <button type="button" data-mode="service" role="tab" aria-selected="false">服務端</button>
+      </div>
+
+      <div class="topbar-status">
+        <span class="status-pill" id="server-status-pill" title="後端服務狀態">
+          <span class="status-dot" id="server-status-dot" data-status="unknown"></span>
+          <span class="status-label" id="server-status-label">檢查中…</span>
+        </span>
+        <span class="status-pill topbar-dev-only" id="clock-pill" title="目前系統時鐘">
+          <span class="status-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9"></circle>
+              <polyline points="12 7 12 12 15.5 14"></polyline>
+            </svg>
+          </span>
+          <span id="clock-display">系統時間</span>
+        </span>
+      </div>
+
+      <div class="topbar-spacer"></div>
+
+      <div class="topbar-identity-shell topbar-dev-only" id="dev-user-switcher">
+        <button type="button" id="dev-user-trigger" class="topbar-identity identity-trigger" aria-haspopup="listbox" aria-expanded="false" title="送出時帶 X-Local-User-Id header（僅限 LOCAL_MODE）">
+          <span class="identity-avatar" id="dev-user-avatar" aria-hidden="true">D</span>
+          <span class="identity-trigger-text">
+            <span class="identity-label">使用者</span>
+            <strong id="dev-user-label">預設使用者</strong>
+          </span>
+          <svg class="identity-chevron" viewBox="0 0 12 12" aria-hidden="true">
+            <polyline points="3 5 6 8 9 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="identity-menu" id="dev-user-menu" role="listbox" aria-label="切換使用者" hidden></div>
+      </div>
+      <div class="topbar-identity-shell topbar-user-only" id="user-mode-switcher">
+        <button type="button" id="user-mode-trigger" class="topbar-identity identity-trigger" aria-haspopup="listbox" aria-expanded="false" title="切換身份">
+          <span class="identity-avatar" id="user-mode-avatar" aria-hidden="true">?</span>
+          <span class="identity-trigger-text">
+            <span class="identity-label">您好</span>
+            <strong id="user-greeting">—</strong>
+          </span>
+          <svg class="identity-chevron" viewBox="0 0 12 12" aria-hidden="true">
+            <polyline points="3 5 6 8 9 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="identity-menu" id="user-mode-menu" role="listbox" aria-label="切換使用者" hidden></div>
+      </div>
+
+      <div class="topbar-actions">
+        <a href="/test/flows" target="_blank" rel="noopener noreferrer" class="icon-btn flows-link" title="開啟流程圖（新分頁）" aria-label="流程圖">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <rect x="2" y="3" width="5" height="3.5" rx="0.6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+            <rect x="9" y="3" width="5" height="3.5" rx="0.6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+            <rect x="5.5" y="9.5" width="5" height="3.5" rx="0.6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+            <path d="M4.5 6.5 L4.5 8 L11.5 8 L11.5 6.5 M8 8 L8 9.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </a>
+        <button id="refresh-state-btn" class="icon-btn topbar-dev-only" title="重新整理 server 狀態" aria-label="重新整理狀態">↻</button>
+        <button id="reset-all-btn" class="icon-btn danger topbar-dev-only" title="重設時鐘並清空歷史" aria-label="全部重設">⟲</button>
+        <button id="user-refresh-btn" class="icon-btn topbar-user-only" title="重新整理 dashboard" aria-label="重新整理">↻</button>
+        <button id="svc-refresh-btn" class="icon-btn topbar-service-only" title="重新整理服務狀態" aria-label="重新整理">↻</button>
+      </div>
+    </header>
+
+    <main id="main">
+      <aside id="endpoint-pane">
+        <div class="endpoint-filter-shell">
+          <input id="endpoint-filter" type="text" placeholder="搜尋 endpoint（按 / 聚焦）" autocomplete="off" />
+          <button type="button" id="endpoint-filter-clear" class="filter-clear-btn" hidden aria-label="清除搜尋">×</button>
+        </div>
+        <div id="endpoint-method-chips" class="endpoint-method-chips" role="tablist" aria-label="HTTP method 過濾">
+          <button type="button" data-method="ALL" class="active" role="tab">全部</button>
+          <button type="button" data-method="GET" role="tab">GET</button>
+          <button type="button" data-method="POST" role="tab">POST</button>
+          <button type="button" data-method="PUT" role="tab">PUT</button>
+        </div>
+        <div class="endpoint-filter-meta">
+          <span class="endpoint-filter-count" id="endpoint-count">—</span>
+          <button type="button" id="endpoint-only-available" class="filter-toggle-btn" aria-pressed="false">僅可用</button>
+        </div>
+        <div id="endpoint-list"></div>
+      </aside>
+
+      <div id="right-pane">
+       <div id="work-area">
+      <section id="request-pane">
+        <div class="card">
+          <div class="pane-title">
+            <span id="req-method" class="method method-placeholder">—</span>
+            <span id="req-path" class="path path-placeholder">select an endpoint</span>
+          </div>
+          <div class="pane-body">
+            <div id="endpoint-description" class="endpoint-description" hidden></div>
+
+            <div id="path-params-section" hidden>
+              <label class="form-section-label">Path params</label>
+              <div id="path-params-fields"></div>
+            </div>
+
+            <div id="query-params-section" hidden>
+              <label class="form-section-label">Query params <span class="hint">(空白即不送)</span></label>
+              <div id="query-params-fields"></div>
+            </div>
+
+            <label class="form-section-label" for="req-headers">額外 Headers (JSON，可空)</label>
+            <input id="req-headers" type="text" placeholder='{"X-Request-Id":"my-id"}' />
+
+            <label class="form-section-label" for="req-body">Body (JSON, GET 會忽略)</label>
+            <textarea id="req-body" spellcheck="false"></textarea>
+
+            <div id="request-actions">
+              <button id="send-btn" disabled>Send</button>
+              <div class="popover-shell" id="example-shell">
+                <button type="button" id="example-trigger" class="example-trigger" aria-haspopup="listbox" aria-expanded="false" hidden>
+                  <svg class="example-trigger-icon" viewBox="0 0 16 16" aria-hidden="true">
+                    <rect x="2.5" y="3" width="11" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                    <line x1="5" y1="6.5" x2="11" y2="6.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                    <line x1="5" y1="9.5" x2="9" y2="9.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                  </svg>
+                  <span>Fill example</span>
+                  <svg class="identity-chevron" viewBox="0 0 12 12" aria-hidden="true">
+                    <polyline points="3 5 6 8 9 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+                <div class="popover-menu example-menu" id="example-menu" role="listbox" aria-label="選擇範例" hidden></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="response-pane">
+        <div class="card">
+          <div class="pane-body">
+            <div id="response-error-banner" class="hidden"></div>
+            <div id="response-meta">
+              <span class="status" id="resp-status">—</span>
+              <span class="duration" id="resp-duration"></span>
+              <span class="req-id" id="resp-req-id"></span>
+              <span class="response-actions">
+                <button type="button" id="copy-curl-btn" class="response-action-btn" title="複製為 cURL" disabled>cURL</button>
+                <button type="button" id="copy-body-btn" class="response-action-btn" title="複製 response body" disabled>Copy</button>
+              </span>
+            </div>
+            <pre id="response-body">(no request sent yet)</pre>
+            <div class="history-title">History (last 5)</div>
+            <ul id="history-list"></ul>
+          </div>
+        </div>
+      </section>
+       </div>
+       <footer id="demo-pane">
+         <h2>Demo flows</h2>
+         <div id="demo-buttons">
+           <button data-demo="buy_price_alert">E2E · buy_price_alert 觸發</button>
+           <button data-demo="limit_buy_order">E2E · limit_buy_order 觸發</button>
+           <button data-demo="multi_user">Multi-user owner-scoping</button>
+         </div>
+         <pre id="demo-log">(no demo run yet)</pre>
+       </footer>
+      </div>
+    </main>
+
+    <!-- 使用者視角 — 切換 mode 後顯示 -->
+    <section id="user-view" aria-label="使用者視角 dashboard">
+      <div class="uv-container">
+        <header class="uv-header">
+          <h2>我的委託</h2>
+          <button type="button" id="uv-create-btn" class="uv-primary-btn">+ 新增委託</button>
+        </header>
+
+        <div class="uv-grid">
+          <section class="uv-section uv-section-main">
+            <header class="uv-section-title">
+              <span>我的委託</span>
+              <span class="uv-section-count" id="uv-intent-count">—</span>
+            </header>
+            <div class="uv-filter" id="uv-intent-filter" role="tablist" aria-label="委託狀態過濾">
+              <button type="button" data-filter="all" class="active" role="tab">全部</button>
+              <button type="button" data-filter="active" role="tab">進行中</button>
+              <button type="button" data-filter="triggered" role="tab">已觸發</button>
+              <button type="button" data-filter="cancelled" role="tab">已取消</button>
+            </div>
+            <div class="uv-list" id="uv-intent-list">
+              <div class="uv-loading">載入中…</div>
+            </div>
+          </section>
+
+          <aside class="uv-section uv-section-aside">
+            <header class="uv-section-title">
+              <span>最近通知</span>
+              <span class="uv-section-count" id="uv-notif-count">—</span>
+            </header>
+            <div class="uv-list" id="uv-notif-list">
+              <div class="uv-loading">載入中…</div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <!-- 服務端控制台 — 切換 mode 後顯示 -->
+    <section id="service-view" aria-label="服務端控制台">
+      <div class="svc-container">
+        <header class="svc-header">
+          <h2>服務端控制台</h2>
+          <span class="svc-header-hint">推送行情、控制時鐘、檢視服務狀態</span>
+        </header>
+
+        <div class="svc-grid">
+          <!-- 推送行情 -->
+          <section class="svc-card">
+            <header class="svc-card-head">
+              <h3>推送行情</h3>
+              <span class="svc-card-hint">送一筆假報價進系統，立刻觸發符合條件的委託</span>
+            </header>
+            <div class="svc-card-body">
+              <div class="svc-field">
+                <label for="svc-quote-symbol">標的</label>
+                <div class="svc-symbol-shell">
+                  <input id="svc-quote-symbol" type="text" placeholder="代號或名稱（例：2330）" autocomplete="off" />
+                  <div id="svc-symbol-results" class="svc-symbol-results sheet-results hidden"></div>
+                </div>
+              </div>
+              <div class="svc-field-row">
+                <div class="svc-field">
+                  <label>類型</label>
+                  <div class="svc-side-chips" id="svc-side-chips" role="tablist" aria-label="行情類型">
+                    <button type="button" data-side="ask" class="active" role="tab">賣價 ask</button>
+                    <button type="button" data-side="bid" role="tab">買價 bid</button>
+                    <button type="button" data-side="last" role="tab">成交 last</button>
+                  </div>
+                  <div class="svc-side-hint" id="svc-side-hint"></div>
+                </div>
+              </div>
+              <div class="svc-field-row">
+                <div class="svc-field">
+                  <label for="svc-quote-price">價格</label>
+                  <input id="svc-quote-price" type="text" inputmode="decimal" placeholder="例：599.50" />
+                </div>
+                <button type="button" id="svc-push-btn" class="svc-primary-btn" disabled>推送</button>
+              </div>
+              <div id="svc-push-log" class="svc-log" hidden></div>
+            </div>
+          </section>
+
+          <!-- 時鐘控制 -->
+          <section class="svc-card">
+            <header class="svc-card-head">
+              <h3>時鐘控制</h3>
+              <span class="svc-card-hint">凍結 / 推進 / 重置系統時鐘，測試盤中盤外行為</span>
+            </header>
+            <div class="svc-card-body">
+              <div class="svc-clock-display" id="svc-clock-display">
+                <span class="svc-clock-status" id="svc-clock-status">未連線</span>
+                <span class="svc-clock-time" id="svc-clock-time">—</span>
+              </div>
+              <div class="svc-clock-row">
+                <input id="svc-clock-input" type="datetime-local" />
+                <button type="button" id="svc-freeze-btn" class="svc-secondary-btn">凍結</button>
+              </div>
+              <div class="svc-clock-quick">
+                <button type="button" data-advance="60" class="svc-chip-btn">+1 分</button>
+                <button type="button" data-advance="300" class="svc-chip-btn">+5 分</button>
+                <button type="button" data-advance="3600" class="svc-chip-btn">+1 時</button>
+                <button type="button" id="svc-clock-reset" class="svc-chip-btn">重置</button>
+              </div>
+              <div id="svc-clock-log" class="svc-log" hidden></div>
+            </div>
+          </section>
+
+          <!-- 手動觸發評估 -->
+          <section class="svc-card">
+            <header class="svc-card-head">
+              <h3>手動觸發評估</h3>
+              <span class="svc-card-hint">對既有快照重新跑一次委託評估</span>
+            </header>
+            <div class="svc-card-body">
+              <div class="svc-field-row">
+                <input id="svc-eval-symbol" type="text" placeholder="留空 = 全部，或填單一代號" autocomplete="off" />
+                <button type="button" id="svc-eval-btn" class="svc-secondary-btn">執行評估</button>
+              </div>
+              <div id="svc-eval-log" class="svc-log" hidden></div>
+            </div>
+          </section>
+
+          <!-- 服務狀態 -->
+          <section class="svc-card svc-card-wide">
+            <header class="svc-card-head">
+              <h3>服務狀態</h3>
+              <span class="svc-card-hint">環境、時鐘、行情來源、訂閱中的標的</span>
+            </header>
+            <div class="svc-card-body">
+              <div id="svc-state-grid" class="svc-state-grid">
+                <div class="svc-loading">載入中…</div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <!-- 新增委託 modal -->
+    <div id="sheet-overlay" hidden>
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+        <header class="sheet-header">
+          <button type="button" id="sheet-back" class="sheet-action" hidden>← 上一步</button>
+          <button type="button" id="sheet-cancel" class="sheet-action">取消</button>
+          <h3 id="sheet-title">新增委託</h3>
+          <button type="button" id="sheet-next" class="sheet-action primary">下一步</button>
+        </header>
+
+        <ol class="sheet-stepper" id="sheet-stepper" aria-label="步驟進度">
+          <li class="step-dot" data-step="1">
+            <span class="step-circle">1</span>
+            <span class="step-label">選擇標的</span>
+          </li>
+          <li class="step-bar" aria-hidden="true"></li>
+          <li class="step-dot" data-step="2">
+            <span class="step-circle">2</span>
+            <span class="step-label">設定條件</span>
+          </li>
+          <li class="step-bar" aria-hidden="true"></li>
+          <li class="step-dot" data-step="3">
+            <span class="step-circle">3</span>
+            <span class="step-label">確認送出</span>
+          </li>
+        </ol>
+
+        <!-- Step 1: 選 symbol -->
+        <div class="sheet-step" data-step="1">
+          <input type="text" id="symbol-search" class="sheet-input sheet-input-search" placeholder="搜尋代號或名稱（例：2330）" autocomplete="off" />
+          <div id="symbol-results" class="sheet-results"></div>
+          <div id="symbol-selected" class="sheet-selected" hidden></div>
+        </div>
+
+        <!-- Step 2: 設條件 -->
+        <div class="sheet-step" data-step="2" hidden>
+          <div class="form-group">
+            <label>策略</label>
+            <div class="strategy-grid">
+              <label class="strategy-option strategy-buy">
+                <input type="radio" name="strategy" value="buy_price_alert" />
+                <div class="strategy-card">
+                  <div class="strategy-icon" aria-hidden="true">
+                    <svg viewBox="0 0 16 16"><path d="M3 11l5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </div>
+                  <div>
+                    <div class="strategy-name">買進到價提醒</div>
+                    <div class="strategy-desc">ask ≤ 目標價時通知</div>
+                  </div>
+                </div>
+              </label>
+              <label class="strategy-option strategy-sell">
+                <input type="radio" name="strategy" value="sell_price_alert" />
+                <div class="strategy-card">
+                  <div class="strategy-icon" aria-hidden="true">
+                    <svg viewBox="0 0 16 16"><path d="M3 5l5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </div>
+                  <div>
+                    <div class="strategy-name">賣出到價提醒</div>
+                    <div class="strategy-desc">bid ≥ 目標價時通知</div>
+                  </div>
+                </div>
+              </label>
+              <label class="strategy-option strategy-buy">
+                <input type="radio" name="strategy" value="limit_buy_order" />
+                <div class="strategy-card">
+                  <div class="strategy-icon" aria-hidden="true">
+                    <svg viewBox="0 0 16 16"><path d="M3 11l5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </div>
+                  <div>
+                    <div class="strategy-name">限價買單</div>
+                    <div class="strategy-desc">ask ≤ 目標價時觸發</div>
+                  </div>
+                </div>
+              </label>
+              <label class="strategy-option strategy-sell">
+                <input type="radio" name="strategy" value="limit_sell_order" />
+                <div class="strategy-card">
+                  <div class="strategy-icon" aria-hidden="true">
+                    <svg viewBox="0 0 16 16"><path d="M3 5l5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </div>
+                  <div>
+                    <div class="strategy-name">限價賣單</div>
+                    <div class="strategy-desc">bid ≥ 目標價時觸發</div>
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="form-quantity">張數 <span class="hint">(1 張 = 1000 股)</span></label>
+              <input type="number" id="form-quantity" min="1" value="1" />
+            </div>
+            <div class="form-group">
+              <label for="form-target">目標價</label>
+              <input type="text" id="form-target" inputmode="decimal" placeholder="例：600.00" />
+            </div>
+          </div>
+
+          <div class="form-group" id="form-transaction-group" hidden>
+            <label>交易模式</label>
+            <div class="tx-mode-grid">
+              <label class="tx-mode-option">
+                <input type="radio" name="transactionMode" value="single_notification" checked />
+                <div class="tx-mode-card">
+                  <div class="tx-mode-head">
+                    <span class="tx-mode-title">單次通知</span>
+                    <span class="tx-mode-tag">建議</span>
+                  </div>
+                  <div class="tx-mode-desc">第一次觸發後就停止，只通知一次</div>
+                </div>
+              </label>
+              <label class="tx-mode-option">
+                <input type="radio" name="transactionMode" value="partial_fill_allowed" />
+                <div class="tx-mode-card">
+                  <div class="tx-mode-head">
+                    <span class="tx-mode-title">允許部分成交</span>
+                  </div>
+                  <div class="tx-mode-desc">每次觸發都通知，可分批湊滿張數</div>
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3: 確認 -->
+        <div class="sheet-step" data-step="3" hidden>
+          <div class="confirm-summary" id="confirm-summary"></div>
+          <div class="disclaimer">
+            <strong>僅通知、未下單、不保證成交</strong>
+            <p>本平台為通知型委託，觸發後請自行至券商 app 執行下單。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Generic detail modal (intent / notification) -->
+    <div id="detail-overlay" hidden>
+      <div class="sheet sheet-compact" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+        <header class="sheet-header">
+          <button type="button" class="sheet-action" data-close-detail>關閉</button>
+          <h3 id="detail-title">詳細</h3>
+          <span></span>
+        </header>
+        <div class="sheet-step detail-body" id="detail-body"></div>
+      </div>
+    </div>
+
+    <!-- Custom confirm dialog -->
+    <div id="confirm-overlay" hidden>
+      <div class="sheet sheet-compact confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
+        <div class="confirm-content">
+          <h3 id="confirm-title">確認</h3>
+          <p id="confirm-message"></p>
+        </div>
+        <div class="confirm-actions">
+          <button type="button" id="confirm-cancel" class="confirm-btn cancel">取消</button>
+          <button type="button" id="confirm-ok" class="confirm-btn destructive">確定</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast container -->
+    <div id="toast-container" aria-live="polite"></div>
+  </div>
+
+  <script type="module" src="/test-assets/app.js"></script>
+</body>
+</html>

@@ -56,3 +56,16 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+
+      # UI smoke tests — Playwright drives a real chromium against a real
+      # uvicorn subprocess + local PostgreSQL. One-time setup:
+      #   uv run playwright install chromium
+      # Skip an individual push that lacks the prereqs with:
+      #   SKIP=pytest-ui git push
+      - id: pytest-ui
+        name: pytest UI smoke (PostgreSQL + chromium)
+        entry: bash -c 'DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://ai_stock:ai_stock@localhost:5432/ai_stock}" uv run pytest -m ui -s'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

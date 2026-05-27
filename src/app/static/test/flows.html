@@ -1,0 +1,1642 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#ffffff" />
+  <title>AI Stock — 系統流程</title>
+  <link rel="icon" href="data:," />
+  <style>
+    :root {
+      --bg: #f5f5f7;
+      --bg-elevated: #ffffff;
+      --bg-grouped: #f7f7fa;
+      --text: #1d1d1f;
+      --text-2: rgba(60, 60, 67, 0.7);
+      --text-3: rgba(60, 60, 67, 0.45);
+      --separator: rgba(60, 60, 67, 0.14);
+
+      --accent: #007aff;
+      --accent-soft: rgba(0, 122, 255, 0.1);
+      --green: #34c759;
+      --green-soft: rgba(52, 199, 89, 0.14);
+      --purple: #af52de;
+      --purple-soft: rgba(175, 82, 222, 0.14);
+      --orange: #ff9500;
+      --orange-soft: rgba(255, 149, 0, 0.14);
+      --red: #ff3b30;
+      --red-soft: rgba(255, 59, 48, 0.12);
+
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Microsoft JhengHei", "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+      --radius-card: 18px;
+      --radius-pill: 999px;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+      --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
+      --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 80px; }
+    body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+
+    /* ─── Top bar ──────────────────────────────────── */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      height: 60px;
+      padding: 0 24px;
+      background: rgba(255, 255, 255, 0.72);
+      backdrop-filter: saturate(180%) blur(24px);
+      -webkit-backdrop-filter: saturate(180%) blur(24px);
+      border-bottom: 1px solid var(--separator);
+      transition: box-shadow 0.2s ease, background 0.2s ease;
+    }
+    .topbar.is-scrolled {
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.04);
+      background: rgba(255, 255, 255, 0.92);
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--text);
+      text-decoration: none;
+      transition: transform 0.12s ease;
+    }
+    .brand:active { transform: scale(0.96); }
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, rgba(0, 122, 255, 0.18), rgba(52, 199, 89, 0.18));
+      color: var(--accent);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    }
+    .brand-mark svg { width: 17px; height: 17px; }
+    .brand-stack {
+      display: flex;
+      flex-direction: column;
+      line-height: 1.15;
+      gap: 1px;
+    }
+    .brand-name { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; }
+    .brand-sub {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-3);
+    }
+
+    /* Breadcrumb: current chapter title fades in once user scrolls past hero. */
+    .topbar-crumb {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: 4px;
+      padding-left: 14px;
+      border-left: 1px solid var(--separator);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-2);
+      opacity: 0;
+      transform: translateY(-2px);
+      transition: opacity 0.22s ease, transform 0.22s ease;
+      pointer-events: none;
+      max-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .topbar.is-scrolled .topbar-crumb {
+      opacity: 1;
+      transform: translateY(0);
+      max-width: 320px;
+    }
+    .crumb-num {
+      width: 20px;
+      height: 20px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      background: var(--accent-soft);
+      color: var(--accent);
+      line-height: 1;                  /* body line-height: 1.5 會把 line box 撐到 16.5px 推偏 */
+      font-variant-numeric: tabular-nums;
+    }
+    @media (max-width: 700px) { .topbar-crumb { display: none; } }
+
+    .topbar-spacer { flex: 1; }
+
+    .topbar-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Square icon buttons */
+    .top-icon-btn {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      border: 0;
+      background: transparent;
+      color: var(--text-2);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+    }
+    .top-icon-btn:hover { background: var(--bg-grouped); color: var(--text); }
+    .top-icon-btn:active { transform: scale(0.93); }
+    .top-icon-btn svg { width: 16px; height: 16px; }
+
+    .top-icon-btn.is-active {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    /* Reset-zoom only when at least one diagram has been zoomed away from 1.0 */
+    .top-icon-btn[hidden] { display: none !important; }
+
+    .back-link {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--accent);
+      text-decoration: none;
+      padding: 7px 14px;
+      border-radius: var(--radius-pill);
+      background: rgba(0, 122, 255, 0.08);
+      transition: background 0.15s ease, transform 0.12s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: 4px;
+    }
+    .back-link:hover { background: rgba(0, 122, 255, 0.16); }
+    .back-link:active { transform: scale(0.97); }
+    @media (max-width: 480px) {
+      .back-link { padding: 7px 10px; font-size: 0; }
+      .back-link::before { content: "←"; font-size: 14px; }
+    }
+
+    /* ─── Hero ─────────────────────────────────────── */
+    .hero {
+      max-width: 1200px;
+      margin: 32px auto 20px;
+      padding: 36px 28px 28px;
+      background: linear-gradient(135deg,
+        rgba(0, 122, 255, 0.04) 0%,
+        rgba(52, 199, 89, 0.03) 50%,
+        rgba(175, 82, 222, 0.04) 100%);
+      border-radius: var(--radius-card);
+    }
+    .hero-eyebrow {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: var(--accent-soft);
+      padding: 4px 10px;
+      border-radius: var(--radius-pill);
+      margin-bottom: 12px;
+    }
+    .hero-title {
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.18;
+      margin: 0 0 10px;
+    }
+    .hero-subtitle {
+      font-size: 14.5px;
+      color: var(--text-2);
+      max-width: 640px;
+      line-height: 1.55;
+    }
+    .hero-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 5px 11px;
+      border-radius: var(--radius-pill);
+      background: var(--bg-elevated);
+      color: var(--text-2);
+      box-shadow: var(--shadow-sm);
+    }
+    .tag .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .tag.t-user .dot { background: var(--accent); }
+    .tag.t-service .dot { background: var(--green); }
+    .tag.t-backend .dot { background: var(--purple); }
+    .tag.t-state .dot { background: var(--orange); }
+
+    /* ─── Mobile TOC (horizontal chip strip) ───────── */
+    .mobile-toc {
+      display: none;
+      max-width: 1200px;
+      margin: 0 auto 16px;
+      padding: 0 28px;
+    }
+    .mobile-toc-scroll {
+      position: relative;
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 4px 2px;
+      scrollbar-width: none;
+    }
+    .mobile-toc-scroll::-webkit-scrollbar { display: none; }
+    .mobile-toc-scroll a {
+      position: relative;
+      z-index: 1;
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      border-radius: var(--radius-pill);
+      background: var(--bg-elevated);
+      box-shadow: var(--shadow-sm);
+      color: var(--text-2);
+      font-size: 12.5px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: color 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    .mobile-toc-scroll a.active {
+      color: #fff;
+      background: transparent;
+      box-shadow: none;
+    }
+    .mobile-toc-scroll a .num {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      background: var(--bg-grouped);
+      color: var(--text-3);
+      transition: background 0.22s cubic-bezier(0.32, 0.72, 0, 1),
+                  color 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    .mobile-toc-scroll a.active .num { background: rgba(255, 255, 255, 0.25); color: #fff; }
+
+    .mobile-toc-indicator {
+      position: absolute;
+      top: 4px;
+      left: 0;
+      height: calc(100% - 8px);
+      width: 0;
+      background: var(--accent);
+      border-radius: var(--radius-pill);
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+                  width 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+                  opacity 0.18s ease;
+      will-change: transform, width;
+    }
+
+    /* ─── Layout ───────────────────────────────────── */
+    .layout {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 28px 80px;
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 32px;
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; padding: 0 16px 60px; }
+      .toc { display: none; }
+      .mobile-toc { display: block; }
+      .hero { margin: 20px 16px 16px; padding: 24px 22px 22px; }
+      .hero-title { font-size: 24px; }
+    }
+
+    /* ─── Sticky TOC ───────────────────────────────── */
+    .toc {
+      position: sticky;
+      top: 84px;
+      background: var(--bg-elevated);
+      border-radius: var(--radius-card);
+      box-shadow: var(--shadow-sm);
+      padding: 14px 6px 14px 14px;
+    }
+    .toc-title {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-3);
+      margin: 0 8px 10px;
+    }
+    .toc-list { list-style: none; margin: 0; padding: 0; position: relative; }
+    .toc-list a {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 10px;
+      text-decoration: none;
+      color: var(--text-2);
+      font-size: 13px;
+      font-weight: 500;
+      border-radius: 9px;
+      transition: color 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    .toc-list a:hover { color: var(--text); }
+    .toc-list a.active { color: var(--accent); font-weight: 600; }
+    .toc-num {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      background: var(--bg-grouped);
+      color: var(--text-3);
+      flex-shrink: 0;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+      transition: background 0.22s cubic-bezier(0.32, 0.72, 0, 1),
+                  color 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    .toc-list a.active .toc-num { background: var(--accent); color: #fff; }
+
+    /* Sliding pill behind active TOC item — same iOS-feel curve as segmented controls. */
+    .toc-indicator {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 0;
+      background: var(--accent-soft);
+      border-radius: 9px;
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+                  height 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+                  opacity 0.18s ease;
+      will-change: transform, height;
+    }
+
+    /* ─── Cards ────────────────────────────────────── */
+    .content {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      min-width: 0; /* 防止 grid item 被大尺寸 SVG 子節點撐爆 */
+    }
+
+    .flow-card {
+      background: var(--bg-elevated);
+      border-radius: var(--radius-card);
+      box-shadow: var(--shadow-md);
+      overflow: hidden;
+      animation: card-in 0.5s cubic-bezier(0.32, 0.72, 0, 1) both;
+    }
+    .flow-card:nth-of-type(1) { animation-delay: 0ms; }
+    .flow-card:nth-of-type(2) { animation-delay: 80ms; }
+    .flow-card:nth-of-type(3) { animation-delay: 160ms; }
+    .flow-card:nth-of-type(4) { animation-delay: 240ms; }
+    .flow-card:nth-of-type(5) { animation-delay: 320ms; }
+    @keyframes card-in {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .flow-card, .checklist-card { animation: none !important; }
+    }
+
+    .flow-head {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 20px 24px;
+      background: linear-gradient(to bottom, var(--bg-elevated), var(--bg-grouped));
+      border-bottom: 1px solid var(--separator);
+    }
+    .flow-num {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 19px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      letter-spacing: -0.02em;
+      flex-shrink: 0;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+    .flow-card.c-user .flow-num { background: var(--accent-soft); color: var(--accent); }
+    .flow-card.c-service .flow-num { background: var(--green-soft); color: #1f8a3f; }
+    .flow-card.c-backend .flow-num { background: var(--purple-soft); color: #7a2ea0; }
+    .flow-card.c-state .flow-num { background: var(--orange-soft); color: #b26200; }
+
+    .flow-head-text { flex: 1; min-width: 0; }
+    .flow-head h2 {
+      margin: 0 0 2px;
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .flow-head p {
+      margin: 0;
+      font-size: 12.5px;
+      color: var(--text-2);
+    }
+    .flow-pill {
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border-radius: var(--radius-pill);
+      flex-shrink: 0;
+    }
+    .flow-card.c-user .flow-pill { background: var(--accent-soft); color: var(--accent); }
+    .flow-card.c-service .flow-pill { background: var(--green-soft); color: #1f8a3f; }
+    .flow-card.c-backend .flow-pill { background: var(--purple-soft); color: #7a2ea0; }
+    .flow-card.c-state .flow-pill { background: var(--orange-soft); color: #b26200; }
+
+    .flow-zoom, .flow-download {
+      background: var(--bg-grouped);
+      border: 0;
+      border-radius: 50%;
+      width: 32px;
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--text-2);
+      flex-shrink: 0;
+      transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease;
+    }
+    .flow-zoom:hover, .flow-download:hover { background: var(--accent-soft); color: var(--accent); }
+    .flow-zoom:active, .flow-download:active { transform: scale(0.92); }
+    .flow-zoom svg, .flow-download svg { width: 16px; height: 16px; }
+
+    .flow-body {
+      padding: 24px;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+    .flow-body.is-pannable { cursor: grab; }
+    .flow-body.is-pannable.dragging { cursor: grabbing; user-select: none; }
+    .flow-body.dragging * { pointer-events: none; }
+    .flow-body .mermaid {
+      display: inline-block;
+      min-width: 100%;
+      text-align: center;
+      font-family: var(--font);
+    }
+    .flow-body .mermaid svg {
+      display: inline-block;
+      max-width: none;
+      height: auto;
+    }
+    /* iOS-feel scrollbar inside flow-body */
+    .flow-body { scrollbar-width: thin; scrollbar-color: rgba(60, 60, 67, 0.3) transparent; }
+    .flow-body::-webkit-scrollbar { height: 8px; }
+    .flow-body::-webkit-scrollbar-track { background: transparent; }
+    .flow-body::-webkit-scrollbar-thumb {
+      background: rgba(60, 60, 67, 0.25);
+      border-radius: 4px;
+    }
+
+    /* hint that the diagram can scroll horizontally */
+    .scroll-hint {
+      display: none;
+      padding: 0 24px 14px;
+      font-size: 11px;
+      color: var(--text-3);
+      gap: 4px;
+      align-items: center;
+    }
+    .scroll-hint.is-scrollable { display: inline-flex; }
+    .scroll-hint::before {
+      content: "↔";
+      font-size: 14px;
+      color: var(--accent);
+    }
+
+    /* ─── Checklist ────────────────────────────────── */
+    .checklist-card {
+      background: var(--bg-elevated);
+      border-radius: var(--radius-card);
+      box-shadow: var(--shadow-md);
+      overflow: hidden;
+      animation: card-in 0.5s cubic-bezier(0.32, 0.72, 0, 1) 400ms both;
+    }
+    .checklist-card .flow-head .flow-num {
+      background: var(--red-soft); color: #b21b14;
+    }
+    .checklist-card .flow-pill {
+      background: var(--red-soft); color: #b21b14;
+    }
+    .checklist {
+      list-style: none;
+      margin: 0;
+      padding: 8px 0;
+    }
+    .checklist li {
+      display: grid;
+      grid-template-columns: 24px 1fr;
+      gap: 14px;
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--separator);
+      align-items: start;
+    }
+    .checklist li:last-child { border-bottom: 0; }
+    .checklist-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .checklist-icon svg { width: 14px; height: 14px; }
+    .checklist-icon.warn { background: var(--orange); }
+    .checklist-icon.info { background: var(--accent); }
+    .checklist-icon.tip { background: var(--green); }
+    .checklist-body {
+      font-size: 13.5px;
+      line-height: 1.55;
+      color: var(--text-2);
+    }
+    .checklist-body strong {
+      display: block;
+      color: var(--text);
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .checklist-body code {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      background: var(--bg-grouped);
+      padding: 1px 6px;
+      border-radius: 4px;
+      color: var(--text);
+    }
+
+    /* ─── Zoom modal ───────────────────────────────── */
+    .zoom-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      background: rgba(0, 0, 0, 0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px;
+      animation: overlay-in 0.18s ease;
+    }
+    .zoom-overlay[hidden] { display: none !important; }
+    @keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+    .zoom-dialog {
+      background: var(--bg-elevated);
+      border-radius: var(--radius-card);
+      box-shadow: var(--shadow-lg);
+      max-width: 95vw;
+      max-height: 92vh;
+      width: 1100px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: zoom-in 0.24s cubic-bezier(0.32, 0.72, 0, 1) both;
+    }
+    @keyframes zoom-in {
+      from { opacity: 0; transform: scale(0.95) translateY(6px); }
+      to   { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .zoom-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--separator);
+    }
+    .zoom-head h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+      flex: 1;
+    }
+    .zoom-close {
+      background: transparent;
+      border: 0;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      cursor: pointer;
+      color: var(--text-2);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s ease;
+    }
+    .zoom-close:hover { background: var(--bg-grouped); color: var(--text); }
+    .zoom-close svg { width: 16px; height: 16px; }
+    .zoom-body {
+      flex: 1;
+      overflow: auto;
+      padding: 24px;
+      background: var(--bg-grouped);
+      cursor: grab;
+    }
+    .zoom-body.dragging { cursor: grabbing; user-select: none; }
+    .zoom-body.dragging * { pointer-events: none; }
+    .zoom-body svg { display: block; margin: 0 auto; max-width: none; height: auto; }
+    .zoom-hint {
+      padding: 10px 18px;
+      font-size: 11px;
+      color: var(--text-3);
+      border-top: 1px solid var(--separator);
+      text-align: center;
+      letter-spacing: 0.02em;
+    }
+
+    /* ─── CDN error banner ─────────────────────────── */
+    .cdn-error {
+      max-width: 1200px;
+      margin: 16px auto;
+      padding: 14px 22px;
+      background: var(--red-soft);
+      border-radius: var(--radius-card);
+      color: #b21b14;
+      font-size: 13px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .cdn-error[hidden] { display: none !important; }
+
+    /* ─── Footer ───────────────────────────────────── */
+    .footer {
+      max-width: 1200px;
+      margin: 40px auto 0;
+      padding: 24px 28px;
+      text-align: center;
+      color: var(--text-3);
+      font-size: 11.5px;
+      letter-spacing: 0.02em;
+    }
+
+    /* Mermaid 自己量測 + 渲染就好；強制 !important 換字型/字級會造成
+       測量寬度與實際寬度差 ~28%，foreignObject 框就會切掉中文。只動 line-height
+       讓行距好看，字型走 themeVariables.fontFamily 設定。 */
+    .mermaid .nodeLabel,
+    .mermaid .edgeLabel,
+    .mermaid foreignObject div {
+      line-height: 1.4;
+    }
+
+    @media print {
+      /* A4 橫向：寬圖（LR）有空間；TD 圖也比直向更寬，更貼近螢幕觀感。 */
+      @page { size: A4 landscape; margin: 12mm; }
+
+      html, body { background: #fff; }
+      .topbar, .toc, .mobile-toc, .footer, .cdn-error, .zoom-overlay { display: none !important; }
+      .layout {
+        grid-template-columns: 1fr;
+        padding: 0;
+        max-width: none;
+        gap: 12mm;
+      }
+      .hero {
+        background: none;
+        padding: 0 0 8mm 0;
+        margin: 0;
+        max-width: none;
+        border-radius: 0;
+      }
+      .hero-tags { display: none; }
+      .hero-title { font-size: 22px; }
+      .hero-subtitle { font-size: 12px; }
+
+      .flow-card, .checklist-card {
+        box-shadow: none;
+        border: 1px solid var(--separator);
+        page-break-inside: avoid;
+        break-inside: avoid;
+        opacity: 1 !important;
+        transform: none !important;
+        animation: none !important;
+        border-radius: 8px;
+      }
+      /* 每張圖獨佔一頁（除了第一張接 hero 後面） */
+      .flow-card:not(:first-of-type),
+      .checklist-card {
+        page-break-before: always;
+        break-before: page;
+      }
+
+      .flow-head { padding: 10px 14px; background: none; }
+      .flow-head h2 { font-size: 14px; }
+      .flow-head p { font-size: 11px; }
+      .flow-num { width: 32px; height: 32px; font-size: 14px; border-radius: 8px; }
+      .flow-pill { font-size: 9px; padding: 3px 7px; }
+      .flow-zoom, .flow-download { display: none !important; }
+      .scroll-hint { display: none !important; }
+
+      .flow-body {
+        padding: 12px;
+        overflow: visible !important;
+        text-align: center;
+      }
+      .flow-body .mermaid {
+        display: block !important;
+        min-width: 0 !important;
+        width: 100% !important;
+      }
+      /* 強制 SVG 等比縮放到頁面寬度；naturalize 設定的 inline width/height
+         會被 !important 蓋過。max-height 確保超高 TD 圖也能塞進一頁。 */
+      .flow-body .mermaid svg,
+      .zoom-body svg {
+        width: 100% !important;
+        height: auto !important;
+        max-width: 100% !important;
+        max-height: 170mm !important;
+        display: block !important;
+        margin: 0 auto !important;
+      }
+    }
+  </style>
+  <script
+    src="https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.min.js"
+    integrity="sha384-yQ4mmBBT+vhTAwjFH0toJXNYJ6O4usWnt6EPIdWwrRvx2V/n5lXuDZQwQFeSFydF"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  ></script>
+</head>
+<body>
+
+  <header class="topbar" id="topbar">
+    <a class="brand" href="/test" title="回到 /test 主畫面">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="4 17 9 11 13 14 20 7"></polyline>
+          <polyline points="15 7 20 7 20 12"></polyline>
+        </svg>
+      </span>
+      <span class="brand-stack">
+        <span class="brand-name">AI Stock</span>
+        <span class="brand-sub">系統流程</span>
+      </span>
+    </a>
+
+    <span class="topbar-crumb" id="topbar-crumb" aria-live="polite">
+      <span class="crumb-num" id="crumb-num">1</span>
+      <span id="crumb-label">使用者端流程</span>
+    </span>
+
+    <span class="topbar-spacer"></span>
+
+    <div class="topbar-actions">
+      <button id="reset-zoom-btn" class="top-icon-btn" type="button" title="重置縮放（所有圖回 100%）" aria-label="重置縮放" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="3 7 3 3 7 3"/><polyline points="21 7 21 3 17 3"/><polyline points="21 17 21 21 17 21"/><polyline points="3 17 3 21 7 21"/>
+          <line x1="9" y1="12" x2="15" y2="12"/>
+        </svg>
+      </button>
+      <a class="back-link" href="/test">← 回 /test</a>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="hero">
+    <span class="hero-eyebrow">系統流程</span>
+    <h1 class="hero-title">使用者端 × 服務端 × 後端觸發鏈</h1>
+    <p class="hero-subtitle">完整描繪 V0.5 系統行為。對照流程檢查 demo 步驟、bug 排查與狀態遷移。</p>
+    <div class="hero-tags">
+      <span class="tag t-user"><span class="dot"></span>使用者端</span>
+      <span class="tag t-service"><span class="dot"></span>服務端</span>
+      <span class="tag t-backend"><span class="dot"></span>後端觸發鏈</span>
+      <span class="tag t-state"><span class="dot"></span>狀態機</span>
+    </div>
+  </section>
+
+  <!-- CDN load failure banner (hidden unless mermaid script onerror fires) -->
+  <div id="cdn-error" class="cdn-error" hidden>
+    ⚠️ Mermaid CDN 載入失敗（離線環境 / 網路阻擋）。流程圖無法渲染，請確認網路或在 LOCAL_MODE 內網提供 mermaid.min.js。
+  </div>
+
+  <!-- Mobile horizontal TOC chips -->
+  <nav class="mobile-toc" aria-label="章節導覽（行動裝置）">
+    <div class="mobile-toc-scroll">
+      <span class="mobile-toc-indicator" aria-hidden="true"></span>
+      <a href="#flow-1" data-section="flow-1"><span class="num">1</span>使用者端</a>
+      <a href="#flow-2" data-section="flow-2"><span class="num">2</span>服務端</a>
+      <a href="#flow-3a" data-section="flow-3a"><span class="num">3</span>觸發鏈・推送</a>
+      <a href="#flow-3b" data-section="flow-3b"><span class="num">4</span>觸發鏈・建單</a>
+      <a href="#flow-4" data-section="flow-4"><span class="num">5</span>狀態機</a>
+      <a href="#gotchas" data-section="gotchas"><span class="num">!</span>注意事項</a>
+    </div>
+  </nav>
+
+  <div class="layout">
+
+    <aside class="toc">
+      <div class="toc-title">章節</div>
+      <ul class="toc-list">
+        <span class="toc-indicator" aria-hidden="true"></span>
+        <li><a href="#flow-1" data-section="flow-1"><span class="toc-num">1</span>使用者端</a></li>
+        <li><a href="#flow-2" data-section="flow-2"><span class="toc-num">2</span>服務端</a></li>
+        <li><a href="#flow-3a" data-section="flow-3a"><span class="toc-num">3</span>觸發鏈・推送</a></li>
+        <li><a href="#flow-3b" data-section="flow-3b"><span class="toc-num">4</span>觸發鏈・建單</a></li>
+        <li><a href="#flow-4" data-section="flow-4"><span class="toc-num">5</span>狀態機</a></li>
+        <li><a href="#gotchas" data-section="gotchas"><span class="toc-num">!</span>注意事項</a></li>
+      </ul>
+    </aside>
+
+    <main class="content">
+
+      <article id="flow-1" class="flow-card c-user">
+        <header class="flow-head">
+          <span class="flow-num">1</span>
+          <div class="flow-head-text">
+            <h2>使用者端流程</h2>
+            <p>登入身分 → 建立 / 檢視 / 取消委託 → 通知互動</p>
+          </div>
+          <span class="flow-pill">User</span>
+          <button class="flow-download" type="button" aria-label="下載 SVG" title="下載 SVG">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><polyline points="7 11 12 16 17 11"/><path d="M5 20h14"/></svg>
+          </button>
+          <button class="flow-zoom" type="button" aria-label="放大檢視" data-zoom-title="使用者端流程">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+          </button>
+        </header>
+        <div class="flow-body">
+          <pre class="mermaid">
+flowchart TD
+    Start([進入 /test，預設 dev 模式])
+    Start --> SwitchUser[點 mode toggle → 使用者]
+    SwitchUser --> Login[點右上 identity pill]
+    Login --> Popover{選身份}
+    Popover -- 預設使用者 --> Dashboard
+    Popover -- Alice/Bob/Charlie --> SetID[setSelectedUser<br/>重整 dashboard]
+    SetID --> Dashboard[Dashboard：我的委託 + 通知]
+
+    Dashboard --> Action{要做什麼}
+    Action -- 新增委託 --> Sheet[+ 新增委託 modal]
+    Action -- 點委託卡 --> IntentDetail[detail 視窗<br/>可取消]
+    Action -- 點通知卡 --> NotifDetail[detail 視窗<br/>標已讀]
+    Action -- 過濾 --> Filter[chips：全部/進行中/已觸發/已取消]
+
+    Sheet --> Step1[Step 1 · 選標的<br/>搜尋 /symbols]
+    Step1 --> Step2[Step 2 · 設條件<br/>策略 + 張數 + 目標價<br/>限價單顯示交易模式]
+    Step2 --> Step3[Step 3 · 確認]
+    Step3 --> Submit[POST /trade-intents]
+
+    Submit --> SessionCheck{建立當下盤中?}
+    SessionCheck -- 是 09:00-13:30 平日 --> Active[status=active<br/>inline trigger 同步檢查]
+    SessionCheck -- 否 盤外/週末 --> Scheduled[status=scheduled<br/>⚠️ V0.5 無法自動升 active]
+    Active --> Done([Toast：委託已建立])
+    Scheduled --> Done
+
+    IntentDetail -- 取消 --> CancelAPI[POST /trade-intents/id/cancel]
+    NotifDetail -- 標已讀 --> ReadAPI[POST /notifications/id/read]
+
+    classDef warn fill:#fff4e6,stroke:#ff9500,color:#b26200,stroke-width:1.5px;
+    classDef success fill:#e8f8ec,stroke:#34c759,color:#1f8a3f,stroke-width:1.5px;
+    class Scheduled warn;
+    class Active,Done success;
+          </pre>
+        </div>
+        <div class="scroll-hint">橫向捲動 / 拖曳 · Ctrl+滾輪縮放 · 點右上 ⤢ 全螢幕</div>
+      </article>
+
+      <article id="flow-2" class="flow-card c-service">
+        <header class="flow-head">
+          <span class="flow-num">2</span>
+          <div class="flow-head-text">
+            <h2>服務端流程</h2>
+            <p>推送行情 / 時鐘控制 / 手動評估 / 即時狀態，含 0 觸發的智慧診斷</p>
+          </div>
+          <span class="flow-pill">Service</span>
+          <button class="flow-download" type="button" aria-label="下載 SVG" title="下載 SVG">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><polyline points="7 11 12 16 17 11"/><path d="M5 20h14"/></svg>
+          </button>
+          <button class="flow-zoom" type="button" aria-label="放大檢視" data-zoom-title="服務端流程">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+          </button>
+        </header>
+        <div class="flow-body">
+          <pre class="mermaid">
+flowchart TD
+    Start([進入服務端模式])
+    Start --> Auto[自動 GET /dev/server-state<br/>每 5 秒輪詢]
+    Auto --> Cards{4 張卡同時運作}
+
+    Cards -- 推送行情 --> PushCard[輸入 symbol 搜尋<br/>選側別 ask/bid/last<br/>輸入價格 → 推送]
+    Cards -- 時鐘控制 --> ClockCard[凍結特定時間<br/>推進秒數 / 重置]
+    Cards -- 手動評估 --> EvalCard[可選 symbol → 評估<br/>⚠️ in-memory demo 通常冗餘]
+    Cards -- 服務狀態 --> StateCard[即時顯示<br/>環境/時鐘/盤中/訂閱]
+
+    PushCard --> PreCheck[先 GET server-state<br/>看 withinRegularSession]
+    PreCheck --> PushAPI[POST /dev/push-quote]
+    PushAPI --> Aggregate[並行 GET /notifications<br/>跨 4 個用戶身分聚合]
+    Aggregate --> Result{觸發筆數 &gt; 0?}
+    Result -- 是 --> ShowTrigger[log：觸發 N 筆<br/>+ 各 owner 細節]
+    Result -- 否 + 盤中 --> Diagnose[掃跨 user active 委託<br/>side 對不上 → 建議改側別<br/>side 對但價未到 → 列條件]
+    Result -- 否 + 盤外 --> WarnOff[⚠️ 盤外無法觸發<br/>+ 3 步驟 demo 指引]
+
+    ClockCard --> ClockAPI[POST /dev/set-clock<br/>fakeNow / advanceSeconds / 空]
+    ClockAPI --> StateRefresh[refreshServerState 更新顯示]
+
+    EvalCard --> EvalAPI[POST /dev/evaluate-quotes]
+
+    classDef warn fill:#fff4e6,stroke:#ff9500,color:#b26200,stroke-width:1.5px;
+    classDef success fill:#e8f8ec,stroke:#34c759,color:#1f8a3f,stroke-width:1.5px;
+    class EvalCard,WarnOff warn;
+    class ShowTrigger success;
+          </pre>
+        </div>
+        <div class="scroll-hint">橫向捲動 / 拖曳 · Ctrl+滾輪縮放 · 點右上 ⤢ 全螢幕</div>
+      </article>
+
+      <article id="flow-3a" class="flow-card c-backend">
+        <header class="flow-head">
+          <span class="flow-num">3</span>
+          <div class="flow-head-text">
+            <h2>後端觸發鏈 · 推送行情路徑</h2>
+            <p>POST /dev/push-quote → dispatcher 同步走 listeners → 落到 TriggerIntentCommand</p>
+          </div>
+          <span class="flow-pill">Backend / Push</span>
+          <button class="flow-download" type="button" aria-label="下載 SVG" title="下載 SVG">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><polyline points="7 11 12 16 17 11"/><path d="M5 20h14"/></svg>
+          </button>
+          <button class="flow-zoom" type="button" aria-label="放大檢視" data-zoom-title="後端觸發鏈 · 推送路徑">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+          </button>
+        </header>
+        <div class="flow-body">
+          <pre class="mermaid">
+flowchart LR
+    Push[POST /dev/push-quote] --> Provider[InMemoryQuoteProvider<br/>儲存 snapshot]
+    Provider --> Listeners[同步 fire listeners]
+    Listeners --> Dispatcher[QuoteEvaluationDispatcher<br/>.dispatch]
+    Dispatcher --> Query[查所有 owner 的<br/>active 委託 by symbol]
+    Query --> ForEach{每個 active intent}
+    ForEach --> Eval[evaluator.evaluate<br/>策略 + side 條件]
+    Eval -- false --> Skip[略過]
+    Eval -- true --> TriggerCmd[TriggerIntentCommand<br/>WHERE status=active]
+    TriggerCmd --> WriteThree[寫 3 列：<br/>intent.status=triggered<br/>trigger_records<br/>notifications]
+
+    classDef io fill:#f3e8fb,stroke:#af52de,color:#7a2ea0,stroke-width:1.5px;
+    classDef store fill:#e6f0ff,stroke:#007aff,color:#0064d2,stroke-width:1.5px;
+    class Push io;
+    class WriteThree store;
+          </pre>
+        </div>
+        <div class="scroll-hint">橫向捲動 / 拖曳 · Ctrl+滾輪縮放 · 點右上 ⤢ 全螢幕</div>
+      </article>
+
+      <article id="flow-3b" class="flow-card c-backend">
+        <header class="flow-head">
+          <span class="flow-num">4</span>
+          <div class="flow-head-text">
+            <h2>後端觸發鏈 · 建單與評估路徑</h2>
+            <p>POST /trade-intents 與 POST /dev/evaluate-quotes 收斂到同一個 TriggerIntentCommand</p>
+          </div>
+          <span class="flow-pill">Backend / Create+Eval</span>
+          <button class="flow-download" type="button" aria-label="下載 SVG" title="下載 SVG">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><polyline points="7 11 12 16 17 11"/><path d="M5 20h14"/></svg>
+          </button>
+          <button class="flow-zoom" type="button" aria-label="放大檢視" data-zoom-title="後端觸發鏈 · 建單與評估">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+          </button>
+        </header>
+        <div class="flow-body">
+          <pre class="mermaid">
+flowchart LR
+    CreateAPI[POST /trade-intents] --> InitialStatus{盤中?}
+    InitialStatus -- 是 --> ActiveInsert[INSERT status=active]
+    InitialStatus -- 否 --> ScheduledInsert[INSERT status=scheduled]
+    ActiveInsert --> InlineCheck[apply_inline_trigger<br/>_if_quote_met<br/>讀既存 snapshot]
+    InlineCheck --> TriggerCmd
+
+    EvaluateAPI[POST /dev/evaluate-quotes] --> SymbolsList[展開 symbols<br/>或全部 active]
+    SymbolsList --> SameDispatcher[同 Dispatcher 邏輯]
+    SameDispatcher --> TriggerCmd
+
+    TriggerCmd[TriggerIntentCommand<br/>WHERE status=active] --> WriteThree[寫 3 列：<br/>intent.status=triggered<br/>trigger_records<br/>notifications]
+
+    classDef io fill:#f3e8fb,stroke:#af52de,color:#7a2ea0,stroke-width:1.5px;
+    classDef store fill:#e6f0ff,stroke:#007aff,color:#0064d2,stroke-width:1.5px;
+    classDef warn fill:#fff4e6,stroke:#ff9500,color:#b26200,stroke-width:1.5px;
+    class CreateAPI,EvaluateAPI io;
+    class WriteThree store;
+    class ScheduledInsert warn;
+          </pre>
+        </div>
+        <div class="scroll-hint">橫向捲動 / 拖曳 · Ctrl+滾輪縮放 · 點右上 ⤢ 全螢幕</div>
+      </article>
+
+      <article id="flow-4" class="flow-card c-state">
+        <header class="flow-head">
+          <span class="flow-num">5</span>
+          <div class="flow-head-text">
+            <h2>Intent 狀態機</h2>
+            <p>scheduled / active / triggered / cancelled 之間的合法遷移，含 V0.5 缺口</p>
+          </div>
+          <span class="flow-pill">State</span>
+          <button class="flow-download" type="button" aria-label="下載 SVG" title="下載 SVG">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12"/><polyline points="7 11 12 16 17 11"/><path d="M5 20h14"/></svg>
+          </button>
+          <button class="flow-zoom" type="button" aria-label="放大檢視" data-zoom-title="Intent 狀態機">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+          </button>
+        </header>
+        <div class="flow-body">
+          <pre class="mermaid">
+stateDiagram-v2
+    [*] --> scheduled: 建單於盤外
+    [*] --> active: 建單於盤中
+    active --> active: 建單 inline trigger<br/>條件不滿足
+    active --> triggered: dispatcher 或 inline trigger<br/>條件滿足
+    active --> cancelled: 使用者取消
+    scheduled --> cancelled: 使用者取消
+    scheduled --> scheduled: ⚠️ V0.5 無自動升 active<br/>須重建
+    triggered --> [*]
+    cancelled --> [*]
+
+    note right of triggered
+      同 transaction 寫：
+      trigger_records + notification
+      owner-scoped 寫給 intent.owner
+    end note
+          </pre>
+        </div>
+        <div class="scroll-hint">橫向捲動 / 拖曳 · Ctrl+滾輪縮放 · 點右上 ⤢ 全螢幕</div>
+      </article>
+
+      <article id="gotchas" class="checklist-card">
+        <header class="flow-head">
+          <span class="flow-num">!</span>
+          <div class="flow-head-text">
+            <h2>注意事項 · 操作檢查清單</h2>
+            <p>追過的雷區與正確操作方式</p>
+          </div>
+          <span class="flow-pill">注意</span>
+        </header>
+        <ul class="checklist">
+          <li>
+            <span class="checklist-icon warn" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="8" x2="12" y2="13"/><circle cx="12" cy="17" r="1.2" fill="currentColor"/></svg>
+            </span>
+            <div class="checklist-body">
+              <strong>盤外建立 → scheduled 卡住</strong>
+              V0.5 沒有 next-day activation job。Demo 前先到服務端凍結時鐘到 09:30 再建單。
+            </div>
+          </li>
+          <li>
+            <span class="checklist-icon info" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12 10 17 19 7"/></svg>
+            </span>
+            <div class="checklist-body">
+              <strong>「推送 → 建單」也會觸發</strong>
+              建單流程有 inline trigger，會讀 provider 既存快照。雙向都不需手動評估。
+            </div>
+          </li>
+          <li>
+            <span class="checklist-icon info" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12 10 17 19 7"/></svg>
+            </span>
+            <div class="checklist-body">
+              <strong>推送回應沒有 triggered IDs</strong>
+              <code>/dev/push-quote</code> 是 fire-and-forget；前端跨 4 個 user 查 <code>/notifications</code> 聚合。
+            </div>
+          </li>
+          <li>
+            <span class="checklist-icon warn" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="8" x2="12" y2="13"/><circle cx="12" cy="17" r="1.2" fill="currentColor"/></svg>
+            </span>
+            <div class="checklist-body">
+              <strong>Side 必須對到策略</strong>
+              <code>buy=ask</code>、<code>sell=bid</code>。<code>last</code> 不驅動任何策略，僅供觀察。
+            </div>
+          </li>
+          <li>
+            <span class="checklist-icon tip" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            </span>
+            <div class="checklist-body">
+              <strong>0 觸發的智慧診斷</strong>
+              盤外提示 demo 流程；盤中 side 錯就建議改側別；side 對但價未到就列條件與 owner。
+            </div>
+          </li>
+          <li>
+            <span class="checklist-icon info" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12 10 17 19 7"/></svg>
+            </span>
+            <div class="checklist-body">
+              <strong>Owner 隔離</strong>
+              dispatcher 跑所有 user 的 active 委託，但 <code>/notifications</code>、<code>/trade-intents</code> 都 X-Local-User-Id 鎖在當前身分。
+            </div>
+          </li>
+          <li>
+            <span class="checklist-icon tip" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            </span>
+            <div class="checklist-body">
+              <strong>手動觸發評估幾乎冗餘</strong>
+              in-memory demo 用不到；保留是給真實 broker provider 或 debug 用的後門。
+            </div>
+          </li>
+        </ul>
+      </article>
+
+    </main>
+  </div>
+
+  <!-- Zoom modal — populated on demand -->
+  <div id="zoom-overlay" class="zoom-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="zoom-title">
+    <div class="zoom-dialog">
+      <header class="zoom-head">
+        <h3 id="zoom-title">放大檢視</h3>
+        <button class="zoom-close" type="button" aria-label="關閉" id="zoom-close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+        </button>
+      </header>
+      <div class="zoom-body" id="zoom-body"></div>
+      <div class="zoom-hint">滾輪放大縮小 · 拖曳平移 · Esc / 點外面關閉</div>
+    </div>
+  </div>
+
+  <footer class="footer">Last reviewed 2026-05-27 · V0.5 · 內容會隨後端異動更新</footer>
+
+  <script>
+    // Last-resort CDN check — onerror on script tag is unreliable across browsers.
+    setTimeout(() => {
+      if (typeof window.mermaid === "undefined") {
+        document.getElementById("cdn-error").hidden = false;
+      }
+    }, 2500);
+
+    // The script element may still be loading; guard real init until ready.
+    window.addEventListener("load", () => {
+      if (typeof window.mermaid === "undefined") return;
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "base",
+        themeVariables: {
+          background: "#ffffff",
+          primaryColor: "#f0f5ff",
+          primaryTextColor: "#1d1d1f",
+          primaryBorderColor: "#007aff",
+          lineColor: "rgba(60, 60, 67, 0.5)",
+          secondaryColor: "#f7f7fa",
+          tertiaryColor: "#fafafc",
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Microsoft JhengHei", "Helvetica Neue", Arial, sans-serif',
+          fontSize: "13px",
+        },
+        flowchart: { curve: "basis", htmlLabels: true, padding: 14, nodeSpacing: 38, rankSpacing: 46 },
+        stateDiagram: { padding: 12 },
+      });
+    });
+
+    // ─── Post-process Mermaid SVGs ──────────────────────────────
+    // Mermaid sets width="100%" + inline max-width on the SVG, so it shrinks
+    // to fit the container regardless of CSS. Strip those so the SVG renders
+    // at viewBox-natural size; the .flow-body container then scrolls
+    // horizontally when it overflows. Also detect overflow to toggle the
+    // scroll hint.
+    function naturalizeSvgs() {
+      document.querySelectorAll(".mermaid svg").forEach((svg) => {
+        const vb = svg.getAttribute("viewBox");
+        if (!vb) return;
+        const parts = vb.split(/\s+/);
+        const w = Math.round(parseFloat(parts[2]));
+        const h = Math.round(parseFloat(parts[3]));
+        if (!w || !h) return;
+        svg.setAttribute("width", w);
+        svg.setAttribute("height", h);
+        svg.style.removeProperty("max-width");
+        svg.style.width = w + "px";
+        svg.style.height = h + "px";
+        // Remember natural dimensions + initial scale for the wheel zoom logic.
+        svg.dataset.naturalW = w;
+        svg.dataset.naturalH = h;
+        svg.dataset.scale = "1";
+      });
+    }
+    function refreshScrollHints() {
+      document.querySelectorAll(".flow-card").forEach((card) => {
+        const body = card.querySelector(".flow-body");
+        const hint = card.querySelector(".scroll-hint");
+        if (!body || !hint) return;
+        const overflows = body.scrollWidth > body.clientWidth + 4;
+        hint.classList.toggle("is-scrollable", overflows);
+        body.classList.toggle("is-pannable", overflows);
+      });
+    }
+
+    // Wheel zoom — resizes the SVG inside a scroll container and adjusts
+    // scroll so the point under the cursor stays under the cursor.
+    // Inline cards: requires Ctrl/Cmd modifier (plain wheel scrolls the page).
+    // Modal: any wheel zooms (the modal is dedicated to viewing one diagram).
+    const MIN_SCALE = 0.3;
+    const MAX_SCALE = 4;
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    function applyZoomToSvg(svg, scale) {
+      const nw = parseFloat(svg.dataset.naturalW);
+      const nh = parseFloat(svg.dataset.naturalH);
+      if (!nw || !nh) return;
+      svg.style.width = (nw * scale) + "px";
+      svg.style.height = (nh * scale) + "px";
+      svg.dataset.scale = scale;
+      // Toggle the topbar reset button whenever any diagram leaves 1.0.
+      const btn = document.getElementById("reset-zoom-btn");
+      if (btn) {
+        const anyZoomed = Array.from(document.querySelectorAll(".mermaid svg, #zoom-body svg"))
+          .some((s) => parseFloat(s.dataset.scale || "1") !== 1);
+        btn.hidden = !anyZoomed;
+      }
+    }
+
+    function attachWheelZoom(container, opts = {}) {
+      if (container.dataset.zoomAttached === "1") return;
+      container.dataset.zoomAttached = "1";
+      const requireModifier = opts.requireModifier !== false;
+
+      container.addEventListener("wheel", (ev) => {
+        if (requireModifier && !(ev.ctrlKey || ev.metaKey)) return;
+        const svg = container.querySelector("svg");
+        if (!svg || !svg.dataset.naturalW) return;
+        ev.preventDefault();
+
+        const oldScale = parseFloat(svg.dataset.scale || "1");
+        // Trackpad pinch ≈ deltaY in tens; mouse wheel ≈ deltaY ~100. Slightly
+        // dampen so scaling feels controllable across both.
+        const factor = ev.deltaY < 0 ? 1.12 : 1 / 1.12;
+        const newScale = clamp(oldScale * factor, MIN_SCALE, MAX_SCALE);
+        if (newScale === oldScale) return;
+
+        const rect = container.getBoundingClientRect();
+        const cx = ev.clientX - rect.left;
+        const cy = ev.clientY - rect.top;
+        const ratio = newScale / oldScale;
+
+        applyZoomToSvg(svg, newScale);
+
+        // Keep the content point under the cursor stationary in viewport
+        container.scrollLeft = (container.scrollLeft + cx) * ratio - cx;
+        container.scrollTop = (container.scrollTop + cy) * ratio - cy;
+
+        refreshScrollHints();
+      }, { passive: false });
+    }
+
+    // Click-and-drag panning for any scrollable container (flow-body inline +
+    // zoom-body in modal). Beats scrollbar dragging when content is wide.
+    function attachDragPan(el) {
+      if (el.dataset.dragAttached === "1") return;
+      el.dataset.dragAttached = "1";
+      let dragging = false;
+      let startX = 0, startY = 0, startScrollX = 0, startScrollY = 0;
+      el.addEventListener("mousedown", (ev) => {
+        // ignore clicks on interactive children (links, buttons, etc.)
+        if (ev.target.closest("a, button")) return;
+        dragging = true;
+        startX = ev.pageX;
+        startY = ev.pageY;
+        startScrollX = el.scrollLeft;
+        startScrollY = el.scrollTop;
+        el.classList.add("dragging");
+      });
+      const stop = () => {
+        if (!dragging) return;
+        dragging = false;
+        el.classList.remove("dragging");
+      };
+      window.addEventListener("mouseup", stop);
+      el.addEventListener("mouseleave", stop);
+      window.addEventListener("mousemove", (ev) => {
+        if (!dragging) return;
+        ev.preventDefault();
+        el.scrollLeft = startScrollX - (ev.pageX - startX);
+        el.scrollTop = startScrollY - (ev.pageY - startY);
+      });
+    }
+    function postRenderFix() {
+      naturalizeSvgs();
+      refreshScrollHints();
+      document.querySelectorAll(".flow-body").forEach((el) => {
+        attachDragPan(el);
+        attachWheelZoom(el, { requireModifier: true });
+      });
+    }
+    window.addEventListener("load", () => {
+      setTimeout(postRenderFix, 400);
+      setTimeout(postRenderFix, 1200); // safety pass for late renders
+    });
+    window.addEventListener("resize", refreshScrollHints);
+
+    // ─── Zoom modal ───────────────────────────────────────────────
+    const zoomOverlay = document.getElementById("zoom-overlay");
+    const zoomBody = document.getElementById("zoom-body");
+    const zoomTitle = document.getElementById("zoom-title");
+    const zoomClose = document.getElementById("zoom-close");
+
+    function openZoom(card, title) {
+      const svg = card.querySelector(".mermaid svg");
+      if (!svg) return;
+      zoomBody.innerHTML = "";
+      // Clone the SVG so the original keeps rendering; size it from viewBox so
+      // wheel-zoom + drag-pan have stable natural dimensions to reset against.
+      const clone = svg.cloneNode(true);
+      clone.removeAttribute("style");
+      clone.removeAttribute("width");
+      clone.removeAttribute("height");
+      const vb = clone.getAttribute("viewBox");
+      if (vb) {
+        const parts = vb.split(/\s+/);
+        const w = Math.round(parseFloat(parts[2]));
+        const h = Math.round(parseFloat(parts[3]));
+        clone.setAttribute("width", w);
+        clone.setAttribute("height", h);
+        clone.style.width = w + "px";
+        clone.style.height = h + "px";
+        clone.dataset.naturalW = w;
+        clone.dataset.naturalH = h;
+        clone.dataset.scale = "1";
+      }
+      zoomBody.appendChild(clone);
+      zoomBody.scrollLeft = 0;
+      zoomBody.scrollTop = 0;
+      zoomTitle.textContent = title || "放大檢視";
+      zoomOverlay.hidden = false;
+      document.body.style.overflow = "hidden";
+      attachDragPan(zoomBody);
+      attachWheelZoom(zoomBody, { requireModifier: false });
+    }
+    function closeZoom() {
+      zoomOverlay.hidden = true;
+      zoomBody.innerHTML = "";
+      document.body.style.overflow = "";
+    }
+    document.querySelectorAll(".flow-zoom").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const card = btn.closest(".flow-card");
+        openZoom(card, btn.dataset.zoomTitle);
+      });
+    });
+    zoomClose.addEventListener("click", closeZoom);
+    zoomOverlay.addEventListener("click", (ev) => {
+      if (ev.target === zoomOverlay) closeZoom();
+    });
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && !zoomOverlay.hidden) closeZoom();
+    });
+
+    // ─── Topbar actions ───────────────────────────────────────────
+    const resetZoomBtn = document.getElementById("reset-zoom-btn");
+
+    function resetAllZooms() {
+      document.querySelectorAll(".mermaid svg").forEach((svg) => {
+        if (!svg.dataset.naturalW) return;
+        applyZoomToSvg(svg, 1);
+      });
+      const modalSvg = document.querySelector("#zoom-body svg");
+      if (modalSvg && modalSvg.dataset.naturalW) {
+        applyZoomToSvg(modalSvg, 1);
+        const zb = document.getElementById("zoom-body");
+        zb.scrollLeft = 0;
+        zb.scrollTop = 0;
+      }
+      refreshScrollHints();
+    }
+
+    if (resetZoomBtn) resetZoomBtn.addEventListener("click", resetAllZooms);
+
+    // ─── Per-diagram SVG download ─────────────────────────────────
+    // SVG keeps Chinese text + Mermaid's embedded <style> block intact, so
+    // the downloaded file opens correctly in browsers / draw.io / Inkscape
+    // without any client-side font dependency on the host page.
+    function safeFilename(s) {
+      return (s || "diagram").replace(/[\\/:*?"<>|]+/g, "").replace(/\s+/g, "-").slice(0, 60);
+    }
+    function downloadDiagramAsSvg(card) {
+      const svg = card.querySelector(".mermaid svg");
+      if (!svg) return;
+      const title = card.querySelector(".flow-head h2")?.textContent?.trim() || "diagram";
+      const numText = card.querySelector(".flow-num")?.textContent?.trim() || "";
+      const filename = `AI-Stock-${numText}-${safeFilename(title)}.svg`;
+
+      // Clone so we can normalise width/height + ensure xmlns without touching live SVG
+      const clone = svg.cloneNode(true);
+      const nw = parseFloat(svg.dataset.naturalW) || parseFloat(svg.getAttribute("width")) || 800;
+      const nh = parseFloat(svg.dataset.naturalH) || parseFloat(svg.getAttribute("height")) || 600;
+      clone.setAttribute("width", nw);
+      clone.setAttribute("height", nh);
+      clone.removeAttribute("style");
+      if (!clone.getAttribute("xmlns")) clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      if (!clone.getAttribute("xmlns:xlink")) clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+
+      const xml = new XMLSerializer().serializeToString(clone);
+      const blob = new Blob(['<?xml version="1.0" encoding="UTF-8"?>\n', xml], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+    }
+    document.querySelectorAll(".flow-download").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const card = btn.closest(".flow-card");
+        if (card) downloadDiagramAsSvg(card);
+      });
+    });
+
+    // ─── TOC active highlight ─────────────────────────────────────
+    // IntersectionObserver with threshold:0.4 fails on tall cards (a 1500px
+    // flow-1 inside an 800px viewport never reaches 40% visibility). Use a
+    // scroll-based approach instead: whichever section's top is closest to
+    // (and above) a fixed activation line near the top of the viewport wins.
+    const sectionIds = ["flow-1", "flow-2", "flow-3a", "flow-3b", "flow-4", "gotchas"];
+    const sections = sectionIds.map((id) => document.getElementById(id)).filter(Boolean);
+    const tocLinks = Array.from(document.querySelectorAll(".toc-list a, .mobile-toc-scroll a"));
+
+    const tocIndicator = document.querySelector(".toc-indicator");
+    const mobileTocIndicator = document.querySelector(".mobile-toc-indicator");
+
+    function positionIndicators(activeId) {
+      // Vertical pill behind active item in the sticky sidebar.
+      if (tocIndicator) {
+        const link = document.querySelector(`.toc-list a[data-section="${activeId}"]`);
+        if (link) {
+          tocIndicator.style.opacity = "1";
+          tocIndicator.style.transform = `translateY(${link.offsetTop}px)`;
+          tocIndicator.style.height = `${link.offsetHeight}px`;
+        } else {
+          tocIndicator.style.opacity = "0";
+        }
+      }
+      // Horizontal pill behind active chip in the mobile strip.
+      if (mobileTocIndicator) {
+        const chip = document.querySelector(`.mobile-toc-scroll a[data-section="${activeId}"]`);
+        if (chip) {
+          mobileTocIndicator.style.opacity = "1";
+          mobileTocIndicator.style.transform = `translateX(${chip.offsetLeft}px)`;
+          mobileTocIndicator.style.width = `${chip.offsetWidth}px`;
+        } else {
+          mobileTocIndicator.style.opacity = "0";
+        }
+      }
+    }
+
+    // When user clicks a TOC link, the immediate active state can be clobbered
+    // by scroll events fired *during* the smooth scroll (a mid-flight scroll
+    // position naturally evaluates to a different section). Pin the clicked
+    // section until the scroll arrives at its target.
+    let pinnedActiveId = null;
+    let pinReleaseRaf = null;
+
+    function pinActive(id) {
+      pinnedActiveId = id;
+      cancelAnimationFrame(pinReleaseRaf);
+      const settle = () => {
+        const target = document.getElementById(id);
+        if (!target) {
+          pinnedActiveId = null;
+          return;
+        }
+        const distance = Math.abs(target.getBoundingClientRect().top - 80);
+        if (distance < 6) {
+          pinnedActiveId = null; // arrived — hand control back to scroll listener
+        } else {
+          pinReleaseRaf = requestAnimationFrame(settle);
+        }
+      };
+      pinReleaseRaf = requestAnimationFrame(settle);
+      // Safety release after 1.5s in case the scroll never settles exactly.
+      setTimeout(() => { pinnedActiveId = null; }, 1500);
+    }
+
+    const topbar = document.getElementById("topbar");
+    const crumbNum = document.getElementById("crumb-num");
+    const crumbLabel = document.getElementById("crumb-label");
+
+    function updateActiveSection() {
+      let activeId;
+      if (pinnedActiveId) {
+        activeId = pinnedActiveId;
+      } else {
+        // Pick the section with the most visible pixels in the viewport.
+        // This handles the last-section edge case: when the page ends, the
+        // bottom section can't push its top above a fixed activation line,
+        // so an "above the line" rule never activates it. Visible-pixel
+        // count naturally activates whichever section the user is reading.
+        const vh = window.innerHeight;
+        const headerOffset = 80; // ignore pixels hidden under the sticky topbar
+        activeId = sections[0]?.id;
+        let bestVisible = -1;
+        for (const section of sections) {
+          const r = section.getBoundingClientRect();
+          const visibleTop = Math.max(r.top, headerOffset);
+          const visibleBottom = Math.min(r.bottom, vh);
+          const visible = Math.max(0, visibleBottom - visibleTop);
+          if (visible > bestVisible) {
+            bestVisible = visible;
+            activeId = section.id;
+          }
+        }
+      }
+      tocLinks.forEach((link) => {
+        link.classList.toggle("active", link.dataset.section === activeId);
+      });
+      positionIndicators(activeId);
+      updateTopbarCrumb(activeId);
+      // scroll-shadow under topbar once user moves past hero
+      if (topbar) topbar.classList.toggle("is-scrolled", window.scrollY > 8);
+    }
+
+    function updateTopbarCrumb(activeId) {
+      if (!crumbNum || !crumbLabel) return;
+      const sourceLink = document.querySelector(`.toc-list a[data-section="${activeId}"]`);
+      const card = document.getElementById(activeId);
+      if (!sourceLink || !card) return;
+      const num = sourceLink.querySelector(".toc-num")?.textContent || "";
+      const title = card.querySelector(".flow-head h2")?.textContent || "";
+      crumbNum.textContent = num;
+      crumbLabel.textContent = title;
+    }
+
+    window.addEventListener("scroll", updateActiveSection, { passive: true });
+    window.addEventListener("resize", updateActiveSection);
+    window.addEventListener("load", () => setTimeout(updateActiveSection, 200));
+    // initial paint
+    updateActiveSection();
+
+    // Explicit click handler — bypasses browser anchor edge cases (last-section
+    // at the bottom may not be able to reach activationY purely via native
+    // hash-change scroll). Manually compute target Y, smooth-scroll, and pin
+    // the active state so mid-flight scroll events don't flicker the indicator
+    // through other sections on the way.
+    tocLinks.forEach((link) => {
+      link.addEventListener("click", (ev) => {
+        const id = link.dataset.section;
+        const target = document.getElementById(id);
+        if (!target) return;
+        ev.preventDefault();
+        const headerOffset = 80;
+        const y = target.getBoundingClientRect().top + window.scrollY - headerOffset;
+        const maxY = document.documentElement.scrollHeight - window.innerHeight;
+        window.scrollTo({ top: Math.min(y, maxY), behavior: "smooth" });
+        history.replaceState(null, "", "#" + id);
+        pinActive(id);
+        tocLinks.forEach((l) => l.classList.toggle("active", l.dataset.section === id));
+        positionIndicators(id);
+      });
+    });
+  </script>
+</body>
+</html>
