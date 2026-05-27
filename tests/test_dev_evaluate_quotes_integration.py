@@ -594,6 +594,36 @@ def test_trailing_long_bid_missing_falls_back_to_last(
 
 
 @pytest.mark.integration
+def test_trailing_short_ask_missing_falls_back_to_last(
+    db_session: Session,
+    client: TestClient,
+    repo: IntentRepository,
+    quote_provider: InMemoryQuoteProvider,
+) -> None:
+    """Spec §測試要求 line 380: bid/ask 缺失 last fallback 路徑各方向。
+    Short 對應 ask 缺失走 last_fallback (long 已由
+    test_trailing_long_bid_missing_falls_back_to_last 覆蓋)。"""
+    owner = uuid4()
+    intent_id = _create_active_trailing_intent(
+        repo, db_session, owner_user_id=owner, position_side="short", trail_value="5"
+    )
+
+    # Seed watermark_low at 100 → dynamic = 100 × 1.05 = 105.0
+    quote_provider.push_quote(_snapshot("2330", bid="99.5", ask="100", last="100"))
+    client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
+
+    # ask missing, last=106 ≥ dynamic 105.0 → trigger via last_fallback
+    quote_provider.push_quote(_snapshot("2330", bid="105.5", last="106"))
+    response = client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})
+    assert response.json()["data"]["triggeredIntentIds"] == [str(intent_id)]
+
+    trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
+    assert trigger_row.trigger_reference_price_type == "last_fallback"
+    assert trigger_row.fallback_used is True
+    assert trigger_row.trigger_price == Decimal("106.0000")
+
+
+@pytest.mark.integration
 def test_trailing_long_and_short_coexist_independently(
     db_session: Session,
     client: TestClient,

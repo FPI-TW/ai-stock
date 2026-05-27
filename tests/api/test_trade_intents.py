@@ -236,10 +236,14 @@ def test_create_trailing_stop_short_fixed_amount_success(
     assert data["trailMode"] == "fixed_amount"
 
 
-def test_create_trailing_stop_missing_position_side_returns_422(
-    api_client: TestClient, mock_create_command: MagicMock
+@pytest.mark.parametrize("missing_field", ["positionSide", "trailMode", "trailValue"])
+def test_create_trailing_stop_missing_required_field_returns_422(
+    api_client: TestClient, mock_create_command: MagicMock, missing_field: str
 ) -> None:
-    payload = {k: v for k, v in _TRAILING_STOP_PAYLOAD.items() if k != "positionSide"}
+    """Spec §驗收條件 line 344: each of positionSide / trailMode / trailValue
+    is required; omitting any one yields VALIDATION_ERROR with `details.loc`
+    pointing to the missing field."""
+    payload = {k: v for k, v in _TRAILING_STOP_PAYLOAD.items() if k != missing_field}
 
     response = api_client.post("/trade-intents", json=payload)
 
@@ -247,7 +251,7 @@ def test_create_trailing_stop_missing_position_side_returns_422(
     body = response.json()
     assert body["error"]["code"] == "VALIDATION_ERROR"
     locs = [tuple(e["loc"]) for e in body["error"]["details"]["errors"]]
-    assert any("positionSide" in loc for loc in locs)
+    assert any(missing_field in loc for loc in locs)
     mock_create_command.execute.assert_not_called()
 
 
