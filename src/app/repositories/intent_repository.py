@@ -292,6 +292,14 @@ class IntentRepository:
         the value consistent with the evaluation timestamp used elsewhere in
         this dispatch and lets tests assert on it deterministically.
 
+        Race guard: the WHERE filters on non-terminal statuses so a concurrent
+        cancel between ``system_list_active_by_symbols`` and this UPDATE
+        cannot stamp ``watermark_updated_at`` onto an already-cancelled /
+        already-triggered row. UPDATE rowcount = 0 in that race is silently a
+        no-op — the trigger path is already protected by the matching
+        ``WHERE status='active'`` guard in ``persist_trigger`` (and surfaces
+        as ``IntentNotActiveError`` for the caller to skip).
+
         Caller owns the transaction; this method does not commit.
         """
 
@@ -305,7 +313,9 @@ class IntentRepository:
         else:
             values["watermark_low"] = watermark
         self._db.execute(
-            update(TradeIntent).where(TradeIntent.id == intent_id).values(**values),
+            update(TradeIntent)
+            .where(TradeIntent.id == intent_id, TradeIntent.status.in_(CANCELLABLE_STATUSES))
+            .values(**values),
             execution_options={"synchronize_session": False},
         )
 

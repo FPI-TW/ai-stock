@@ -215,6 +215,42 @@ def test_trailing_and_buy_alert_same_symbol_coexist(repo: IntentRepository) -> N
 
 
 @pytest.mark.integration
+def test_update_trailing_state_no_ops_on_cancelled_row(repo: IntentRepository) -> None:
+    """Race guard: dispatcher reads active intent (no lock), user cancels
+    between read and `update_trailing_state` → the UPDATE must silently skip
+    so ``watermark_updated_at`` is not stamped onto a terminal row.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    owner = uuid4()
+    intent = _create_trailing(repo, owner_user_id=owner, position_side="long")
+    assert intent.watermark_high is None
+    assert intent.watermark_updated_at is None
+
+    # Simulate: user cancels between dispatcher's list and update.
+    repo.cancel(intent.id, owner)
+    repo._db.commit()  # noqa: SLF001
+
+    now = datetime(2026, 5, 11, 10, 0, tzinfo=ZoneInfo("Asia/Taipei"))
+    repo.update_trailing_state(
+        intent.id,
+        position_side="long",
+        watermark=Decimal("100"),
+        dynamic_trigger_price=Decimal("95"),
+        updated_at=now,
+    )
+    repo._db.commit()  # noqa: SLF001
+
+    after = repo.find_by_id(intent.id, owner)
+    assert after.status == "cancelled"
+    # Race attempt did not stamp the cancelled row.
+    assert after.watermark_high is None
+    assert after.dynamic_trigger_price is None
+    assert after.watermark_updated_at is None
+
+
+@pytest.mark.integration
 def test_create_after_terminal_allows_new_intent(repo: IntentRepository) -> None:
     owner = uuid4()
     intent = _create(repo, owner_user_id=owner)
