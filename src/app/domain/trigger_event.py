@@ -43,9 +43,17 @@ class TriggerEventData:
     owner_user_id: UUID
     symbol: str
     quote_snapshot: dict[str, Any]
+    # For trailing intents this is set to ``dynamic_trigger_price_at_trigger``
+    # so the existing evaluator infra (e.g. notification body lookup) keeps
+    # working without branching on strategy here. Spec §178 documents the
+    # semantic overload.
     target_price_effective: Decimal
     trigger_price: Decimal
     trigger_reference_price_type: str
     fallback_used: bool
     triggered_at: datetime
     created_at: datetime
+    # Trailing-only snapshot of the trail state at the moment of trigger.
+    # Both None for buy/sell strategies; both set for trailing.
+    watermark_at_trigger: Decimal | None = None
+    dynamic_trigger_price_at_trigger: Decimal | None = None

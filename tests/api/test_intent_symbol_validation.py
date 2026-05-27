@@ -30,6 +30,16 @@ def _make_intent_mock(symbol: str = "2330") -> MagicMock:
     intent.time_in_force = "day"
     intent.execution_mode = "notify_only"
     intent.status = "active"
+    intent.cancelled_at = None
+    # Trailing fields are None for buy/sell rows. MagicMock would otherwise
+    # auto-create attributes here and route them through format_price_str.
+    intent.position_side = None
+    intent.trail_mode = None
+    intent.trail_value = None
+    intent.watermark_high = None
+    intent.watermark_low = None
+    intent.dynamic_trigger_price = None
+    intent.watermark_updated_at = None
     return intent
 
 

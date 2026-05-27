@@ -57,3 +57,14 @@ class TradeIntentData:
     updated_at: datetime
     cancelled_at: datetime | None = None
     triggered_at: datetime | None = None
+    # Trailing-only (BE-V0.5-16). Non-trailing strategies leave these None;
+    # the DB ck `trailing_field_exclusivity` enforces that invariant. Watermark
+    # / dynamic_trigger_price / watermark_updated_at are populated by the
+    # evaluator (separate PR) and stay None until the first valid quote lands.
+    position_side: str | None = None
+    trail_mode: str | None = None
+    trail_value: Decimal | None = None
+    watermark_high: Decimal | None = None
+    watermark_low: Decimal | None = None
+    dynamic_trigger_price: Decimal | None = None
+    watermark_updated_at: datetime | None = None

@@ -323,3 +323,34 @@ class TestNearest:
         price = Decimal("49.95")
         assert PriceService.nearest_lower(SecurityType.STOCK, price) == price
         assert PriceService.nearest_upper(SecurityType.STOCK, price) == price
+
+
+class TestRoundToTickAwayFromTrigger:
+    # Spec §128 / §144：long → 'down' = floor、short → 'up' = ceil；
+    # 比照 TestNearest，這裡只驗 direction dispatch，tick 邊界由
+    # nearest_lower / nearest_upper 既有 test 覆蓋。
+    def test_direction_down_floors_to_tick(self) -> None:
+        # 95.234 落在 50–100 區間（tick 0.1）→ floor 為 95.2
+        assert PriceService.round_to_tick_away_from_trigger(SecurityType.STOCK, Decimal("95.234"), "down") == Decimal(
+            "95.2"
+        )
+
+    def test_direction_up_ceils_to_tick(self) -> None:
+        # 105.234 落在 100–500 區間（tick 0.5）→ ceil 為 105.5
+        assert PriceService.round_to_tick_away_from_trigger(SecurityType.STOCK, Decimal("105.234"), "up") == Decimal(
+            "105.5"
+        )
+
+    def test_aligned_price_unchanged_either_direction(self) -> None:
+        price = Decimal("95.0")
+        assert PriceService.round_to_tick_away_from_trigger(SecurityType.STOCK, price, "down") == price
+        assert PriceService.round_to_tick_away_from_trigger(SecurityType.STOCK, price, "up") == price
+
+    def test_etf_tick_table_used(self) -> None:
+        # ETF ≥ 50 → tick 0.05；50.04 floor → 50.00、ceil → 50.05
+        assert PriceService.round_to_tick_away_from_trigger(SecurityType.ETF, Decimal("50.04"), "down") == Decimal(
+            "50.00"
+        )
+        assert PriceService.round_to_tick_away_from_trigger(SecurityType.ETF, Decimal("50.04"), "up") == Decimal(
+            "50.05"
+        )

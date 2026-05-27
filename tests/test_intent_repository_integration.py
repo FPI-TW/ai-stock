@@ -65,6 +65,11 @@ def db_session(int_engine: Engine) -> Generator[Session]:
         session.commit()
         yield session
     finally:
+        # Rollback any failed transaction left over from a test (e.g. trailing
+        # duplicate hits the partial unique index via IntegrityError; repo
+        # re-raises as DuplicateIntentError but per its contract doesn't roll
+        # back — the production caller (CreateTradeIntentCommand) does).
+        session.rollback()
         session.execute(delete(TradeIntent))
         session.commit()
         session.close()
@@ -134,6 +139,79 @@ def test_create_duplicate_active_raises_duplicate_error(repo: IntentRepository) 
 
     with pytest.raises(DuplicateIntentError):
         _create(repo, owner_user_id=owner)
+
+
+def _create_trailing(
+    repo: IntentRepository,
+    *,
+    owner_user_id: UUID,
+    position_side: str,
+    trail_mode: str = "percentage",
+    trail_value: str = "5.0",
+    symbol: str = "2330",
+    quantity_lots: int = 1,
+    trading_date: date | None = None,
+    status: str = "active",
+) -> TradeIntentData:
+    intent_id = repo.create(
+        owner_user_id=owner_user_id,
+        symbol=symbol,
+        strategy="trailing_stop_alert",
+        quantity_lots=quantity_lots,
+        target_price_original=None,
+        target_price_effective=None,
+        trigger_reference_price_type="bid" if position_side == "long" else "ask",
+        trading_date=trading_date or date(2026, 5, 12),
+        time_in_force="day",
+        execution_mode="notify_only",
+        status=status,
+        position_side=position_side,
+        trail_mode=trail_mode,
+        trail_value=Decimal(trail_value),
+    )
+    repo._db.commit()  # noqa: SLF001
+    return repo.find_by_id(intent_id, owner_user_id)
+
+
+@pytest.mark.integration
+def test_create_duplicate_trailing_raises_duplicate_error(repo: IntentRepository) -> None:
+    """BE-V0.5-16: 同 owner / symbol / position_side / trail_mode / trail_value
+    撞 partial unique index (NULLS NOT DISTINCT) 應升為 DuplicateIntentError。
+    Trailing 路徑跳過 SELECT-based pre-check (NULL = NULL false),這條測試確認
+    DB unique index 的兜底有效。"""
+    owner = uuid4()
+    _create_trailing(repo, owner_user_id=owner, position_side="long")
+
+    with pytest.raises(DuplicateIntentError):
+        _create_trailing(repo, owner_user_id=owner, position_side="long")
+
+
+@pytest.mark.integration
+def test_long_and_short_trailing_same_trail_value_coexist(repo: IntentRepository) -> None:
+    """同 trail_value 但 position_side 不同的 trailing 不互撞 — partial unique
+    index 含 position_side。"""
+    owner = uuid4()
+    long_intent = _create_trailing(repo, owner_user_id=owner, position_side="long", trail_value="5.0")
+    short_intent = _create_trailing(repo, owner_user_id=owner, position_side="short", trail_value="5.0")
+
+    assert long_intent.id != short_intent.id
+    assert long_intent.position_side == "long"
+    assert short_intent.position_side == "short"
+
+
+@pytest.mark.integration
+def test_trailing_and_buy_alert_same_symbol_coexist(repo: IntentRepository) -> None:
+    """trailing row (target_price_* NULL, trail_* 非 NULL) 與 buy alert
+    (target_price_* 非 NULL, trail_* NULL) 共用 partial unique index 的不同欄位
+    組合,不應互撞。"""
+    owner = uuid4()
+    buy_intent = _create(repo, owner_user_id=owner, strategy="buy_price_alert")
+    trailing_intent = _create_trailing(repo, owner_user_id=owner, position_side="long")
+
+    assert buy_intent.id != trailing_intent.id
+    assert buy_intent.target_price_effective is not None
+    assert trailing_intent.target_price_effective is None
+    assert trailing_intent.trail_value == Decimal("5.0000")  # Numeric(9,4) → DB precision
 
 
 @pytest.mark.integration

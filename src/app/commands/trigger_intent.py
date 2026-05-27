@@ -24,8 +24,8 @@ Two callers share this module:
 
 V1 upgrade seam (spec §16): the inline `notifications` insert here will be
 replaced by an outbox row + worker. Keep notification rendering routed
-through `render_price_triggered` so swapping the persistence path does not
-ripple back into the evaluator.
+through `render_price_triggered` / `render_trailing_stop_triggered` so
+swapping the persistence path does not ripple back into the evaluator.
 """
 
 from dataclasses import dataclass
@@ -44,7 +44,7 @@ from app.db.models.core import TriggerEvent as TriggerEventRow
 from app.domain.notification import NotificationData
 from app.domain.trade_intent import IntentNotFoundError
 from app.domain.trigger_event import DuplicateTriggerError, TriggerError, TriggerEventData
-from app.services.notification_template import render_price_triggered
+from app.services.notification_template import render_price_triggered, render_trailing_stop_triggered
 
 
 class IntentNotActiveError(TriggerError):
@@ -62,6 +62,13 @@ class TriggerIntentInput:
     fallback_used: bool
     quote_snapshot: dict[str, Any]
     quote_time: datetime
+    # Trailing-only snapshot: the watermark and dynamic_trigger_price used for
+    # the trigger comparison on this quote (may have been updated this same
+    # quote, in which case caller persisted the new values via
+    # ``update_trailing_state`` before invoking trigger). Both required for
+    # ``trailing_stop_alert`` intents; both None otherwise.
+    watermark_at_trigger: Decimal | None = None
+    dynamic_trigger_price_at_trigger: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +90,8 @@ def _trigger_event_to_domain(row: TriggerEventRow) -> TriggerEventData:
         fallback_used=row.fallback_used,
         triggered_at=row.triggered_at,
         created_at=row.created_at,
+        watermark_at_trigger=row.watermark_at_trigger,
+        dynamic_trigger_price_at_trigger=row.dynamic_trigger_price_at_trigger,
     )
 
 
@@ -119,18 +128,49 @@ def persist_trigger(
     values without us tracking them in Python.
     """
 
-    # `render_price_triggered` only handles buy/sell strategies; trailing rows
-    # route to a separate template (added in a later BE-V0.5-16 PR). For the
-    # strategies currently dispatched here, DB ck `trailing_field_exclusivity`
-    # guarantees `target_price_effective` is non-null.
-    assert intent.target_price_effective is not None
-    title, body = render_price_triggered(
-        symbol=intent.symbol,
-        strategy=intent.strategy,
-        target_price=intent.target_price_effective,
-        trigger_price=inp.trigger_price,
-        quote_time=inp.quote_time,
-    )
+    # Strategy branch: buy/sell write the user-specified target_price_effective
+    # as-is; trailing has no user target — we re-use the trigger_events column
+    # to store dynamic_trigger_price_at_trigger (spec §178 semantic overload)
+    # so downstream readers don't need a separate code path.
+    if intent.strategy == "trailing_stop_alert":
+        if inp.watermark_at_trigger is None or inp.dynamic_trigger_price_at_trigger is None:
+            raise ValueError(
+                f"trailing_stop_alert trigger requires watermark_at_trigger and "
+                f"dynamic_trigger_price_at_trigger (intent={intent.id})"
+            )
+        assert intent.position_side in ("long", "short")
+        assert intent.trail_mode in ("percentage", "fixed_amount")
+        assert intent.trail_value is not None
+        target_price_effective = inp.dynamic_trigger_price_at_trigger
+        watermark_at_trigger: Decimal | None = inp.watermark_at_trigger
+        dynamic_at_trigger: Decimal | None = inp.dynamic_trigger_price_at_trigger
+        title, body = render_trailing_stop_triggered(
+            symbol=intent.symbol,
+            position_side=intent.position_side,
+            trail_mode=intent.trail_mode,
+            trail_value=intent.trail_value,
+            watermark=inp.watermark_at_trigger,
+            dynamic_trigger_price=inp.dynamic_trigger_price_at_trigger,
+            trigger_price=inp.trigger_price,
+            trigger_reference_price_type=inp.trigger_reference_price_type,
+            quote_time=inp.quote_time,
+        )
+        notification_type = "trailing_stop_triggered"
+    else:
+        # DB ck `trailing_field_exclusivity` guarantees target_price_effective
+        # is non-null for buy/sell strategies.
+        assert intent.target_price_effective is not None
+        target_price_effective = intent.target_price_effective
+        watermark_at_trigger = None
+        dynamic_at_trigger = None
+        title, body = render_price_triggered(
+            symbol=intent.symbol,
+            strategy=intent.strategy,
+            target_price=intent.target_price_effective,
+            trigger_price=inp.trigger_price,
+            quote_time=inp.quote_time,
+        )
+        notification_type = "price_triggered"
 
     trigger_row = TriggerEventRow(
         id=uuid4(),
@@ -138,16 +178,18 @@ def persist_trigger(
         owner_user_id=intent.owner_user_id,
         symbol=intent.symbol,
         quote_snapshot=inp.quote_snapshot,
-        target_price_effective=intent.target_price_effective,
+        target_price_effective=target_price_effective,
         trigger_price=inp.trigger_price,
         trigger_reference_price_type=inp.trigger_reference_price_type,
         fallback_used=inp.fallback_used,
+        watermark_at_trigger=watermark_at_trigger,
+        dynamic_trigger_price_at_trigger=dynamic_at_trigger,
     )
     notification_row = NotificationRow(
         id=uuid4(),
         owner_user_id=intent.owner_user_id,
         trade_intent_id=intent.id,
-        type="price_triggered",
+        type=notification_type,
         rendered_title=title,
         rendered_body=body,
     )

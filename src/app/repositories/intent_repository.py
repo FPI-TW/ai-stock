@@ -1,5 +1,6 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select, update
@@ -36,6 +37,13 @@ def _to_domain(row: TradeIntent) -> TradeIntentData:
         updated_at=row.updated_at,
         cancelled_at=row.cancelled_at,
         triggered_at=row.triggered_at,
+        position_side=row.position_side,
+        trail_mode=row.trail_mode,
+        trail_value=row.trail_value,
+        watermark_high=row.watermark_high,
+        watermark_low=row.watermark_low,
+        dynamic_trigger_price=row.dynamic_trigger_price,
+        watermark_updated_at=row.watermark_updated_at,
     )
 
 
@@ -53,13 +61,16 @@ class IntentRepository:
         symbol: str,
         strategy: str,
         quantity_lots: int,
-        target_price_original: Decimal,
-        target_price_effective: Decimal,
+        target_price_original: Decimal | None,
+        target_price_effective: Decimal | None,
         trigger_reference_price_type: str,
         trading_date: date,
         time_in_force: str,
         execution_mode: str,
         status: str,
+        position_side: str | None = None,
+        trail_mode: str | None = None,
+        trail_value: Decimal | None = None,
     ) -> UUID:
         """Add a new TradeIntent and flush; return its id.
 
@@ -71,26 +82,40 @@ class IntentRepository:
         (e.g. quote provider reconcile rejecting on allowlist / quota) rolls
         back cleanly without ever exposing a half-materialised domain object.
 
+        Trailing rows pass `target_price_*` as None and `position_side` /
+        `trail_mode` / `trail_value` non-None; non-trailing rows do the
+        inverse. The DB ck `trailing_field_exclusivity` enforces this; the
+        repo just forwards what the command gives it.
+
+        The explicit duplicate SELECT below covers the buy/sell shape only;
+        trailing duplicates are caught by the partial unique index
+        `uq_trade_intents_active_duplicate` (status IN ('scheduled', 'active'),
+        NULLS NOT DISTINCT) via IntegrityError on flush.
+
         On `IntegrityError`, raise `DuplicateIntentError` without rolling
         back; the caller's exception handler issues `rollback()` on the
         session before the next operation.
         """
 
-        duplicate = self._db.execute(
-            select(TradeIntent).where(
-                and_(
-                    TradeIntent.owner_user_id == owner_user_id,
-                    TradeIntent.symbol == symbol,
-                    TradeIntent.strategy == strategy,
-                    TradeIntent.target_price_effective == target_price_effective,
-                    TradeIntent.quantity_lots == quantity_lots,
-                    TradeIntent.trading_date == trading_date,
-                    TradeIntent.status.in_(CANCELLABLE_STATUSES),
+        # Buy/sell SELECT-based pre-check. For trailing this returns nothing
+        # (NULL = NULL is false in plain equality) — that path relies on the
+        # partial unique index to surface duplicates via IntegrityError.
+        if target_price_effective is not None:
+            duplicate = self._db.execute(
+                select(TradeIntent).where(
+                    and_(
+                        TradeIntent.owner_user_id == owner_user_id,
+                        TradeIntent.symbol == symbol,
+                        TradeIntent.strategy == strategy,
+                        TradeIntent.target_price_effective == target_price_effective,
+                        TradeIntent.quantity_lots == quantity_lots,
+                        TradeIntent.trading_date == trading_date,
+                        TradeIntent.status.in_(CANCELLABLE_STATUSES),
+                    )
                 )
-            )
-        ).scalar_one_or_none()
-        if duplicate is not None:
-            raise DuplicateIntentError(owner_user_id, symbol, strategy)
+            ).scalar_one_or_none()
+            if duplicate is not None:
+                raise DuplicateIntentError(owner_user_id, symbol, strategy)
 
         row = TradeIntent(
             id=uuid4(),
@@ -105,6 +130,9 @@ class IntentRepository:
             trading_date=trading_date,
             time_in_force=time_in_force,
             status=status,
+            position_side=position_side,
+            trail_mode=trail_mode,
+            trail_value=trail_value,
         )
         self._db.add(row)
         try:
@@ -241,6 +269,45 @@ class IntentRepository:
         # without a separate roundtrip after commit
         self._db.refresh(row)
         return _to_domain(row)
+
+    def update_trailing_state(
+        self,
+        intent_id: UUID,
+        *,
+        position_side: Literal["long", "short"],
+        watermark: Decimal,
+        dynamic_trigger_price: Decimal,
+        updated_at: datetime,
+    ) -> None:
+        """Persist a trailing evaluator's watermark mutation (spec §117 / §152).
+
+        Writes the position-side-appropriate watermark column plus
+        ``dynamic_trigger_price`` and ``watermark_updated_at`` in a single
+        UPDATE. Called per valid quote that moved the watermark — even when
+        no trigger fires — so that an evaluator restart never resets the
+        trail.
+
+        ``updated_at`` is the evaluator's ``now`` (Asia/Taipei timezone-aware
+        datetime). Using the caller's clock instead of ``func.now()`` keeps
+        the value consistent with the evaluation timestamp used elsewhere in
+        this dispatch and lets tests assert on it deterministically.
+
+        Caller owns the transaction; this method does not commit.
+        """
+
+        values: dict[str, object] = {
+            "dynamic_trigger_price": dynamic_trigger_price,
+            "watermark_updated_at": updated_at,
+            "updated_at": func.now(),
+        }
+        if position_side == "long":
+            values["watermark_high"] = watermark
+        else:
+            values["watermark_low"] = watermark
+        self._db.execute(
+            update(TradeIntent).where(TradeIntent.id == intent_id).values(**values),
+            execution_options={"synchronize_session": False},
+        )
 
     # ------------------------------------------------------------------
     # quote subscription reconciliation helpers

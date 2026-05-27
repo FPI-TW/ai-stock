@@ -52,24 +52,25 @@ def create_intent(
     user: CurrentUserDep,
     command: CreateTradeIntentCommandDep,
 ) -> IntentCreateResponse:
-    # Trailing's command / evaluator path lands in a later BE-V0.5-16 PR.
-    # Pydantic has already validated the request shape; we just refuse at the
-    # boundary with 501 so callers see a stable envelope instead of a 500.
     if request.strategy == "trailing_stop_alert":
-        raise ApiError(
-            code=ErrorCode.STRATEGY_NOT_IMPLEMENTED,
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            details={"strategy": request.strategy},
-        )
-    intent = command.execute(
-        CreateTradeIntentInput(
+        command_input = CreateTradeIntentInput(
             symbol=request.symbol,
             strategy=request.strategy,
             quantity_lots=request.quantity_lots,
-            target_price=request.target_price,
             owner_user_id=user.user_id,
+            position_side=request.position_side,
+            trail_mode=request.trail_mode,
+            trail_value=str(request.trail_value),
         )
-    )
+    else:
+        command_input = CreateTradeIntentInput(
+            symbol=request.symbol,
+            strategy=request.strategy,
+            quantity_lots=request.quantity_lots,
+            owner_user_id=user.user_id,
+            target_price=request.target_price,
+        )
+    intent = command.execute(command_input)
     return IntentCreateResponse(data=map_to_response_data(intent))
 
 

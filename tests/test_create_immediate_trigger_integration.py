@@ -41,9 +41,36 @@ def _alembic_config() -> Config:
     return config
 
 
+def _scrub_trailing_rows_before_downgrade(database_url: str) -> None:
+    """Defensive cleanup before alembic downgrade — see test_dev_evaluate for context."""
+    pre_engine = create_engine(database_url)
+    try:
+        with pre_engine.connect() as c:
+            check = c.execute(text("SELECT to_regclass('public.trade_intents')")).scalar()
+            if check is None:
+                return
+            c.execute(
+                text(
+                    "DELETE FROM trigger_events WHERE trade_intent_id IN "
+                    "(SELECT id FROM trade_intents WHERE strategy='trailing_stop_alert')"
+                )
+            )
+            c.execute(
+                text(
+                    "DELETE FROM notifications WHERE trade_intent_id IN "
+                    "(SELECT id FROM trade_intents WHERE strategy='trailing_stop_alert')"
+                )
+            )
+            c.execute(text("DELETE FROM trade_intents WHERE strategy='trailing_stop_alert'"))
+            c.commit()
+    finally:
+        pre_engine.dispose()
+
+
 @pytest.fixture(scope="module")
 def create_engine_module() -> Generator[Engine]:
     config = _alembic_config()
+    _scrub_trailing_rows_before_downgrade(get_settings().database_url or "")
     command.downgrade(config, "base")
     command.upgrade(config, "head")
     engine = create_engine(get_settings().database_url or "")
@@ -63,6 +90,7 @@ def create_engine_module() -> Generator[Engine]:
         yield engine
     finally:
         engine.dispose()
+        _scrub_trailing_rows_before_downgrade(get_settings().database_url or "")
         command.downgrade(config, "base")
 
 
@@ -233,3 +261,105 @@ def test_create_with_last_fallback_triggers_and_records_metadata(
     trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
     assert trigger_row.trigger_reference_price_type == "last_fallback"
     assert trigger_row.fallback_used is True
+
+
+# ---------------------------------------------------------------------------
+# BE-V0.5-16 trailing stop create-time paths (spec §183-193)
+# ---------------------------------------------------------------------------
+
+
+def _trailing_payload(
+    *,
+    position_side: str = "long",
+    trail_mode: str = "percentage",
+    trail_value: str = "5",
+) -> dict[str, object]:
+    return {
+        "symbol": "2330",
+        "strategy": "trailing_stop_alert",
+        "quantityLots": 1,
+        "positionSide": position_side,
+        "trailMode": trail_mode,
+        "trailValue": trail_value,
+    }
+
+
+@pytest.mark.integration
+def test_create_trailing_seeds_watermark_from_first_quote(
+    db_session: Session,
+    client: TestClient,
+    repo: IntentRepository,
+    quote_provider: InMemoryQuoteProvider,
+) -> None:
+    # Long 5% trailing; current quote last=100 doesn't trigger but must
+    # initialise watermark + dynamic_trigger_price on first encounter
+    # (spec §183-193).
+    quote_provider.push_quote(_snapshot(bid="100", ask="100.1", last="100"))
+
+    response = client.post("/trade-intents", json=_trailing_payload())
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["data"]["status"] == "active"
+
+    intent_id = UUID(body["data"]["id"])
+    intent = repo.find_by_id(intent_id, OWNER_USER_ID)
+    assert intent.watermark_high == Decimal("100")
+    assert intent.dynamic_trigger_price == Decimal("95.0")
+    assert intent.status == "active"
+
+    # No trigger row — only watermark was seeded.
+    assert db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).first() is None
+
+
+@pytest.mark.integration
+def test_create_trailing_immediate_trigger_when_first_quote_already_below_trail(
+    db_session: Session,
+    client: TestClient,
+    quote_provider: InMemoryQuoteProvider,
+) -> None:
+    # Edge case from spec §193: when the first quote both initialises
+    # watermark AND already satisfies the trigger condition. With long 5%
+    # the watermark seeds at last=100, dynamic=95.0, and bid=95 == dynamic
+    # triggers immediately within the create transaction.
+    quote_provider.push_quote(_snapshot(bid="95", ask="95.5", last="100"))
+
+    response = client.post("/trade-intents", json=_trailing_payload())
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["data"]["status"] == "triggered"
+
+    intent_id = UUID(body["data"]["id"])
+    trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
+    assert trigger_row.trigger_price == Decimal("95.0000")
+    assert trigger_row.trigger_reference_price_type == "bid"
+    assert trigger_row.watermark_at_trigger == Decimal("100.0000")
+    assert trigger_row.dynamic_trigger_price_at_trigger == Decimal("95.0000")
+    # spec §178 semantic overload
+    assert trigger_row.target_price_effective == Decimal("95.0000")
+
+    notification_row = db_session.execute(
+        select(Notification).where(Notification.trade_intent_id == intent_id)
+    ).scalar_one()
+    assert notification_row.type == "trailing_stop_triggered"
+    assert "移動出場已觸發" in notification_row.rendered_title
+
+
+@pytest.mark.integration
+def test_create_trailing_without_quote_stays_active(
+    db_session: Session,
+    client: TestClient,
+    repo: IntentRepository,
+    quote_provider: InMemoryQuoteProvider,
+) -> None:
+    # No quote pushed — create should still succeed and intent stays active
+    # with watermarks NULL (later quote drives initialisation).
+    response = client.post("/trade-intents", json=_trailing_payload())
+
+    assert response.status_code == 201
+    intent_id = UUID(response.json()["data"]["id"])
+    intent = repo.find_by_id(intent_id, OWNER_USER_ID)
+    assert intent.status == "active"
+    assert intent.watermark_high is None
+    assert intent.dynamic_trigger_price is None

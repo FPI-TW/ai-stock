@@ -37,11 +37,6 @@ class ErrorCode(StrEnum):
     INVALID_CURSOR = "INVALID_CURSOR"
     QUOTE_PROVIDER_UNAVAILABLE = "QUOTE_PROVIDER_UNAVAILABLE"
     QUOTE_UNAVAILABLE = "QUOTE_UNAVAILABLE"
-    # Transitional. Raised when a strategy passes Pydantic validation but the
-    # command / evaluator pieces aren't wired yet (currently:
-    # `trailing_stop_alert`). Remove this code once the trailing command path
-    # lands and grep for STRATEGY_NOT_IMPLEMENTED returns 0 across the repo.
-    STRATEGY_NOT_IMPLEMENTED = "STRATEGY_NOT_IMPLEMENTED"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -60,7 +55,6 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INVALID_CURSOR: "Cursor 已失效或不存在",
     ErrorCode.QUOTE_PROVIDER_UNAVAILABLE: "行情服務暫時無法使用",
     ErrorCode.QUOTE_UNAVAILABLE: "尚未收到該標的的行情報價",
-    ErrorCode.STRATEGY_NOT_IMPLEMENTED: "此 strategy 尚未開放使用",
 }
 
 
@@ -153,15 +147,18 @@ def register_exception_handlers(app: FastAPI) -> None:
     # InvalidTickSizeError 必須在 InvalidPriceError 之前註冊（子類別優先）
     @app.exception_handler(InvalidTickSizeError)
     async def invalid_tick_size_handler(request: Request, exc: InvalidTickSizeError) -> JSONResponse:
+        details: dict[str, Any] = {
+            "value": str(exc.value),
+            "nearest_lower": str(exc.nearest_lower),
+            "nearest_upper": str(exc.nearest_upper),
+        }
+        if exc.field is not None:
+            details["field"] = exc.field
         return build_error_response(
             request=request,
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.INVALID_TICK_SIZE,
-            details={
-                "value": str(exc.value),
-                "nearest_lower": str(exc.nearest_lower),
-                "nearest_upper": str(exc.nearest_upper),
-            },
+            details=details,
         )
 
     @app.exception_handler(InvalidPriceError)

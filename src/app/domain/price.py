@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from typing import Literal
 
 
 def format_price_str(value: Decimal) -> str:
@@ -56,12 +57,26 @@ class InvalidPriceError(ValueError):
 
 
 class InvalidTickSizeError(InvalidPriceError):
-    """Price is parseable but not a valid multiple of its TWSE tick size."""
+    """Price is parseable but not a valid multiple of its TWSE tick size.
 
-    def __init__(self, value: object, reason: str, nearest_lower: Decimal, nearest_upper: Decimal) -> None:
+    ``field`` is the request-side field name that violated the check (e.g.
+    ``"trailValue"`` for trailing fixed_amount mode). None for the historical
+    target-price path — the route layer doesn't currently surface a field
+    name for buy/sell, so the envelope omits it when unset.
+    """
+
+    def __init__(
+        self,
+        value: object,
+        reason: str,
+        nearest_lower: Decimal,
+        nearest_upper: Decimal,
+        field: str | None = None,
+    ) -> None:
         super().__init__(value, reason)
         self.nearest_lower = nearest_lower
         self.nearest_upper = nearest_upper
+        self.field = field
 
 
 class InvalidAmountError(ValueError):
@@ -143,6 +158,25 @@ class PriceService:
         tick = cls.lookup_tick_size(security_type, price)
         lower = (price // tick) * tick
         return lower if lower == price else lower + tick
+
+    @classmethod
+    def round_to_tick_away_from_trigger(
+        cls,
+        security_type: SecurityType,
+        price: Decimal,
+        direction: Literal["down", "up"],
+    ) -> Decimal:
+        """Round ``price`` to a tick multiple, biased away from the trigger side.
+
+        Wrapper for BE-V0.5-05 tick service used by trailing evaluator (spec
+        §125, §139, §150). The semantic intent — keep ``dynamic_trigger_price``
+        on the side that makes triggering strictly harder — lives in the name;
+        the parameter stays trade-agnostic so callers own the long→down /
+        short→up mapping.
+        """
+        if direction == "down":
+            return cls.nearest_lower(security_type, price)
+        return cls.nearest_upper(security_type, price)
 
     @classmethod
     def validate(cls, request: PriceRequest) -> Decimal:
