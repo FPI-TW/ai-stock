@@ -74,8 +74,8 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.TWAP_INVALID_INTERVAL: "TWAP 間隔秒數不合法",
     ErrorCode.TWAP_INVALID_QUANTITY: "TWAP 目標量不合法",
     ErrorCode.TWAP_DUPLICATE_ACTIVE_PLAN: "已存在相同的 TWAP 計畫",
-    ErrorCode.MISSING_SYMBOLS: "請帶上至少一個 symbol",
-    ErrorCode.TOO_MANY_SYMBOLS: "symbols 數量超過上限",
+    ErrorCode.MISSING_SYMBOLS: "請至少帶入一個標的代號",
+    ErrorCode.TOO_MANY_SYMBOLS: "標的代號數量超過上限",
 }
 
 
