@@ -46,6 +46,8 @@ class ErrorCode(StrEnum):
     TWAP_INVALID_INTERVAL = "TWAP_INVALID_INTERVAL"
     TWAP_INVALID_QUANTITY = "TWAP_INVALID_QUANTITY"
     TWAP_DUPLICATE_ACTIVE_PLAN = "TWAP_DUPLICATE_ACTIVE_PLAN"
+    MISSING_SYMBOLS = "MISSING_SYMBOLS"
+    TOO_MANY_SYMBOLS = "TOO_MANY_SYMBOLS"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -72,6 +74,8 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.TWAP_INVALID_INTERVAL: "TWAP 間隔秒數不合法",
     ErrorCode.TWAP_INVALID_QUANTITY: "TWAP 目標量不合法",
     ErrorCode.TWAP_DUPLICATE_ACTIVE_PLAN: "已存在相同的 TWAP 計畫",
+    ErrorCode.MISSING_SYMBOLS: "請帶上至少一個 symbol",
+    ErrorCode.TOO_MANY_SYMBOLS: "symbols 數量超過上限",
 }
 
 
