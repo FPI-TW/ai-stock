@@ -21,9 +21,16 @@ router = APIRouter()
 
 _STATIC_TEST_DIR = Path(__file__).resolve().parent.parent.parent / "static" / "test"
 _INDEX_HTML = _STATIC_TEST_DIR / "index.html"
+_FLOWS_HTML = _STATIC_TEST_DIR / "flows.html"
 
 
 @router.get("/test", include_in_schema=False)
 def test_page() -> FileResponse:
     """Serve the API tester single-page HTML."""
     return FileResponse(_INDEX_HTML, media_type="text/html")
+
+
+@router.get("/test/flows", include_in_schema=False)
+def test_flows_page() -> FileResponse:
+    """Serve the flowchart reference page (Mermaid diagrams)."""
+    return FileResponse(_FLOWS_HTML, media_type="text/html")

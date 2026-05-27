@@ -66,17 +66,63 @@ function currentUserUuid() {
 // Rendering
 // ---------------------------------------------------------------------------
 
-function renderEndpointList(filter = "") {
+const endpointFilter = {
+  text: "",
+  method: "ALL",
+  onlyAvailable: false,
+};
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function highlightMatch(text, needle) {
+  const safe = escapeHtml(text);
+  if (!needle) return safe;
+  const idx = text.toLowerCase().indexOf(needle.toLowerCase());
+  if (idx < 0) return safe;
+  const end = idx + needle.length;
+  return (
+    escapeHtml(text.slice(0, idx)) +
+    `<mark class="endpoint-match">${escapeHtml(text.slice(idx, end))}</mark>` +
+    escapeHtml(text.slice(end))
+  );
+}
+
+function renderEndpointList() {
   const container = document.getElementById("endpoint-list");
   container.innerHTML = "";
 
+  const needle = endpointFilter.text.trim();
+  const total = ENDPOINTS.length;
   const groups = {};
+  let matched = 0;
+
   for (const ep of ENDPOINTS) {
-    if (filter) {
+    if (endpointFilter.method !== "ALL" && ep.method !== endpointFilter.method) continue;
+    if (endpointFilter.onlyAvailable && !ep.implemented) continue;
+    if (needle) {
       const haystack = `${ep.method} ${ep.path} ${ep.label || ""}`.toLowerCase();
-      if (!haystack.includes(filter.toLowerCase())) continue;
+      if (!haystack.includes(needle.toLowerCase())) continue;
     }
     (groups[ep.group] ??= []).push(ep);
+    matched += 1;
+  }
+
+  const countEl = document.getElementById("endpoint-count");
+  if (countEl) countEl.textContent = `${matched} / ${total}`;
+
+  if (matched === 0) {
+    const empty = document.createElement("div");
+    empty.className = "endpoint-list-empty";
+    empty.innerHTML = `
+      <div class="endpoint-list-empty-title">沒有符合的 endpoint</div>
+      <div class="endpoint-list-empty-hint">試著放寬條件，或按 Esc 清除搜尋</div>
+    `;
+    container.appendChild(empty);
+    return;
   }
 
   for (const [group, items] of Object.entries(groups)) {
@@ -95,9 +141,6 @@ function renderEndpointList(filter = "") {
       const div = document.createElement("div");
       div.className = `endpoint-item ${ep.implemented ? "" : "disabled"}`;
       div.title = ep.implemented ? ep.label || "" : `${ep.label || ""} — 規劃中（${ep.ticket || ""}）`;
-      // method+path keys used by selectEndpoint to highlight the correct row
-      // (textContent.includes was matching any row whose path string contained
-      // the clicked path, so GET /trade-intents lit up POST /trade-intents).
       div.dataset.endpointMethod = ep.method;
       div.dataset.endpointPath = ep.path;
       const flag = ep.implemented
@@ -105,8 +148,8 @@ function renderEndpointList(filter = "") {
         : `<span class="endpoint-status">○</span>`;
       div.innerHTML = `
         <span class="endpoint-method ${ep.method}">${ep.method}</span>
-        <span class="endpoint-path">${ep.path}</span>
-        ${ep.ticket ? `<span class="endpoint-ticket">${ep.ticket}</span>` : ""}
+        <span class="endpoint-path">${highlightMatch(ep.path, needle)}</span>
+        ${ep.ticket ? `<span class="endpoint-ticket">${escapeHtml(ep.ticket)}</span>` : ""}
         ${flag}
       `;
       if (ep.implemented) {
@@ -120,24 +163,162 @@ function renderEndpointList(filter = "") {
   }
 }
 
-function renderUserSelect() {
-  const sel = document.getElementById("user-select");
-  sel.innerHTML = "";
-  const defaultOpt = document.createElement("option");
-  defaultOpt.value = "default";
-  defaultOpt.textContent = "預設使用者";
-  sel.appendChild(defaultOpt);
-  for (const [label, uuid] of Object.entries(USERS)) {
-    const opt = document.createElement("option");
-    opt.value = label;
-    opt.textContent = `${label} · ${uuid.slice(0, 8)}…`;
-    sel.appendChild(opt);
+const USER_DISPLAY_NAME = {
+  default: "預設使用者",
+  alice: "Alice",
+  bob: "Bob",
+  charlie: "Charlie",
+};
+
+const USER_PALETTE = [
+  { bg: "rgba(0, 122, 255, 0.18)", color: "#0064D2" },
+  { bg: "rgba(52, 199, 89, 0.22)", color: "#1F8A3F" },
+  { bg: "rgba(255, 149, 0, 0.22)", color: "#B26200" },
+  { bg: "rgba(175, 82, 222, 0.20)", color: "#7A2EA0" },
+];
+
+function userPaletteOf(label) {
+  if (label === "default") {
+    return { bg: "rgba(120, 120, 128, 0.16)", color: "var(--text-secondary)" };
   }
-  sel.value = getSelectedUser();
-  sel.addEventListener("change", () => {
-    setSelectedUser(sel.value);
-    updateUserAvatars();
+  const labels = Object.keys(USERS);
+  const idx = Math.max(0, labels.indexOf(label));
+  return USER_PALETTE[idx % USER_PALETTE.length];
+}
+
+export function attachPopover(trigger, menu, opts = {}) {
+  const { align = "right", gap = 8, margin = 12 } = opts;
+  // ancestors with backdrop-filter / transform / filter trap position:fixed children.
+  // Reparent the menu to body so it can break out and overlay the page freely.
+  if (menu.parentElement !== document.body) document.body.appendChild(menu);
+
+  const position = () => {
+    if (menu.hidden) return;
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = menu.offsetWidth || 240;
+    let left = align === "right" ? rect.right - menuWidth : rect.left;
+    if (left < margin) left = margin;
+    if (left + menuWidth > window.innerWidth - margin) {
+      left = window.innerWidth - menuWidth - margin;
+    }
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(rect.bottom + gap)}px`;
+  };
+
+  const open = () => {
+    menu.hidden = false;
+    trigger.setAttribute("aria-expanded", "true");
+    position();
+    window.addEventListener("scroll", position, true);
+    window.addEventListener("resize", position);
+  };
+  const close = () => {
+    if (menu.hidden) return;
+    menu.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    window.removeEventListener("scroll", position, true);
+    window.removeEventListener("resize", position);
+  };
+  const toggle = () => (menu.hidden ? open() : close());
+
+  trigger.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    toggle();
   });
+  document.addEventListener("click", (ev) => {
+    if (!trigger.contains(ev.target) && !menu.contains(ev.target)) close();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !menu.hidden) {
+      ev.preventDefault();
+      close();
+      trigger.focus();
+    }
+  });
+
+  return { open, close, toggle, position };
+}
+
+export function renderIdentityMenu(menu, onSelect) {
+  menu.innerHTML = "";
+  const all = [["default", null], ...Object.entries(USERS)];
+  for (const [label, uuid] of all) {
+    const pal = userPaletteOf(label);
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "identity-menu-item";
+    item.dataset.userLabel = label;
+    item.setAttribute("role", "option");
+    item.innerHTML = `
+      <span class="identity-menu-avatar" style="background:${pal.bg};color:${pal.color}">${(label[0] || "D").toUpperCase()}</span>
+      <span class="identity-menu-text">
+        <span class="identity-menu-name">${escapeHtml(USER_DISPLAY_NAME[label] || label)}</span>
+        <span class="identity-menu-uuid">${uuid ? escapeHtml(uuid.slice(0, 8)) + "…" : "不送 X-Local-User-Id"}</span>
+      </span>
+      <span class="identity-menu-check" aria-hidden="true">
+        <svg viewBox="0 0 16 16"><polyline points="3 8.5 6.5 12 13 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </span>
+    `;
+    item.addEventListener("click", () => onSelect(label));
+    menu.appendChild(item);
+  }
+}
+
+function attachIdentityMenuKeyboard(trigger, menu, popover) {
+  trigger.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowDown" || ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      popover.open();
+      menu.querySelector(".identity-menu-item.active, .identity-menu-item")?.focus();
+    }
+  });
+  menu.addEventListener("keydown", (ev) => {
+    const items = Array.from(menu.querySelectorAll(".identity-menu-item"));
+    const idx = items.indexOf(document.activeElement);
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      items[(idx + 1) % items.length]?.focus();
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      items[(idx - 1 + items.length) % items.length]?.focus();
+    }
+  });
+}
+
+function renderUserSwitcher() {
+  const menu = document.getElementById("dev-user-menu");
+  const trigger = document.getElementById("dev-user-trigger");
+  const popover = attachPopover(trigger, menu, { align: "right" });
+  renderIdentityMenu(menu, (label) => {
+    setSelectedUser(label);
+    syncDevUserSwitcher();
+    popover.close();
+  });
+  attachIdentityMenuKeyboard(trigger, menu, popover);
+  syncDevUserSwitcher();
+}
+
+export function syncDevUserSwitcher() {
+  const label = getSelectedUser();
+  const name = USER_DISPLAY_NAME[label] || label;
+  const pal = userPaletteOf(label);
+  updateUserAvatars();
+  for (const avatarId of ["dev-user-avatar", "user-mode-avatar"]) {
+    const av = document.getElementById(avatarId);
+    if (av) {
+      av.style.background = pal.bg;
+      av.style.color = pal.color;
+    }
+  }
+  const devLabel = document.getElementById("dev-user-label");
+  if (devLabel) devLabel.textContent = name;
+  const greeting = document.getElementById("user-greeting");
+  if (greeting) greeting.textContent = name;
+  for (const item of document.querySelectorAll(".identity-menu-item")) {
+    const on = item.dataset.userLabel === label;
+    item.classList.toggle("active", on);
+    item.setAttribute("aria-selected", on ? "true" : "false");
+  }
 }
 
 function selectEndpoint(ep) {
@@ -162,15 +343,41 @@ function selectEndpoint(ep) {
   document.getElementById("req-body").value = "";
   document.getElementById("send-btn").disabled = false;
 
-  const exampleSel = document.getElementById("example-select");
-  exampleSel.innerHTML = '<option value="">Fill example…</option>';
-  if (ep.examples) {
-    for (const name of Object.keys(ep.examples)) {
-      const opt = document.createElement("option");
-      opt.value = name;
-      opt.textContent = name;
-      exampleSel.appendChild(opt);
-    }
+  renderExampleMenu(ep);
+}
+
+let examplePopover = null;
+
+function renderExampleMenu(ep) {
+  const trigger = document.getElementById("example-trigger");
+  const menu = document.getElementById("example-menu");
+  if (!examplePopover) examplePopover = attachPopover(trigger, menu, { align: "right" });
+
+  menu.innerHTML = "";
+  const names = ep?.examples ? Object.keys(ep.examples) : [];
+  trigger.hidden = names.length === 0;
+  if (names.length === 0) {
+    examplePopover.close();
+    return;
+  }
+
+  for (const name of names) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "popover-menu-item example-menu-item";
+    item.dataset.exampleName = name;
+    item.setAttribute("role", "option");
+    item.innerHTML = `
+      <span class="popover-menu-text">
+        <span class="popover-menu-name">${escapeHtml(name)}</span>
+      </span>
+    `;
+    item.addEventListener("click", () => {
+      if (!state.selected || !state.selected.examples) return;
+      document.getElementById("req-body").value = JSON.stringify(state.selected.examples[name], null, 2);
+      examplePopover.close();
+    });
+    menu.appendChild(item);
   }
 }
 
@@ -375,7 +582,7 @@ function buildHeaders(extra) {
   return headers;
 }
 
-export async function sendRequest({ method, path, pathParams, query, headers, body }) {
+export async function sendRequest({ method, path, pathParams, query, headers, body, signal }) {
   const url = new URL(substitutePathParams(path, pathParams), window.location.origin);
   for (const [k, v] of Object.entries(query || {})) {
     if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
@@ -384,6 +591,7 @@ export async function sendRequest({ method, path, pathParams, query, headers, bo
     method,
     headers: buildHeaders(headers),
   };
+  if (signal) init.signal = signal;
   if (method !== "GET" && method !== "HEAD" && body !== undefined) {
     init.body = typeof body === "string" ? body : JSON.stringify(body);
   }
@@ -480,26 +688,14 @@ async function copyToClipboard(text, btn) {
   }
 }
 
-function onExampleSelected(ev) {
-  if (!state.selected || !state.selected.examples) return;
-  const name = ev.target.value;
-  if (!name) return;
-  document.getElementById("req-body").value = JSON.stringify(state.selected.examples[name], null, 2);
-  ev.target.value = "";
-}
-
 // ---------------------------------------------------------------------------
 // Demo flows
 // ---------------------------------------------------------------------------
 
-function demoLog(line, klass = "") {
+function demoLog(line) {
   const pre = document.getElementById("demo-log");
   const ts = new Date().toLocaleTimeString();
   pre.textContent += `\n[${ts}] ${line}`;
-  if (klass) {
-    // Simple class-on-last-line trick: wrap the line in a span via innerHTML.
-    // Plain pre keeps formatting; styling only on selected lines.
-  }
   pre.scrollTop = pre.scrollHeight;
 }
 
@@ -613,7 +809,7 @@ async function demoMultiUser() {
     demoLog(`  → ${aliceList.status} alice ${found ? "sees" : "does NOT see"} the intent`, found ? "ok" : "err");
   } finally {
     setSelectedUser(initial);
-    document.getElementById("user-select").value = initial;
+    syncDevUserSwitcher();
   }
 }
 
@@ -666,7 +862,7 @@ async function pollClockState() {
     }
     const t = formatTaipeiTime(clock.currentTaipei);
     const session = clock.withinRegularSession ? "盤中" : "盤外";
-    const frozen = clock.isFrozen ? "🧊 " : "";
+    const frozen = clock.isFrozen ? "凍結 · " : "";
     display.textContent = `${frozen}${t} · ${session}`;
   } catch (_) {
     display.textContent = "系統時間";
@@ -728,14 +924,10 @@ async function openApiSanityCheck() {
 
 function init() {
   // Base URL 已從 topbar 移除（資訊密度精簡）；保留註解標示位置。
-  renderUserSelect();
-  updateUserAvatars();
+  renderUserSwitcher();
   renderEndpointList();
-  document.getElementById("endpoint-filter").addEventListener("input", (e) => {
-    renderEndpointList(e.target.value);
-  });
+  initEndpointFilterControls();
   document.getElementById("send-btn").addEventListener("click", onSend);
-  document.getElementById("example-select").addEventListener("change", onExampleSelected);
   document.getElementById("refresh-state-btn").addEventListener("click", refreshServerState);
   document.getElementById("reset-all-btn").addEventListener("click", async () => {
     state.history = [];
@@ -771,6 +963,85 @@ function initResponseActions() {
   });
 }
 
+export function attachSegmentedIndicator(group, opts = {}) {
+  const { activeSelector = "button.active" } = opts;
+  let indicator = group.querySelector(":scope > .seg-indicator");
+  if (!indicator) {
+    indicator = document.createElement("span");
+    indicator.className = "seg-indicator";
+    indicator.setAttribute("aria-hidden", "true");
+    group.prepend(indicator);
+  }
+  const reposition = () => {
+    const active = group.querySelector(activeSelector);
+    if (!active) {
+      indicator.style.opacity = "0";
+      return;
+    }
+    indicator.style.opacity = "1";
+    indicator.style.transform = `translate(${active.offsetLeft}px, ${active.offsetTop}px)`;
+    indicator.style.width = `${active.offsetWidth}px`;
+    indicator.style.height = `${active.offsetHeight}px`;
+  };
+  requestAnimationFrame(reposition);
+  window.addEventListener("resize", reposition);
+  return reposition;
+}
+
+function initEndpointFilterControls() {
+  const input = document.getElementById("endpoint-filter");
+  const clear = document.getElementById("endpoint-filter-clear");
+  const chips = document.getElementById("endpoint-method-chips");
+  const onlyBtn = document.getElementById("endpoint-only-available");
+
+  const syncClear = () => {
+    clear.hidden = !input.value;
+  };
+
+  input.addEventListener("input", () => {
+    endpointFilter.text = input.value;
+    syncClear();
+    renderEndpointList();
+  });
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && input.value) {
+      ev.preventDefault();
+      input.value = "";
+      endpointFilter.text = "";
+      syncClear();
+      renderEndpointList();
+    }
+  });
+  clear.addEventListener("click", () => {
+    input.value = "";
+    endpointFilter.text = "";
+    syncClear();
+    renderEndpointList();
+    input.focus();
+  });
+
+  const repositionMethodIndicator = attachSegmentedIndicator(chips);
+  for (const btn of chips.querySelectorAll("button")) {
+    btn.addEventListener("click", () => {
+      endpointFilter.method = btn.dataset.method;
+      for (const b of chips.querySelectorAll("button")) {
+        const on = b === btn;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+      }
+      repositionMethodIndicator();
+      renderEndpointList();
+    });
+  }
+
+  onlyBtn.addEventListener("click", () => {
+    endpointFilter.onlyAvailable = !endpointFilter.onlyAvailable;
+    onlyBtn.classList.toggle("active", endpointFilter.onlyAvailable);
+    onlyBtn.setAttribute("aria-pressed", endpointFilter.onlyAvailable ? "true" : "false");
+    renderEndpointList();
+  });
+}
+
 function initGlobalKeyboardShortcuts() {
   let userView = null;
   // user-view module loaded lazily; capture reference once available
@@ -778,6 +1049,24 @@ function initGlobalKeyboardShortcuts() {
     userView = m;
   });
   window.addEventListener("keydown", (ev) => {
+    const tag = (ev.target?.tagName || "").toLowerCase();
+    const inEditable = tag === "input" || tag === "textarea" || tag === "select" || ev.target?.isContentEditable;
+
+    // "/" — focus endpoint filter (Dev mode), ignoring presses inside text fields
+    if (ev.key === "/" && !inEditable && !ev.metaKey && !ev.ctrlKey && !ev.altKey) {
+      const mode = document.getElementById("app").dataset.mode;
+      if (mode === "dev") {
+        const input = document.getElementById("endpoint-filter");
+        if (input) {
+          ev.preventDefault();
+          input.focus();
+          // place caret at end without selecting existing text
+          const len = input.value.length;
+          input.setSelectionRange(len, len);
+          return;
+        }
+      }
+    }
     // Esc — close any open modal (dev pane has no modal; user view has sheets)
     if (ev.key === "Escape") {
       if (userView?.closeAllModals?.()) ev.preventDefault();
@@ -798,20 +1087,28 @@ function initGlobalKeyboardShortcuts() {
 // User-view mode integration
 // ---------------------------------------------------------------------------
 
+let repositionModeIndicator = () => {};
+
 async function initUserViewMode() {
   // dynamic import keeps Dev-only sessions from paying the parse cost
-  const uv = await import("/test-assets/user-view.js");
+  const [uv, sv] = await Promise.all([
+    import("/test-assets/user-view.js"),
+    import("/test-assets/service-view.js"),
+  ]);
   uv.initUserView();
+  sv.initServiceView();
+
+  repositionModeIndicator = attachSegmentedIndicator(document.querySelector(".mode-toggle"));
 
   const savedMode = localStorage.getItem("ai-stock-test-mode") || "dev";
-  applyMode(savedMode, uv);
+  applyMode(savedMode, uv, sv);
 
   for (const btn of document.querySelectorAll(".mode-toggle button")) {
-    btn.addEventListener("click", () => applyMode(btn.dataset.mode, uv));
+    btn.addEventListener("click", () => applyMode(btn.dataset.mode, uv, sv));
   }
 }
 
-function applyMode(mode, uv) {
+function applyMode(mode, uv, sv) {
   const app = document.getElementById("app");
   app.dataset.mode = mode;
   localStorage.setItem("ai-stock-test-mode", mode);
@@ -820,7 +1117,9 @@ function applyMode(mode, uv) {
     btn.classList.toggle("active", isActive);
     btn.setAttribute("aria-selected", String(isActive));
   }
+  repositionModeIndicator();
   if (mode === "user") uv.onEnterUserMode();
+  if (mode === "service") sv.onEnterServiceMode();
 }
 
 if (document.readyState === "loading") {

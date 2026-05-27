@@ -46,8 +46,10 @@ Each step logs its outcome inline so you can scrub through what happened.
 
 ## Architecture notes
 
-- **No build step, no CDN**. Vanilla HTML + ES modules + plain CSS, served
-  via `StaticFiles` from `src/app/static/test/`. The page works offline.
+- **No build step for the tester**. Vanilla HTML + ES modules + plain CSS,
+  served via `StaticFiles` from `src/app/static/test/`. The main `/test`
+  console works offline; `/test/flows` loads Mermaid from a version-pinned CDN
+  with SRI because the flowchart renderer is documentation-only.
 - **Endpoint catalog is hardcoded** in `endpoints.js`. When a planned
   endpoint lands, flip its `implemented: false` to `true` in the same PR;
   treat the flip as a UI acceptance check for the work order.
@@ -98,8 +100,11 @@ time / trigger intents.
 
 - `src/app/static/test/index.html` — page markup.
 - `src/app/static/test/app.js` — endpoint render, request/response, demos.
-- `src/app/static/test/styles.css` — dark theme, grid layout.
+- `src/app/static/test/user-view.js` — 使用者視角 dashboard / 下單 sheet。
+- `src/app/static/test/service-view.js` — 服務端推行情、時鐘、評估控制台。
+- `src/app/static/test/flows.html` — 系統流程圖與列印版。
+- `src/app/static/test/styles.css` — light theme, grid layout.
 - `src/app/static/test/endpoints.js` — catalog of endpoints.
-- `src/app/api/routes/test_page.py` — serves `index.html`.
+- `src/app/api/routes/test_page.py` — serves `index.html` and `flows.html`.
 - `src/app/api/routes/dev.py` — `/dev/push-quote`, `/dev/set-clock`,
   `/dev/server-state` (the plumbing the page relies on).
