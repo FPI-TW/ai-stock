@@ -1,4 +1,4 @@
-.PHONY: install install-hooks dev lint format format-check typecheck commit-check pre-push-check check migrate downgrade test test-integration check-shioaji-isolation
+.PHONY: install install-hooks dev lint format format-check typecheck commit-check pre-push-check check migrate downgrade seed test test-integration check-shioaji-isolation
 
 DATABASE_URL ?= postgresql+psycopg://ai_stock:ai_stock@localhost:5432/ai_stock
 
@@ -49,6 +49,9 @@ migrate:
 
 downgrade:
 	DATABASE_URL=$(DATABASE_URL) uv run alembic downgrade base
+
+seed:
+	DATABASE_URL=$(DATABASE_URL) PYTHONPATH=src uv run python -m app.db.seed
 
 test:
 	uv run pytest -s
