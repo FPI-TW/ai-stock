@@ -380,47 +380,86 @@
 
     <!-- TWAP 拆單 modal -->
     <div id="twap-overlay" hidden>
-      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="twap-title">
+      <div class="sheet twap-sheet" role="dialog" aria-modal="true" aria-labelledby="twap-title">
         <header class="sheet-header">
           <button type="button" id="twap-back" class="sheet-action" hidden>← 改條件</button>
           <button type="button" id="twap-close" class="sheet-action">關閉</button>
           <h3 id="twap-title">TWAP 拆單</h3>
-          <button type="button" id="twap-next" class="sheet-action primary">下一步</button>
+          <button type="button" id="twap-next" class="sheet-action primary" disabled>下一步</button>
         </header>
 
-        <div class="sheet-body">
-          <div class="sheet-step twap-step" data-step="1">
-            <div class="sheet-field">
-              <label for="twap-symbol">標的代號</label>
-              <input id="twap-symbol" type="text" placeholder="例如 2330" autocomplete="off" />
+        <ol class="sheet-stepper" id="twap-stepper" aria-label="步驟進度">
+          <li class="step-dot active" data-step="1">
+            <span class="step-circle">1</span>
+            <span class="step-label">設定條件</span>
+          </li>
+          <li class="step-bar" aria-hidden="true"></li>
+          <li class="step-dot" data-step="2">
+            <span class="step-circle">2</span>
+            <span class="step-label">確認拆單</span>
+          </li>
+        </ol>
+
+        <div id="twap-error" class="twap-error" hidden></div>
+
+        <!-- Step 1: 設定條件 -->
+        <div class="sheet-step twap-step" data-step="1">
+          <div class="form-row">
+            <div class="form-group form-group-grow">
+              <label for="twap-symbol">標的代號 <span class="hint">(例：2330)</span></label>
+              <input type="text" id="twap-symbol" placeholder="2330" autocomplete="off" />
             </div>
-            <div class="sheet-field">
+            <div class="form-group">
               <label>方向</label>
-              <div class="twap-side-chips" id="twap-side-chips" role="tablist">
-                <button type="button" data-side="long" class="active" role="tab">多單 (long)</button>
-                <button type="button" data-side="short" role="tab">空單 (short)</button>
-              </div>
-            </div>
-            <div class="sheet-field-row">
-              <div class="sheet-field">
-                <label for="twap-quantity">總張數</label>
-                <input id="twap-quantity" type="number" min="2" value="5" />
-              </div>
-              <div class="sheet-field">
-                <label for="twap-interval">間隔（秒）</label>
-                <input id="twap-interval" type="number" min="1" value="60" />
-              </div>
-              <div class="sheet-field">
-                <label for="twap-endtime">結束時間 (HH:MM)</label>
-                <input id="twap-endtime" type="time" value="13:25" />
+              <div class="svc-side-chips twap-side-chips" id="twap-side-chips" role="tablist" aria-label="方向">
+                <button type="button" data-side="long" class="active" role="tab" aria-selected="true">多單</button>
+                <button type="button" data-side="short" role="tab" aria-selected="false">空單</button>
               </div>
             </div>
           </div>
 
-          <div class="sheet-step twap-step" data-step="2" hidden>
-            <div class="twap-preview-loading" id="twap-preview-loading" hidden>計算拆單計畫中…</div>
-            <div class="twap-preview-summary" id="twap-preview-summary" hidden></div>
-            <div class="twap-preview-slices" id="twap-preview-slices"></div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="twap-quantity">總張數 <span class="hint">(≥ 2)</span></label>
+              <input type="number" id="twap-quantity" min="2" value="5" />
+            </div>
+            <div class="form-group">
+              <label for="twap-interval">間隔秒數 <span class="hint">(≥ 1)</span></label>
+              <input type="number" id="twap-interval" min="1" value="60" />
+            </div>
+            <div class="form-group">
+              <label for="twap-endtime">結束時間 <span class="hint">(HH:MM, TPE)</span></label>
+              <input type="time" id="twap-endtime" value="13:25" />
+            </div>
+          </div>
+
+          <div class="twap-form-hint">
+            預覽會回傳每筆切片的時間表；確認送出前皆不會建立委託。
+          </div>
+        </div>
+
+        <!-- Step 2: 確認拆單 -->
+        <div class="sheet-step twap-step" data-step="2" hidden>
+          <div id="twap-preview-loading" class="twap-preview-loading" hidden>
+            <div class="twap-spinner" aria-hidden="true"></div>
+            <span>計算拆單計畫中…</span>
+          </div>
+
+          <div id="twap-preview-content" hidden>
+            <div id="twap-hero" class="twap-hero"></div>
+
+            <section class="twap-meta">
+              <h4 class="twap-meta-title">計畫資訊</h4>
+              <dl id="twap-meta-grid" class="twap-meta-grid"></dl>
+            </section>
+
+            <section class="twap-slices">
+              <header class="twap-slices-head">
+                <h4 class="twap-slices-title">拆單明細</h4>
+                <span id="twap-slices-count" class="twap-slices-count"></span>
+              </header>
+              <div id="twap-slices-list" class="twap-slices-list" role="list"></div>
+            </section>
           </div>
         </div>
       </div>

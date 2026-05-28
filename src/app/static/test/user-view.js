@@ -672,11 +672,13 @@ const twapState = {
   step: 1,
   positionSide: "long",
   preview: null,
+  submitting: false,
+  repositionSideIndicator: () => {},
 };
 
 function readTwapInputs() {
   return {
-    symbol: document.getElementById("twap-symbol").value.trim(),
+    symbol: document.getElementById("twap-symbol").value.trim().toUpperCase(),
     positionSide: twapState.positionSide,
     quantityLots: Number(document.getElementById("twap-quantity").value),
     intervalSeconds: Number(document.getElementById("twap-interval").value),
@@ -692,20 +694,53 @@ function validateTwapInputs(inputs) {
   return null;
 }
 
+function setTwapError(msg) {
+  const el = document.getElementById("twap-error");
+  if (!el) return;
+  if (!msg) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  el.textContent = msg;
+  el.hidden = false;
+}
+
+function updateTwapNextState() {
+  const btn = document.getElementById("twap-next");
+  if (twapState.submitting) {
+    btn.disabled = true;
+    return;
+  }
+  if (twapState.step === 1) {
+    const err = validateTwapInputs(readTwapInputs());
+    btn.disabled = !!err;
+  } else if (twapState.step === 2) {
+    btn.disabled = !twapState.preview;
+  }
+}
+
 function openTwapSheet() {
   twapState.step = 1;
   twapState.positionSide = "long";
   twapState.preview = null;
+  twapState.submitting = false;
   document.getElementById("twap-symbol").value = "";
   document.getElementById("twap-quantity").value = "5";
   document.getElementById("twap-interval").value = "60";
   document.getElementById("twap-endtime").value = "13:25";
   for (const b of document.querySelectorAll("#twap-side-chips button")) {
-    b.classList.toggle("active", b.dataset.side === "long");
+    const active = b.dataset.side === "long";
+    b.classList.toggle("active", active);
+    b.setAttribute("aria-selected", active ? "true" : "false");
   }
+  setTwapError(null);
   showTwapStep(1);
   document.getElementById("twap-overlay").hidden = false;
-  setTimeout(() => document.getElementById("twap-symbol").focus(), 50);
+  setTimeout(() => {
+    twapState.repositionSideIndicator();
+    document.getElementById("twap-symbol").focus();
+  }, 50);
 }
 
 function closeTwapSheet() {
@@ -717,24 +752,32 @@ function showTwapStep(step) {
   for (const node of document.querySelectorAll(".twap-step")) {
     node.hidden = Number(node.dataset.step) !== step;
   }
+  for (const dot of document.querySelectorAll("#twap-stepper .step-dot")) {
+    const ds = Number(dot.dataset.step);
+    dot.classList.toggle("active", ds === step);
+    dot.classList.toggle("completed", ds < step);
+  }
   document.getElementById("twap-back").hidden = step === 1;
   document.getElementById("twap-close").hidden = step !== 1;
   document.getElementById("twap-title").textContent = step === 1 ? "TWAP 拆單" : "確認拆單計畫";
-  document.getElementById("twap-next").textContent = step === 1 ? "預覽" : "確認送出";
+  document.getElementById("twap-next").textContent = step === 1 ? "下一步" : "確認送出";
+  setTwapError(null);
+  updateTwapNextState();
 }
 
 async function fetchTwapPreview() {
   const inputs = readTwapInputs();
   const err = validateTwapInputs(inputs);
   if (err) {
-    showToast(err, "error");
+    setTwapError(err);
     return;
   }
 
   showTwapStep(2);
   document.getElementById("twap-preview-loading").hidden = false;
-  document.getElementById("twap-preview-summary").hidden = true;
-  document.getElementById("twap-preview-slices").innerHTML = "";
+  document.getElementById("twap-preview-content").hidden = true;
+  twapState.preview = null;
+  updateTwapNextState();
 
   const resp = await sendRequest({
     method: "POST",
@@ -745,57 +788,89 @@ async function fetchTwapPreview() {
 
   if (resp.status < 200 || resp.status >= 300) {
     const msg = resp.body?.error?.message || `預覽失敗 (${resp.status})`;
-    showToast(msg, "error");
     showTwapStep(1);
+    setTwapError(msg);
     return;
   }
 
   twapState.preview = resp.body?.data || null;
   renderTwapPreview(twapState.preview);
+  document.getElementById("twap-preview-content").hidden = false;
+  updateTwapNextState();
 }
 
 function renderTwapPreview(plan) {
   if (!plan) return;
   const sideLabel = plan.positionSide === "long" ? "多單" : "空單";
-  const summary = el("div", { className: "twap-summary-grid" }, [
-    twapSummaryRow("標的", plan.symbol),
-    twapSummaryRow("方向", sideLabel),
-    twapSummaryRow("交易日", plan.tradingDate),
-    twapSummaryRow("階段", plan.tradingPhase),
-    twapSummaryRow("總張數", `${plan.targetQuantityLots} 張`),
-    twapSummaryRow("拆 / 可建", `${plan.materializedSliceCount} / ${plan.availableSliceCount}`),
-    twapSummaryRow("間隔", `${plan.intervalSeconds} 秒`),
-    twapSummaryRow("開始 / 結束", `${fmtClockTime(plan.startAt)} → ${fmtClockTime(plan.endAt)}`),
-  ]);
-  const summaryEl = document.getElementById("twap-preview-summary");
-  summaryEl.innerHTML = "";
-  summaryEl.appendChild(summary);
-  summaryEl.hidden = false;
+  const sideClass = plan.positionSide === "long" ? "long" : "short";
+  const sliceCount = Array.isArray(plan.slices) ? plan.slices.length : 0;
+  const startLabel = fmtTwapTime(plan.startAt);
+  const endLabel = fmtTwapTime(plan.endAt);
+  const minutes = Math.max(1, Math.round((new Date(plan.endAt) - new Date(plan.startAt)) / 60000));
 
-  const slices = document.getElementById("twap-preview-slices");
-  slices.innerHTML = "";
-  if (Array.isArray(plan.slices) && plan.slices.length > 0) {
-    slices.appendChild(el("div", { className: "twap-slices-title" }, [`拆單明細（${plan.slices.length} 筆）`]));
-    for (const s of plan.slices) {
-      slices.appendChild(el("div", { className: "twap-slice-row" }, [
-        el("span", { className: "twap-slice-time" }, [fmtClockTime(s.scheduledAt)]),
-        el("span", { className: "twap-slice-qty" }, [`${s.quantityLots} 張`]),
-      ]));
-    }
+  // Hero
+  const hero = document.getElementById("twap-hero");
+  hero.innerHTML = "";
+  hero.appendChild(el("div", { className: `twap-hero-side twap-side-${sideClass}` }, [sideLabel]));
+  hero.appendChild(el("div", { className: "twap-hero-symbol" }, [plan.symbol]));
+  hero.appendChild(el("div", { className: "twap-hero-figures" }, [
+    twapFigure(`${plan.targetQuantityLots}`, "總張數"),
+    twapFigure(`${sliceCount}`, "切片"),
+    twapFigure(`${minutes} 分`, "持續"),
+  ]));
+
+  // Meta grid
+  const meta = document.getElementById("twap-meta-grid");
+  meta.innerHTML = "";
+  metaPairs(meta, [
+    ["交易日", plan.tradingDate],
+    ["階段", plan.tradingPhase],
+    ["間隔", `${plan.intervalSeconds} 秒`],
+    ["拆 / 可建", `${plan.materializedSliceCount} / ${plan.availableSliceCount}`],
+    ["開始", startLabel],
+    ["結束", endLabel],
+  ]);
+
+  // Slices
+  document.getElementById("twap-slices-count").textContent = `共 ${sliceCount} 筆`;
+  const list = document.getElementById("twap-slices-list");
+  list.innerHTML = "";
+  if (sliceCount === 0) {
+    list.appendChild(el("div", { className: "twap-slices-empty" }, ["此計畫沒有可建立的切片（可能交易日已結束）"]));
+    return;
+  }
+  for (const [idx, s] of plan.slices.entries()) {
+    list.appendChild(el("div", { className: "twap-slice-row", role: "listitem" }, [
+      el("span", { className: "twap-slice-idx" }, [`#${idx + 1}`]),
+      el("span", { className: "twap-slice-time" }, [fmtTwapTime(s.scheduledAt)]),
+      el("span", { className: "twap-slice-qty" }, [`${s.quantityLots} 張`]),
+    ]));
   }
 }
 
-function twapSummaryRow(label, value) {
-  return el("div", { className: "twap-summary-row" }, [
-    el("span", { className: "twap-summary-label" }, [label]),
-    el("span", { className: "twap-summary-value" }, [String(value)]),
+function twapFigure(value, label) {
+  return el("div", { className: "twap-figure" }, [
+    el("span", { className: "twap-figure-value" }, [value]),
+    el("span", { className: "twap-figure-label" }, [label]),
   ]);
 }
 
-function fmtClockTime(iso) {
+function metaPairs(container, pairs) {
+  for (const [label, value] of pairs) {
+    container.appendChild(el("dt", {}, [label]));
+    container.appendChild(el("dd", {}, [String(value ?? "—")]));
+  }
+}
+
+function fmtTwapTime(iso) {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleString("zh-TW", { hour12: false });
+    return new Date(iso).toLocaleTimeString("zh-TW", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
   } catch {
     return iso;
   }
@@ -805,21 +880,25 @@ async function confirmTwap() {
   const inputs = readTwapInputs();
   const err = validateTwapInputs(inputs);
   if (err) {
-    showToast(err, "error");
+    setTwapError(err);
     return;
   }
+  twapState.submitting = true;
+  updateTwapNextState();
   const resp = await sendRequest({
     method: "POST",
     path: "/trade-intents/twap/confirm",
     body: inputs,
   });
+  twapState.submitting = false;
   if (resp.status === 201) {
     closeTwapSheet();
     showToast(`TWAP 拆單已建立 — ${resp.body?.data?.symbol || inputs.symbol}`, "success");
     refreshDashboard();
   } else {
     const msg = resp.body?.error?.message || `送出失敗 (${resp.status})`;
-    showToast(msg, "error");
+    setTwapError(msg);
+    updateTwapNextState();
   }
 }
 
@@ -1134,14 +1213,38 @@ export function initUserView() {
   document.getElementById("twap-overlay").addEventListener("click", (ev) => {
     if (ev.target.id === "twap-overlay") closeTwapSheet();
   });
-  for (const btn of document.querySelectorAll("#twap-side-chips button")) {
+
+  // Side chips — segmented indicator + click handler
+  const twapSideChips = document.getElementById("twap-side-chips");
+  twapState.repositionSideIndicator = attachSegmentedIndicator(twapSideChips);
+  for (const btn of twapSideChips.querySelectorAll("button")) {
     btn.addEventListener("click", () => {
       twapState.positionSide = btn.dataset.side;
-      for (const b of document.querySelectorAll("#twap-side-chips button")) {
-        b.classList.toggle("active", b === btn);
+      for (const b of twapSideChips.querySelectorAll("button")) {
+        const active = b === btn;
+        b.classList.toggle("active", active);
+        b.setAttribute("aria-selected", active ? "true" : "false");
       }
+      twapState.repositionSideIndicator();
     });
   }
+
+  // Input validation drives twap-next disabled state
+  for (const id of ["twap-symbol", "twap-quantity", "twap-interval", "twap-endtime"]) {
+    document.getElementById(id).addEventListener("input", () => {
+      setTwapError(null);
+      updateTwapNextState();
+    });
+  }
+
+  // Enter to submit when on step 1 (most natural keyboard flow)
+  document.getElementById("twap-overlay").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && twapState.step === 1 && !ev.target.matches("textarea")) {
+      ev.preventDefault();
+      const btn = document.getElementById("twap-next");
+      if (!btn.disabled) btn.click();
+    }
+  });
 
   // Step 1: symbol search
   document.getElementById("symbol-search").addEventListener("input", (ev) => {

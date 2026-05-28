@@ -1630,83 +1630,273 @@ mark.endpoint-match {
 
 /* ---- TWAP sheet --------------------------------------------------------- */
 
+.twap-sheet {
+  width: 100%;
+  max-width: 560px;
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 18px;
+  background: var(--bg-elevated, #fff);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.twap-sheet .sheet-stepper {
+  margin: 8px 20px 4px;
+}
+
+.twap-sheet .sheet-step {
+  padding: 0 20px 20px;
+  overflow-y: auto;
+}
+
+.twap-sheet .sheet-step .form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.twap-sheet .sheet-step .form-row:has(.form-group:nth-child(3)) {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.twap-sheet input[type="time"] {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-input);
+  border: 0;
+  border-radius: var(--radius-control);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  outline: 0;
+  transition: box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.twap-sheet input[type="time"]:focus {
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-focus);
+}
+
+.twap-error {
+  margin: 4px 20px 8px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(255, 59, 48, 0.08);
+  color: #c52a1f;
+  border: 1px solid rgba(255, 59, 48, 0.2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.twap-form-hint {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: rgba(0, 122, 255, 0.06);
+  border-radius: 10px;
+  color: #1c4f8f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .twap-side-chips {
-  display: inline-flex;
-  background: rgba(0, 0, 0, 0.05);
-  border-radius: var(--radius-pill);
-  padding: 4px;
-  gap: 4px;
+  align-self: stretch;
 }
 
 .twap-side-chips button {
-  background: transparent;
-  border: 0;
-  padding: 6px 14px;
-  border-radius: var(--radius-pill);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  color: var(--text-secondary, #666);
-  transition: background 0.15s ease, color 0.15s ease;
+  flex: 1;
 }
 
-.twap-side-chips button.active {
-  background: #fff;
-  color: var(--text-primary, #111);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+.form-group-grow {
+  flex: 2;
 }
 
-.twap-preview-loading,
-.twap-preview-summary,
-.twap-preview-slices {
-  margin-top: 8px;
-}
+/* loading + spinner */
 
 .twap-preview-loading {
-  font-size: 13px;
-  color: var(--text-secondary, #666);
-  padding: 12px;
-  text-align: center;
-}
-
-.twap-summary-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px 16px;
-  background: rgba(0, 0, 0, 0.03);
-  border-radius: 8px;
-  padding: 12px 14px;
-}
-
-.twap-summary-row {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px 16px;
   font-size: 13px;
-}
-
-.twap-summary-label {
   color: var(--text-secondary, #666);
 }
 
-.twap-summary-value {
+.twap-preview-loading[hidden] {
+  display: none !important;
+}
+
+.twap-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(0, 122, 255, 0.2);
+  border-top-color: var(--accent, #007aff);
+  animation: twap-spin 0.8s linear infinite;
+}
+
+@keyframes twap-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* hero card */
+
+.twap-hero {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  gap: 6px 14px;
+  align-items: center;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.08), rgba(88, 86, 214, 0.06));
+  border: 1px solid rgba(0, 122, 255, 0.14);
+}
+
+.twap-hero-side {
+  grid-row: 1;
+  grid-column: 1;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
   font-weight: 600;
 }
 
-.twap-slices-title {
-  font-size: 12px;
+.twap-hero-side.twap-side-long {
+  background: rgba(52, 199, 89, 0.16);
+  color: #0a7a30;
+}
+
+.twap-hero-side.twap-side-short {
+  background: rgba(255, 59, 48, 0.16);
+  color: #b51c14;
+}
+
+.twap-hero-symbol {
+  grid-row: 1;
+  grid-column: 2;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text-primary, #111);
+}
+
+.twap-hero-figures {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.twap-figure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 6px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 10px;
+  text-align: center;
+}
+
+.twap-figure-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary, #111);
+  font-variant-numeric: tabular-nums;
+}
+
+.twap-figure-label {
+  font-size: 11px;
   color: var(--text-secondary, #666);
-  margin: 12px 0 6px;
+  margin-top: 2px;
+}
+
+/* meta grid */
+
+.twap-meta {
+  margin-top: 14px;
+}
+
+.twap-meta-title,
+.twap-slices-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary, #555);
+  margin: 0 0 8px;
+}
+
+.twap-meta-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 0;
+  padding: 12px 14px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 10px;
+}
+
+.twap-meta-grid dt {
+  color: var(--text-secondary, #666);
+  font-size: 12px;
+}
+
+.twap-meta-grid dd {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #111);
+  font-variant-numeric: tabular-nums;
+}
+
+/* slices list */
+
+.twap-slices {
+  margin-top: 14px;
+}
+
+.twap-slices-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.twap-slices-count {
+  font-size: 11px;
+  color: var(--text-secondary, #888);
+}
+
+.twap-slices-list {
+  max-height: 220px;
+  overflow-y: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: #fff;
 }
 
 .twap-slice-row {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  padding: 5px 10px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.02);
-  margin-bottom: 3px;
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+.twap-slice-row:last-child {
+  border-bottom: 0;
+}
+
+.twap-slice-idx {
+  font-size: 11px;
+  color: var(--text-secondary, #888);
 }
 
 .twap-slice-time {
@@ -1716,6 +1906,28 @@ mark.endpoint-match {
 .twap-slice-qty {
   font-weight: 600;
   color: var(--accent);
+}
+
+.twap-slices-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--text-secondary, #888);
+  font-size: 12px;
+}
+
+/* mobile responsive */
+
+@media (max-width: 520px) {
+  .twap-hero {
+    grid-template-columns: 1fr;
+  }
+  .twap-hero-side,
+  .twap-hero-symbol {
+    grid-column: 1;
+  }
+  .twap-hero-figures {
+    grid-column: 1;
+  }
 }
 
 /* ---- service-view: twap symbol chip row --------------------------------- */
@@ -2241,12 +2453,14 @@ mark.endpoint-match {
  * 行為，否則 modal 一進頁面就遮住整個畫面、JS 設 hidden = true 也沒用。 */
 #sheet-overlay[hidden],
 #detail-overlay[hidden],
-#confirm-overlay[hidden] {
+#confirm-overlay[hidden],
+#twap-overlay[hidden] {
   display: none !important;
 }
 
 #detail-overlay,
-#confirm-overlay {
+#confirm-overlay,
+#twap-overlay {
   position: fixed;
   inset: 0;
   z-index: 1100;
