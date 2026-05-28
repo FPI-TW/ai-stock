@@ -9,17 +9,25 @@ from app.api.deps import (
     CreateTradeIntentCommandDep,
     CurrentUserDep,
     IntentRepoDep,
+    TwapConfirmCommandDep,
+    TwapPlanCommandDep,
 )
 from app.api.errors import ApiError, ErrorCode
 from app.api.routes._pagination import validate_cursor
 from app.commands.trade_intent import CancelTradeIntentInput, CreateTradeIntentInput
+from app.commands.twap import TwapPlanInput
 from app.domain.trade_intent import VALID_STATUSES
 from app.schemas.intent import (
     IntentCreateRequest,
     IntentCreateResponse,
     IntentDetailResponse,
     IntentListResponse,
+    TwapConfirmResponse,
+    TwapPlanRequest,
+    TwapPreviewResponse,
+    map_to_detail_response_data,
     map_to_response_data,
+    map_twap_plan,
 )
 
 router = APIRouter()
@@ -96,6 +104,46 @@ def list_intents(
     )
 
 
+@router.post("/twap/preview", response_model=TwapPreviewResponse)
+def preview_twap(
+    request: TwapPlanRequest,
+    user: CurrentUserDep,
+    command: TwapPlanCommandDep,
+) -> TwapPreviewResponse:
+    plan = command.preview(
+        TwapPlanInput(
+            symbol=request.symbol,
+            position_side=request.position_side,
+            quantity_lots=request.quantity_lots,
+            interval_seconds=request.interval_seconds,
+            end_time=request.end_time,
+            owner_user_id=user.user_id,
+        )
+    )
+    return TwapPreviewResponse(data=map_twap_plan(request.symbol, plan))
+
+
+@router.post("/twap/confirm", response_model=TwapConfirmResponse, status_code=status.HTTP_201_CREATED)
+def confirm_twap(
+    request: TwapPlanRequest,
+    user: CurrentUserDep,
+    command: TwapConfirmCommandDep,
+    intent_repo: IntentRepoDep,
+) -> TwapConfirmResponse:
+    output = command.execute(
+        TwapPlanInput(
+            symbol=request.symbol,
+            position_side=request.position_side,
+            quantity_lots=request.quantity_lots,
+            interval_seconds=request.interval_seconds,
+            end_time=request.end_time,
+            owner_user_id=user.user_id,
+        )
+    )
+    slices = intent_repo.list_twap_slices(output.intent.id, user.user_id)
+    return TwapConfirmResponse(data=map_to_detail_response_data(output.intent, slices))
+
+
 @router.get("/{intent_id}", response_model=IntentDetailResponse)
 def get_intent(
     intent_id: UUID,
@@ -103,7 +151,8 @@ def get_intent(
     intent_repo: IntentRepoDep,
 ) -> IntentDetailResponse:
     intent = intent_repo.find_by_id(intent_id, user.user_id)
-    return IntentDetailResponse(data=map_to_response_data(intent))
+    slices = intent_repo.list_twap_slices(intent_id, user.user_id) if intent.strategy == "twap_order" else None
+    return IntentDetailResponse(data=map_to_detail_response_data(intent, slices))
 
 
 @router.post("/{intent_id}/cancel", response_model=IntentDetailResponse)
@@ -111,6 +160,8 @@ def cancel_intent(
     intent_id: UUID,
     user: CurrentUserDep,
     command: CancelTradeIntentCommandDep,
+    intent_repo: IntentRepoDep,
 ) -> IntentDetailResponse:
     intent = command.execute(CancelTradeIntentInput(intent_id=intent_id, owner_user_id=user.user_id))
-    return IntentDetailResponse(data=map_to_response_data(intent))
+    slices = intent_repo.list_twap_slices(intent_id, user.user_id) if intent.strategy == "twap_order" else None
+    return IntentDetailResponse(data=map_to_detail_response_data(intent, slices))

@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.domain.trading_session import OutsideSessionError, TradingSessionService
+from app.domain.trading_session import OutsideSessionError, TradingDayPhase, TradingSessionService
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
@@ -98,6 +98,20 @@ class TestGetInitialDayIntentStatus:
 
     def test_saturday_is_scheduled(self, svc: TradingSessionService) -> None:
         assert svc.get_initial_day_intent_status(dt(*SAT, 10, 0)) == "scheduled"
+
+
+class TestGetTradingDayPhase:
+    def test_before_open_is_pre_market(self, svc: TradingSessionService) -> None:
+        assert svc.get_trading_day_phase(dt(*MON, 8, 59)) == TradingDayPhase.PRE_MARKET
+
+    def test_during_session_is_regular_session(self, svc: TradingSessionService) -> None:
+        assert svc.get_trading_day_phase(dt(*MON, 10, 0)) == TradingDayPhase.REGULAR_SESSION
+
+    def test_after_close_is_post_market(self, svc: TradingSessionService) -> None:
+        assert svc.get_trading_day_phase(dt(*MON, 13, 30)) == TradingDayPhase.POST_MARKET
+
+    def test_weekend_is_post_market(self, svc: TradingSessionService) -> None:
+        assert svc.get_trading_day_phase(dt(*SAT, 10, 0)) == TradingDayPhase.POST_MARKET
 
 
 class TestVerifyTradingHours:

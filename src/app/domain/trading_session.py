@@ -5,6 +5,7 @@ V1 will replace the Mon-Fri weekday rule with a proper market_calendar table.
 
 from collections.abc import Callable
 from datetime import date, datetime, time, timedelta
+from enum import StrEnum
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -26,6 +27,12 @@ class OutsideSessionError(Exception):
     def __init__(self, reason: str) -> None:
         self.reason = reason
         super().__init__(reason)
+
+
+class TradingDayPhase(StrEnum):
+    PRE_MARKET = "pre_market"
+    REGULAR_SESSION = "regular_session"
+    POST_MARKET = "post_market"
 
 
 class TradingSessionService:
@@ -52,6 +59,23 @@ class TradingSessionService:
             return False
         t = taipei.time()
         return _SESSION_START <= t < _SESSION_END
+
+    def get_trading_day_phase(self, dt: datetime) -> TradingDayPhase:
+        """Classify a request time into today's pre-market, regular, or post-market phase."""
+
+        _require_aware(dt)
+        taipei = dt.astimezone(TAIPEI_TZ)
+        if not self.is_trading_day(taipei.date()):
+            return TradingDayPhase.POST_MARKET
+        t = taipei.time()
+        if t < _SESSION_START:
+            return TradingDayPhase.PRE_MARKET
+        if t < _SESSION_END:
+            return TradingDayPhase.REGULAR_SESSION
+        return TradingDayPhase.POST_MARKET
+
+    def next_trading_day(self, d: date) -> date:
+        return self._next_weekday(d)
 
     def get_day_intent_trading_date(self, now: datetime) -> date:
         """Return the trading_date a new day-intent should carry.

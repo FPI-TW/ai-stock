@@ -16,6 +16,7 @@ from app.domain.trade_intent import (
     IntentNotFoundError,
     InvalidCursorError,
 )
+from app.domain.twap import TwapDuplicateActivePlanError, TwapError
 from app.services.quote.base import QuoteProviderError
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,13 @@ class ErrorCode(StrEnum):
     QUOTE_PROVIDER_UNAVAILABLE = "QUOTE_PROVIDER_UNAVAILABLE"
     QUOTE_UNAVAILABLE = "QUOTE_UNAVAILABLE"
     CURRENT_PRICE_SYMBOL_NOT_ALLOWED = "CURRENT_PRICE_SYMBOL_NOT_ALLOWED"
+    TWAP_END_TIME_OUTSIDE_SESSION = "TWAP_END_TIME_OUTSIDE_SESSION"
+    TWAP_END_TIME_ALREADY_PASSED = "TWAP_END_TIME_ALREADY_PASSED"
+    TWAP_INSUFFICIENT_SLICES = "TWAP_INSUFFICIENT_SLICES"
+    TWAP_TOO_MANY_SLICES = "TWAP_TOO_MANY_SLICES"
+    TWAP_INVALID_INTERVAL = "TWAP_INVALID_INTERVAL"
+    TWAP_INVALID_QUANTITY = "TWAP_INVALID_QUANTITY"
+    TWAP_DUPLICATE_ACTIVE_PLAN = "TWAP_DUPLICATE_ACTIVE_PLAN"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -57,6 +65,13 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.QUOTE_PROVIDER_UNAVAILABLE: "行情服務暫時無法使用",
     ErrorCode.QUOTE_UNAVAILABLE: "尚未收到該標的的行情報價",
     ErrorCode.CURRENT_PRICE_SYMBOL_NOT_ALLOWED: "此測試查價 API 僅允許指定標的",
+    ErrorCode.TWAP_END_TIME_OUTSIDE_SESSION: "TWAP 結束時間需在台股交易時段內",
+    ErrorCode.TWAP_END_TIME_ALREADY_PASSED: "TWAP 結束時間已經超過",
+    ErrorCode.TWAP_INSUFFICIENT_SLICES: "TWAP 至少需要兩筆分批交易",
+    ErrorCode.TWAP_TOO_MANY_SLICES: "TWAP 分批筆數超過上限",
+    ErrorCode.TWAP_INVALID_INTERVAL: "TWAP 間隔秒數不合法",
+    ErrorCode.TWAP_INVALID_QUANTITY: "TWAP 目標量不合法",
+    ErrorCode.TWAP_DUPLICATE_ACTIVE_PLAN: "已存在相同的 TWAP 計畫",
 }
 
 
@@ -240,6 +255,24 @@ def register_exception_handlers(app: FastAPI) -> None:
             request=request,
             status_code=status.HTTP_400_BAD_REQUEST,
             code=ErrorCode.INVALID_CURSOR,
+        )
+
+    @app.exception_handler(TwapError)
+    async def twap_error_handler(request: Request, exc: TwapError) -> JSONResponse:
+        status_code = (
+            status.HTTP_409_CONFLICT
+            if isinstance(exc, TwapDuplicateActivePlanError)
+            else status.HTTP_422_UNPROCESSABLE_CONTENT
+        )
+        try:
+            code: ErrorCode | str = ErrorCode(exc.error_code)
+        except ValueError:
+            code = exc.error_code
+        return build_error_response(
+            request=request,
+            status_code=status_code,
+            code=code,
+            details=exc.details(),
         )
 
     @app.exception_handler(CancelNotAllowedError)

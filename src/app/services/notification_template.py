@@ -23,6 +23,11 @@ _LIMIT_ORDER_LABELS = {
 
 _DISCLAIMER = "僅通知、未下單、不保證成交。"
 
+_POSITION_LABELS = {
+    "long": ("多單建倉", "買入"),
+    "short": ("空單建倉", "賣出"),
+}
+
 
 def render_price_triggered(
     *,
@@ -120,5 +125,64 @@ def render_trailing_stop_triggered(
         f"報價時間：{quote_time_taipei}",
         "",
         _DISCLAIMER,
+    ]
+    return title, "\n".join(body_lines)
+
+
+def render_twap_slice(
+    *,
+    symbol: str,
+    position_side: str,
+    sequence_no: int,
+    total_slices: int,
+    planned_quantity_lots: int,
+    reference_price: Decimal | None,
+    reference_price_type: str | None,
+    quote_time: datetime | None,
+) -> tuple[str, str]:
+    if position_side not in _POSITION_LABELS:
+        raise ValueError(f"Unsupported TWAP position side: {position_side!r}")
+    if quote_time is not None and quote_time.tzinfo is None:
+        raise TypeError(f"quote_time must be timezone-aware: {quote_time!r}")
+
+    side_label, action_label = _POSITION_LABELS[position_side]
+    title = f"{symbol} TWAP 第 {sequence_no}/{total_slices} 筆"
+    body_lines = [
+        side_label,
+        f"建議市價{action_label}：{planned_quantity_lots} 張",
+    ]
+    if reference_price is None:
+        body_lines.append("目前行情暫不可用，請自行確認市價。")
+    else:
+        if reference_price_type is None or quote_time is None:
+            raise ValueError("TWAP price notification requires reference price type and quote time")
+        quote_time_taipei = quote_time.astimezone(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        body_lines.extend(
+            [
+                f"參考價：{format_price_str(reference_price)}（{reference_price_type}）",
+                f"報價時間：{quote_time_taipei}",
+            ]
+        )
+    return title, "\n".join(body_lines)
+
+
+def render_twap_price_followup(
+    *,
+    symbol: str,
+    sequence_no: int,
+    total_slices: int,
+    reference_price: Decimal,
+    reference_price_type: str,
+    sent_at: datetime,
+) -> tuple[str, str]:
+    if sent_at.tzinfo is None:
+        raise TypeError(f"sent_at must be timezone-aware: {sent_at!r}")
+
+    sent_at_taipei = sent_at.astimezone(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    title = f"{symbol} TWAP 候補價格"
+    body_lines = [
+        f"第 {sequence_no}/{total_slices} 筆參考價：{format_price_str(reference_price)}（{reference_price_type}）",
+        f"補發時間：{sent_at_taipei}",
+        "此為稍後補發的價格資訊。",
     ]
     return title, "\n".join(body_lines)

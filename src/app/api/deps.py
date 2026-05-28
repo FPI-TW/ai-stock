@@ -8,6 +8,7 @@ from app.api.errors import ApiError, ErrorCode
 from app.commands.notification import MarkNotificationReadCommand
 from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand
 from app.commands.trigger_intent import TriggerIntentCommand
+from app.commands.twap import TwapConfirmCommand, TwapPlanCommand, TwapSliceWorkerCommand
 from app.core.config import REQUIRED_CURRENT_PRICE_PROVIDER, Settings, get_settings
 from app.core.security import RequestUser, build_local_user
 from app.db.session import check_database_connectivity, get_session_factory
@@ -187,3 +188,37 @@ def get_mark_notification_read_command(
 
 
 MarkNotificationReadCommandDep = Annotated[MarkNotificationReadCommand, Depends(get_mark_notification_read_command)]
+
+
+def get_twap_plan_command(
+    symbol_service: SymbolServiceDep,
+    session_service: TradingSessionServiceDep,
+) -> TwapPlanCommand:
+    return TwapPlanCommand(symbol_service, session_service)
+
+
+TwapPlanCommandDep = Annotated[TwapPlanCommand, Depends(get_twap_plan_command)]
+
+
+def get_twap_confirm_command(
+    symbol_service: SymbolServiceDep,
+    session_service: TradingSessionServiceDep,
+    intent_repo: IntentRepoDep,
+    quote_provider: QuoteProviderDep,
+    db: DatabaseDep,
+) -> TwapConfirmCommand:
+    return TwapConfirmCommand(symbol_service, session_service, intent_repo, quote_provider, db)
+
+
+TwapConfirmCommandDep = Annotated[TwapConfirmCommand, Depends(get_twap_confirm_command)]
+
+
+def get_twap_slice_worker_command(
+    db: DatabaseDep,
+    quote_provider: QuoteProviderDep,
+    session_service: TradingSessionServiceDep,
+) -> TwapSliceWorkerCommand:
+    return TwapSliceWorkerCommand(db, quote_provider, session_service)
+
+
+TwapSliceWorkerCommandDep = Annotated[TwapSliceWorkerCommand, Depends(get_twap_slice_worker_command)]
