@@ -78,6 +78,7 @@ def test_test_assets_served_in_local_mode(client_factory: ClientFactory) -> None
     assert client.get("/test-assets/endpoints.js").status_code == 200
     assert client.get("/test-assets/user-view.js").status_code == 200
     assert client.get("/test-assets/service-view.js").status_code == 200
+    assert client.get("/test-assets/quote-board.js").status_code == 200
 
 
 def test_endpoint_catalog_covers_current_openapi(client_factory: ClientFactory) -> None:
@@ -132,5 +133,6 @@ def test_test_page_404_when_local_mode_disabled(monkeypatch: pytest.MonkeyPatch)
     assert client.get("/test/flows").status_code == 404
     assert client.get("/test-assets/app.js").status_code == 404
     assert client.get("/test-assets/service-view.js").status_code == 404
+    assert client.get("/test-assets/quote-board.js").status_code == 404
     # /dev/* must also stay 404 in production mode (regression guard).
     assert client.post("/dev/evaluate-quotes", json={}).status_code == 404
