@@ -6,6 +6,7 @@ import pytest
 from app.domain.trading_session import TradingDayPhase, TradingSessionService
 from app.domain.twap import (
     TwapEndTimeAlreadyPassedError,
+    TwapEndTimeOutsideSessionError,
     TwapInsufficientSlicesError,
     TwapTooManySlicesError,
     build_twap_plan,
@@ -109,6 +110,35 @@ def test_rejects_more_than_200_materialized_slices() -> None:
             quantity_lots=201,
             interval_seconds=1,
             end_time=time(9, 3, 20),
+            now=svc.now_taipei(),
+            session_service=svc,
+        )
+
+
+def test_accepts_latest_end_time_1325() -> None:
+    svc = TradingSessionService(clock=lambda: dt(2026, 5, 28, 13, 23))
+
+    plan = build_twap_plan(
+        position_side="long",
+        quantity_lots=2,
+        interval_seconds=60,
+        end_time=time(13, 25),
+        now=svc.now_taipei(),
+        session_service=svc,
+    )
+
+    assert plan.end_at == dt(2026, 5, 28, 13, 25)
+
+
+def test_rejects_end_time_after_1325() -> None:
+    svc = TradingSessionService(clock=lambda: dt(2026, 5, 28, 9, 0))
+
+    with pytest.raises(TwapEndTimeOutsideSessionError):
+        build_twap_plan(
+            position_side="long",
+            quantity_lots=2,
+            interval_seconds=60,
+            end_time=time(13, 26),
             now=svc.now_taipei(),
             session_service=svc,
         )

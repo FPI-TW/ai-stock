@@ -3,7 +3,8 @@ from decimal import Decimal
 from typing import Annotated, Literal, cast
 from uuid import UUID
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 from app.api.schemas.base import OwnerScopedRequestModel
 from app.domain.price import format_price_str
@@ -167,6 +168,18 @@ class TwapPlanRequest(OwnerScopedRequestModel):
     quantity_lots: int = Field(validation_alias="quantityLots")
     interval_seconds: int = Field(validation_alias="intervalSeconds")
     end_time: time = Field(validation_alias="endTime")
+
+    @field_validator("end_time", mode="before")
+    @classmethod
+    def _validate_end_time_precision(cls, value: object) -> object:
+        if isinstance(value, str):
+            parts = value.split(":")
+            if len(parts) == 2 and all(len(part) == 2 and part.isdigit() for part in parts):
+                hour = int(parts[0])
+                minute = int(parts[1])
+                if 0 <= hour <= 23 and 0 <= minute <= 59:
+                    return time(hour, minute)
+        raise PydanticCustomError("twap_end_time_format", "endTime must use HH:MM format")
 
 
 class TwapPlanData(BaseModel):

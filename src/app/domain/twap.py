@@ -19,7 +19,7 @@ TWAP_PRICE_FOLLOWUP_MAX_ATTEMPTS = 3
 TWAP_PRICE_FOLLOWUP_DELAY_SECONDS = 10
 
 SESSION_START_TIME = time(9, 0)
-SESSION_END_TIME = time(13, 30)
+TWAP_LATEST_END_TIME = time(13, 25)
 
 
 class TwapError(Exception):
@@ -70,7 +70,7 @@ class TwapEndTimeOutsideSessionError(TwapError):
         return {
             "endTime": self.end_time.isoformat(),
             "sessionStart": SESSION_START_TIME.isoformat(),
-            "sessionEnd": SESSION_END_TIME.isoformat(),
+            "latestEndTime": TWAP_LATEST_END_TIME.isoformat(),
         }
 
 
@@ -163,7 +163,7 @@ def build_twap_plan(
         raise TwapInvalidIntervalError(interval_seconds)
     if quantity_lots < TWAP_MIN_QUANTITY_LOTS or quantity_lots > TWAP_MAX_QUANTITY_LOTS:
         raise TwapInvalidQuantityError(quantity_lots)
-    if end_time < SESSION_START_TIME or end_time > SESSION_END_TIME:
+    if end_time < SESSION_START_TIME or end_time > TWAP_LATEST_END_TIME:
         raise TwapEndTimeOutsideSessionError(end_time)
 
     now_taipei = now.astimezone(TAIPEI_TZ)

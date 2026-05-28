@@ -22,7 +22,7 @@ Request:
   "positionSide": "long",
   "quantityLots": 100,
   "intervalSeconds": 300,
-  "endTime": "13:00:00"
+  "endTime": "13:00"
 }
 ```
 
@@ -31,7 +31,7 @@ Request:
 - `positionSide`: `long | short`。買賣差異只由多單或空單決定，其餘 TWAP 邏輯一致。
 - `quantityLots`: 目標張數，範圍 `2..1000`。
 - `intervalSeconds`: 最小單位為秒，範圍 `1..3600`。
-- `endTime`: 當日交易時段內時間，允許 `09:00:00..13:30:00`。
+- `endTime`: 只接受 `HH:MM`，最小輸入單位為分鐘；允許 `09:00..13:25`。
 - TWAP 使用當下市價概念，不接受價格條件。
 
 ## 交易階段
@@ -43,6 +43,7 @@ Request:
 - `post_market`: 盤後或非交易日，`startAt` 為下一個交易日 `09:00:00`，`tradingDate` 為下一個交易日。
 
 第一版下一交易日只跳過週末，不處理國定假日。
+實際通知 / 交易排程仍使用秒級時間；`endTime` 的分鐘輸入會以該分鐘的第 0 秒計算。
 
 ## Slice 計算
 

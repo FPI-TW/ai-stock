@@ -131,7 +131,7 @@ def test_twap_preview_returns_schedule(client: TestClient, plan_command: MagicMo
             "positionSide": "long",
             "quantityLots": 2,
             "intervalSeconds": 300,
-            "endTime": "09:05:00",
+            "endTime": "09:05",
         },
     )
 
@@ -159,7 +159,7 @@ def test_twap_confirm_creates_intent_and_returns_slices(
             "positionSide": "long",
             "quantityLots": 2,
             "intervalSeconds": 300,
-            "endTime": "09:05:00",
+            "endTime": "09:05",
         },
     )
 
@@ -175,8 +175,24 @@ def test_twap_preview_domain_error_uses_twap_error_code(client: TestClient, plan
 
     response = client.post(
         "/trade-intents/twap/preview",
-        json={"symbol": "2330", "positionSide": "long", "quantityLots": 2, "intervalSeconds": 1, "endTime": "09:00:00"},
+        json={"symbol": "2330", "positionSide": "long", "quantityLots": 2, "intervalSeconds": 1, "endTime": "09:00"},
     )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert response.json()["error"]["code"] == "TWAP_INSUFFICIENT_SLICES"
+
+
+def test_twap_preview_rejects_seconds_in_end_time(client: TestClient) -> None:
+    response = client.post(
+        "/trade-intents/twap/preview",
+        json={
+            "symbol": "2330",
+            "positionSide": "long",
+            "quantityLots": 2,
+            "intervalSeconds": 1,
+            "endTime": "09:00:00",
+        },
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
