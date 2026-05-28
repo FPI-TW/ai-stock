@@ -29,7 +29,7 @@
 - 不做 CSV batch。
 - 不做停利停損/OCO。
 - 不做 corporate action adjustment。
-- 不做 scheduled activation/expiry job。
+- 不做獨立 scheduler；API 讀取 / 取消前會先跑 lightweight lifecycle reconciliation，盤中啟用當日 scheduled intent，盤後將當日未觸發 intent 轉 `expired`。
 
 ## API
 

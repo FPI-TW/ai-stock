@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.db.models.core import Notification, TradeIntent, TwapSlice
 from app.domain.price import InvalidTypeError, SecurityType
 from app.domain.trade_intent import TradeIntentData
@@ -127,6 +128,9 @@ class TwapSliceWorkerCommand:
 
     def process_due_slices(self, *, limit: int = 100) -> TwapWorkerOutput:
         now = self._session_service.now_taipei()
+        IntentLifecycleCommand(IntentRepository(self._db), self._session_service).run()
+        if self._session_service.get_trading_day_phase(now) != TradingDayPhase.REGULAR_SESSION:
+            return TwapWorkerOutput(processed_count=0)
         try:
             rows = self._load_due_slices(now, limit)
             for slice_row, intent_row in rows:
@@ -139,6 +143,9 @@ class TwapSliceWorkerCommand:
 
     def process_price_followups(self, *, limit: int = 100) -> TwapWorkerOutput:
         now = self._session_service.now_taipei()
+        IntentLifecycleCommand(IntentRepository(self._db), self._session_service).run()
+        if self._session_service.get_trading_day_phase(now) != TradingDayPhase.REGULAR_SESSION:
+            return TwapWorkerOutput(processed_count=0)
         try:
             rows = self._load_followup_slices(now, limit)
             for slice_row, intent_row in rows:

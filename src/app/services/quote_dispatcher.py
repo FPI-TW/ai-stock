@@ -24,6 +24,7 @@ from collections.abc import Callable
 
 from sqlalchemy.orm import Session
 
+from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.commands.trigger_intent import (
     DuplicateTriggerError,
     IntentNotActiveError,
@@ -79,6 +80,7 @@ class QuoteEvaluationDispatcher:
         now = self._session_service.now_taipei()
         with self._session_factory() as db:
             repo = IntentRepository(db)
+            IntentLifecycleCommand(repo, self._session_service).run()
             intents = repo.system_list_active_by_symbols([snapshot.symbol])
             if not intents:
                 return

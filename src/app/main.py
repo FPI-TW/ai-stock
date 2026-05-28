@@ -12,6 +12,7 @@ from app.api.routes.intents import router as intents_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes.quotes import router as quotes_router
 from app.api.routes.symbols import router as symbols_router
+from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.core.config import get_settings
 from app.core.ids import RequestIdMiddleware
 from app.domain.quote_evaluation import QuoteEvaluator
@@ -46,8 +47,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from app.db.session import get_session_factory
 
         session_factory = get_session_factory()
+        session_service = TradingSessionService()
         with session_factory() as db:
-            for symbol in IntentRepository(db).active_or_scheduled_symbols():
+            intent_repo = IntentRepository(db)
+            IntentLifecycleCommand(intent_repo, session_service).run()
+            for symbol in intent_repo.active_or_scheduled_symbols():
                 provider.subscribe(symbol)
         logger.info(
             "quote provider startup reconcile complete",
@@ -59,7 +63,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # of that symbol's active intents on a fresh short-lived session.
         # Without DATABASE_URL we have no intents to evaluate, so the listener
         # is only useful when the DB is configured.
-        session_service = TradingSessionService()
         dispatcher = QuoteEvaluationDispatcher(
             session_factory=session_factory,
             evaluator=QuoteEvaluator(session_service),

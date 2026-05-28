@@ -100,6 +100,20 @@ class TestGetInitialDayIntentStatus:
         assert svc.get_initial_day_intent_status(dt(*SAT, 10, 0)) == "scheduled"
 
 
+class TestGetExpirableDayIntentCutoff:
+    def test_before_open_expires_only_prior_dates(self, svc: TradingSessionService) -> None:
+        assert svc.get_expirable_day_intent_cutoff(dt(*MON, 8, 59)) == date(2026, 5, 10)
+
+    def test_during_session_expires_only_prior_dates(self, svc: TradingSessionService) -> None:
+        assert svc.get_expirable_day_intent_cutoff(dt(*MON, 10, 0)) == date(2026, 5, 10)
+
+    def test_after_close_includes_today(self, svc: TradingSessionService) -> None:
+        assert svc.get_expirable_day_intent_cutoff(dt(*MON, 13, 30)) == date(*MON)
+
+    def test_weekend_expires_prior_trading_dates(self, svc: TradingSessionService) -> None:
+        assert svc.get_expirable_day_intent_cutoff(dt(*SAT, 10, 0)) == date(*SAT)
+
+
 class TestGetTradingDayPhase:
     def test_before_open_is_pre_market(self, svc: TradingSessionService) -> None:
         assert svc.get_trading_day_phase(dt(*MON, 8, 59)) == TradingDayPhase.PRE_MARKET

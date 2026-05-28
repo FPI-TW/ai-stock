@@ -340,6 +340,22 @@ def test_trade_intent_allows_duplicate_after_terminal_status(migrated_engine: En
         )
 
 
+@pytest.mark.integration
+def test_trade_intent_accepts_expired_status(migrated_engine: Engine) -> None:
+    symbol_id = uuid4()
+    owner_user_id = uuid4()
+
+    with migrated_engine.begin() as connection:
+        insert_symbol(connection, symbol_id, "2882")
+        trade_intents = reflect_table(migrated_engine, "trade_intents")
+        connection.execute(
+            trade_intents.insert().values(
+                **build_trade_intent(symbol="2882", owner_user_id=owner_user_id, status="expired")
+            )
+        )
+        connection.execute(trade_intents.delete().where(trade_intents.c.symbol == "2882"))
+
+
 def insert_symbol(connection: sa.Connection, symbol_id: UUID, symbol: str) -> None:
     connection.execute(
         reflect_table(connection.engine, "symbols")

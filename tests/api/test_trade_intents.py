@@ -269,6 +269,16 @@ def test_list_intents_status_filter(api_client: TestClient, mock_repo: MagicMock
     assert set(call_kwargs["statuses"]) == {"active", "scheduled"}
 
 
+def test_list_intents_expired_status_filter(api_client: TestClient, mock_repo: MagicMock) -> None:
+    mock_repo.list_by_owner.return_value = ([], None)
+
+    response = api_client.get("/trade-intents?status=expired")
+
+    assert response.status_code == status.HTTP_200_OK
+    call_kwargs = mock_repo.list_by_owner.call_args.kwargs
+    assert call_kwargs["statuses"] == ["expired"]
+
+
 def test_list_intents_trading_date_filter(api_client: TestClient, mock_repo: MagicMock) -> None:
     mock_repo.list_by_owner.return_value = ([], None)
 

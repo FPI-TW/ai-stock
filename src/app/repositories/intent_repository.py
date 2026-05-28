@@ -1,9 +1,9 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import CursorResult, and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, SessionTransaction
 from sqlalchemy.sql import Select
@@ -287,6 +287,55 @@ class IntentRepository:
         if baseline_updated_at is not None:
             values["baseline_updated_at"] = baseline_updated_at
         self._db.execute(update(TradeIntent).where(TradeIntent.id == intent_id).values(**values))
+
+    def system_activate_scheduled_day_intents(self, trading_date: date, now: datetime) -> int:
+        """Move scheduled day intents for `trading_date` into active monitoring."""
+
+        result = cast(
+            CursorResult[Any],
+            self._db.execute(
+                update(TradeIntent)
+                .where(
+                    TradeIntent.status == "scheduled",
+                    TradeIntent.trading_date == trading_date,
+                )
+                .values(status="active", updated_at=now)
+            ),
+        )
+        return int(result.rowcount or 0)
+
+    def system_expire_day_intents_through(self, cutoff_date: date, now: datetime) -> int:
+        """Expire open day intents whose trading date can no longer trigger."""
+
+        expired_ids = list(
+            self._db.execute(
+                update(TradeIntent)
+                .where(
+                    TradeIntent.status.in_(CANCELLABLE_STATUSES),
+                    TradeIntent.trading_date <= cutoff_date,
+                )
+                .values(status="expired", updated_at=now)
+                .returning(TradeIntent.id)
+            )
+            .scalars()
+            .all()
+        )
+        if expired_ids:
+            self._db.execute(
+                update(TwapSlice)
+                .where(
+                    TwapSlice.trade_intent_id.in_(expired_ids),
+                    TwapSlice.status == "pending",
+                )
+                .values(
+                    status="cancelled",
+                    price_followup_required=False,
+                    next_price_followup_at=None,
+                    updated_at=now,
+                ),
+                execution_options={"synchronize_session": False},
+            )
+        return len(expired_ids)
 
     def find_by_id(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
         result = self._db.execute(_select_intent_with_symbol_type().where(TradeIntent.id == intent_id)).one_or_none()
