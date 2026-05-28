@@ -54,7 +54,11 @@ export function getSelectedUser() {
 }
 
 export function setSelectedUser(label) {
+  const prev = localStorage.getItem(SELECTED_USER_KEY);
   localStorage.setItem(SELECTED_USER_KEY, label);
+  if (prev !== label) {
+    window.dispatchEvent(new CustomEvent("ai-stock:user-changed", { detail: { from: prev, to: label } }));
+  }
 }
 
 function currentUserUuid() {
