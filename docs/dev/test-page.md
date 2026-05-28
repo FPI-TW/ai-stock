@@ -39,6 +39,9 @@ LOCAL_MODE=true QUOTE_PROVIDER=in_memory \
 
 以終端使用者的視角操作，不直接暴露 raw API。
 
+- **報價看板**：dashboard 上方橫跨兩欄的自選股看板，3 秒輪詢 `GET /quotes`；
+  watchlist 存 localStorage（per-user）、可摺疊；切換使用者會立即套用該使用者的
+  watchlist 並重設漲跌幅基準。
 - **Dashboard**：兩欄式響應式 layout — 委託列表（左）+ 最近通知（右），sidebar
   sticky 對齊；切換 all / active / cancelled / triggered filter 時版位不會跑掉。
 - **下單 sheet**：標的搜尋（內建 debounce）、quantityLots / targetPrice 輸入、
