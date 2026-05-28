@@ -7,7 +7,7 @@
 //   initServiceView()     — 綁定 DOM event 一次性
 //   onEnterServiceMode()  — 切到服務模式時刷新狀態
 
-import { sendRequest, USERS } from "/test-assets/app.js";
+import { attachSegmentedIndicator, sendRequest, USERS } from "/test-assets/app.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -20,6 +20,7 @@ const svcState = {
 
 let symbolSearchDebounce = null;
 let stateRefreshTimer = null;
+let repositionSideIndicator = () => {};
 
 // ---------------------------------------------------------------------------
 // Local DOM helpers
@@ -414,12 +415,18 @@ export function initServiceView() {
   });
 
   // Side chips
-  for (const btn of document.querySelectorAll("#svc-side-chips button")) {
+  const sideChips = $("svc-side-chips");
+  repositionSideIndicator = attachSegmentedIndicator(sideChips);
+  for (const btn of sideChips.querySelectorAll("button")) {
+    btn.setAttribute("aria-selected", btn.classList.contains("active") ? "true" : "false");
     btn.addEventListener("click", () => {
       svcState.quoteSide = btn.dataset.side;
-      for (const b of document.querySelectorAll("#svc-side-chips button")) {
-        b.classList.toggle("active", b === btn);
+      for (const b of sideChips.querySelectorAll("button")) {
+        const active = b === btn;
+        b.classList.toggle("active", active);
+        b.setAttribute("aria-selected", active ? "true" : "false");
       }
+      repositionSideIndicator();
       updateSideHint();
     });
   }
@@ -445,6 +452,7 @@ export function initServiceView() {
 
 export function onEnterServiceMode() {
   refreshServerState();
+  repositionSideIndicator();
   // auto-refresh every 5s while in service mode
   clearInterval(stateRefreshTimer);
   stateRefreshTimer = setInterval(() => {
