@@ -59,7 +59,7 @@ V0.5 settings decision：
 V0.5 quality script decision：
 
 - `Makefile` 是本地開發與品質檢查的穩定入口，README 記錄等價 `uv` 指令。
-- `make dev` 使用 `uv run uvicorn app.main:app --app-dir src --reload` 以支援 `src` layout。
+- `make dev` 使用 `uv run uvicorn app.main:app --app-dir src --reload --port 8100` 以支援 `src` layout，並固定本地預設 API port。
 - 基礎 targets：`install`、`dev`、`lint`、`format`、`format-check`、`test`、`test-integration`。
 - BE-V0.5-01 暫不加入 `mypy` 或 `pyright`；待 SQLAlchemy ORM/domain model 穩定後再評估 typed Python baseline。
 - BE-V0.5-02 起加入 `mypy`，`make typecheck` 執行 `uv run mypy src tests`，`make check` 執行非 PostgreSQL 品質門檻：`lint`、`format-check`、`typecheck`、`test`。

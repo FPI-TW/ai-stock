@@ -34,7 +34,7 @@ make dev
 健康檢查：
 
 ```bash
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8100/health
 ```
 
 ## 品質指令
@@ -126,7 +126,7 @@ make seed
 
 ```bash
 uv sync
-uv run uvicorn app.main:app --app-dir src --reload
+uv run uvicorn app.main:app --app-dir src --reload --port 8100
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src tests

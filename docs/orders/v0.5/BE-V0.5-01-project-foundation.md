@@ -62,7 +62,7 @@ BE-V0.5-01 建立 local-only `docker-compose.yml` 供開發啟動 PostgreSQL，�
 BE-V0.5-01 建立 `Makefile` 作為本地開發與品質檢查的穩定入口，README 記錄等價 `uv` 指令。
 
 - `make install` -> `uv sync`
-- `make dev` -> `uv run uvicorn app.main:app --app-dir src --reload`
+- `make dev` -> `uv run uvicorn app.main:app --app-dir src --reload --port 8100`
 - `make lint` -> `uv run ruff check .`
 - `make format` -> `uv run ruff format .`
 - `make format-check` -> `uv run ruff format --check .`
