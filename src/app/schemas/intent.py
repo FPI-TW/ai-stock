@@ -131,6 +131,7 @@ class IntentResponseData(BaseModel):
 class TwapSummaryData(BaseModel):
     position_side: str = Field(serialization_alias="positionSide")
     interval_seconds: int = Field(serialization_alias="intervalSeconds")
+    start_time: time = Field(serialization_alias="startTime")
     end_time: time = Field(serialization_alias="endTime")
     start_at: datetime = Field(serialization_alias="startAt")
     end_at: datetime = Field(serialization_alias="endAt")
@@ -180,11 +181,14 @@ class TwapPlanRequest(OwnerScopedRequestModel):
     position_side: Literal["long", "short"] = Field(validation_alias="positionSide")
     quantity_lots: int = Field(validation_alias="quantityLots")
     interval_seconds: int = Field(validation_alias="intervalSeconds")
+    start_time: time | None = Field(default=None, validation_alias="startTime")
     end_time: time = Field(validation_alias="endTime")
 
-    @field_validator("end_time", mode="before")
+    @field_validator("start_time", "end_time", mode="before")
     @classmethod
-    def _validate_end_time_precision(cls, value: object) -> object:
+    def _validate_time_precision(cls, value: object) -> object:
+        if value is None:
+            return value
         if isinstance(value, str):
             parts = value.split(":")
             if len(parts) == 2 and all(len(part) == 2 and part.isdigit() for part in parts):
@@ -192,7 +196,7 @@ class TwapPlanRequest(OwnerScopedRequestModel):
                 minute = int(parts[1])
                 if 0 <= hour <= 23 and 0 <= minute <= 59:
                     return time(hour, minute)
-        raise PydanticCustomError("twap_end_time_format", "endTime must use HH:MM format")
+        raise PydanticCustomError("twap_time_format", "startTime and endTime must use HH:MM format")
 
 
 class TwapPlanData(BaseModel):
@@ -203,6 +207,8 @@ class TwapPlanData(BaseModel):
     trading_date: date = Field(serialization_alias="tradingDate")
     target_quantity_lots: int = Field(serialization_alias="targetQuantityLots")
     interval_seconds: int = Field(serialization_alias="intervalSeconds")
+    start_time: time = Field(serialization_alias="startTime")
+    end_time: time = Field(serialization_alias="endTime")
     start_at: datetime = Field(serialization_alias="startAt")
     end_at: datetime = Field(serialization_alias="endAt")
     available_slice_count: int = Field(serialization_alias="availableSliceCount")
@@ -278,6 +284,7 @@ def map_twap_summary(intent: TradeIntentData) -> TwapSummaryData | None:
     return TwapSummaryData(
         position_side=intent.position_side,
         interval_seconds=intent.twap_interval_seconds,
+        start_time=intent.twap_start_at.timetz().replace(tzinfo=None),
         end_time=intent.twap_end_time,
         start_at=intent.twap_start_at,
         end_at=intent.twap_end_at,
@@ -294,6 +301,8 @@ def map_twap_plan(symbol: str, plan: TwapPlan) -> TwapPlanData:
         trading_date=plan.trading_date,
         target_quantity_lots=plan.target_quantity_lots,
         interval_seconds=plan.interval_seconds,
+        start_time=plan.requested_start_time,
+        end_time=plan.requested_end_time,
         start_at=plan.start_at,
         end_at=plan.end_at,
         available_slice_count=plan.available_slice_count,

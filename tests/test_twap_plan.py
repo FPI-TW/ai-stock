@@ -8,6 +8,8 @@ from app.domain.twap import (
     TwapEndTimeAlreadyPassedError,
     TwapEndTimeOutsideSessionError,
     TwapInsufficientSlicesError,
+    TwapStartTimeAfterEndTimeError,
+    TwapStartTimeOutsideSessionError,
     TwapTooManySlicesError,
     build_twap_plan,
 )
@@ -33,6 +35,7 @@ def test_pre_market_starts_at_today_open() -> None:
 
     assert plan.trading_phase == TradingDayPhase.PRE_MARKET
     assert plan.trading_date == date(2026, 5, 28)
+    assert plan.requested_start_time == time(9, 0)
     assert plan.start_at == dt(2026, 5, 28, 9, 0)
     assert plan.available_slice_count == 10
     assert [s.planned_quantity_lots for s in plan.slices] == [1] * 10
@@ -54,6 +57,29 @@ def test_regular_session_starts_at_current_second_and_ceil_allocates_earlier_sli
     assert plan.start_at == dt(2026, 5, 28, 10, 0)
     assert plan.materialized_slice_count == 10
     assert [s.planned_quantity_lots for s in plan.slices] == [10] * 10
+
+
+def test_uses_requested_start_time() -> None:
+    svc = TradingSessionService(clock=lambda: dt(2026, 5, 28, 8, 30))
+
+    plan = build_twap_plan(
+        position_side="long",
+        quantity_lots=4,
+        interval_seconds=300,
+        start_time=time(9, 10),
+        end_time=time(9, 25),
+        now=svc.now_taipei(),
+        session_service=svc,
+    )
+
+    assert plan.requested_start_time == time(9, 10)
+    assert plan.start_at == dt(2026, 5, 28, 9, 10)
+    assert [s.scheduled_at for s in plan.slices] == [
+        dt(2026, 5, 28, 9, 10),
+        dt(2026, 5, 28, 9, 15),
+        dt(2026, 5, 28, 9, 20),
+        dt(2026, 5, 28, 9, 25),
+    ]
 
 
 def test_post_market_moves_to_next_trading_day_open() -> None:
@@ -139,6 +165,51 @@ def test_rejects_end_time_after_1325() -> None:
             quantity_lots=2,
             interval_seconds=60,
             end_time=time(13, 26),
+            now=svc.now_taipei(),
+            session_service=svc,
+        )
+
+
+def test_rejects_start_time_after_end_time() -> None:
+    svc = TradingSessionService(clock=lambda: dt(2026, 5, 28, 8, 30))
+
+    with pytest.raises(TwapStartTimeAfterEndTimeError):
+        build_twap_plan(
+            position_side="long",
+            quantity_lots=2,
+            interval_seconds=60,
+            start_time=time(9, 10),
+            end_time=time(9, 5),
+            now=svc.now_taipei(),
+            session_service=svc,
+        )
+
+
+def test_rejects_start_time_before_open() -> None:
+    svc = TradingSessionService(clock=lambda: dt(2026, 5, 28, 8, 30))
+
+    with pytest.raises(TwapStartTimeOutsideSessionError):
+        build_twap_plan(
+            position_side="long",
+            quantity_lots=2,
+            interval_seconds=60,
+            start_time=time(8, 59),
+            end_time=time(9, 5),
+            now=svc.now_taipei(),
+            session_service=svc,
+        )
+
+
+def test_rejects_start_time_after_1320() -> None:
+    svc = TradingSessionService(clock=lambda: dt(2026, 5, 28, 8, 30))
+
+    with pytest.raises(TwapStartTimeOutsideSessionError):
+        build_twap_plan(
+            position_side="long",
+            quantity_lots=2,
+            interval_seconds=60,
+            start_time=time(13, 21),
+            end_time=time(13, 25),
             now=svc.now_taipei(),
             session_service=svc,
         )

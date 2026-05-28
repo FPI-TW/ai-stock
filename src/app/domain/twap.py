@@ -19,6 +19,7 @@ TWAP_PRICE_FOLLOWUP_MAX_ATTEMPTS = 3
 TWAP_PRICE_FOLLOWUP_DELAY_SECONDS = 10
 
 SESSION_START_TIME = time(9, 0)
+TWAP_LATEST_START_TIME = time(13, 20)
 TWAP_LATEST_END_TIME = time(13, 25)
 
 
@@ -71,6 +72,36 @@ class TwapEndTimeOutsideSessionError(TwapError):
             "endTime": self.end_time.isoformat(),
             "sessionStart": SESSION_START_TIME.isoformat(),
             "latestEndTime": TWAP_LATEST_END_TIME.isoformat(),
+        }
+
+
+class TwapStartTimeOutsideSessionError(TwapError):
+    error_code = "TWAP_START_TIME_OUTSIDE_SESSION"
+
+    def __init__(self, start_time: time) -> None:
+        self.start_time = start_time
+        super().__init__(f"TWAP start time outside regular session: {start_time.isoformat()}")
+
+    def details(self) -> dict[str, object]:
+        return {
+            "startTime": self.start_time.isoformat(),
+            "sessionStart": SESSION_START_TIME.isoformat(),
+            "latestStartTime": TWAP_LATEST_START_TIME.isoformat(),
+        }
+
+
+class TwapStartTimeAfterEndTimeError(TwapError):
+    error_code = "TWAP_START_TIME_AFTER_END_TIME"
+
+    def __init__(self, start_time: time, end_time: time) -> None:
+        self.start_time = start_time
+        self.end_time = end_time
+        super().__init__(f"TWAP start time after end time: {start_time.isoformat()} > {end_time.isoformat()}")
+
+    def details(self) -> dict[str, object]:
+        return {
+            "startTime": self.start_time.isoformat(),
+            "endTime": self.end_time.isoformat(),
         }
 
 
@@ -141,6 +172,7 @@ class TwapPlan:
     position_side: str
     trading_phase: TradingDayPhase
     trading_date: date
+    requested_start_time: time
     start_at: datetime
     requested_end_time: time
     end_at: datetime
@@ -156,6 +188,7 @@ def build_twap_plan(
     position_side: str,
     quantity_lots: int,
     interval_seconds: int,
+    start_time: time | None = None,
     end_time: time,
     now: datetime,
     session_service: TradingSessionService,
@@ -164,22 +197,32 @@ def build_twap_plan(
         raise TwapInvalidIntervalError(interval_seconds)
     if quantity_lots < TWAP_MIN_QUANTITY_LOTS or quantity_lots > TWAP_MAX_QUANTITY_LOTS:
         raise TwapInvalidQuantityError(quantity_lots)
+    if start_time is not None and (start_time < SESSION_START_TIME or start_time > TWAP_LATEST_START_TIME):
+        raise TwapStartTimeOutsideSessionError(start_time)
     if end_time < SESSION_START_TIME or end_time > TWAP_LATEST_END_TIME:
         raise TwapEndTimeOutsideSessionError(end_time)
+    if start_time is not None and start_time > end_time:
+        raise TwapStartTimeAfterEndTimeError(start_time, end_time)
 
     now_taipei = now.astimezone(TAIPEI_TZ)
     phase = session_service.get_trading_day_phase(now_taipei)
     today = now_taipei.date()
 
+    requested_start_time = start_time
     if phase == TradingDayPhase.PRE_MARKET:
         trading_date = today
-        start_at = datetime.combine(trading_date, SESSION_START_TIME, tzinfo=TAIPEI_TZ)
+        start_at = datetime.combine(trading_date, requested_start_time or SESSION_START_TIME, tzinfo=TAIPEI_TZ)
     elif phase == TradingDayPhase.REGULAR_SESSION:
         trading_date = today
-        start_at = _ceil_to_second(now_taipei)
+        start_at = (
+            datetime.combine(trading_date, requested_start_time, tzinfo=TAIPEI_TZ)
+            if requested_start_time is not None
+            else _ceil_to_second(now_taipei)
+        )
     else:
         trading_date = session_service.next_trading_day(today)
-        start_at = datetime.combine(trading_date, SESSION_START_TIME, tzinfo=TAIPEI_TZ)
+        start_at = datetime.combine(trading_date, requested_start_time or SESSION_START_TIME, tzinfo=TAIPEI_TZ)
+    requested_start_time = requested_start_time or start_at.timetz().replace(tzinfo=None)
 
     end_at = datetime.combine(trading_date, end_time, tzinfo=TAIPEI_TZ)
     if phase == TradingDayPhase.REGULAR_SESSION and end_at < start_at:
@@ -204,6 +247,7 @@ def build_twap_plan(
         position_side=position_side,
         trading_phase=phase,
         trading_date=trading_date,
+        requested_start_time=requested_start_time,
         start_at=start_at,
         requested_end_time=end_time,
         end_at=end_at,

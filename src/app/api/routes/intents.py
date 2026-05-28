@@ -119,6 +119,7 @@ def preview_twap(
             position_side=request.position_side,
             quantity_lots=request.quantity_lots,
             interval_seconds=request.interval_seconds,
+            start_time=request.start_time,
             end_time=request.end_time,
             owner_user_id=user.user_id,
         )
@@ -139,6 +140,7 @@ def confirm_twap(
             position_side=request.position_side,
             quantity_lots=request.quantity_lots,
             interval_seconds=request.interval_seconds,
+            start_time=request.start_time,
             end_time=request.end_time,
             owner_user_id=user.user_id,
         )
