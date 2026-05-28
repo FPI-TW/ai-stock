@@ -198,6 +198,20 @@
           <button type="button" id="uv-create-btn" class="uv-primary-btn">+ 新增委託</button>
         </header>
 
+        <section id="uv-quote-board" class="qb-board" hidden>
+          <header class="qb-head">
+            <h2 class="qb-title">報價看板</h2>
+            <div class="qb-actions">
+              <button type="button" id="qb-refresh-btn" class="icon-btn" title="立即刷新" aria-label="立即刷新">↻</button>
+              <button type="button" id="qb-toggle-btn" class="qb-toggle" aria-expanded="true" aria-controls="qb-tiles">
+                <span class="qb-toggle-label">隱藏</span>
+                <span class="qb-toggle-icon" aria-hidden="true">▼</span>
+              </button>
+            </div>
+          </header>
+          <div class="qb-tiles" id="qb-tiles" role="list"></div>
+        </section>
+
         <div class="uv-grid">
           <section class="uv-section uv-section-main">
             <header class="uv-section-title">
