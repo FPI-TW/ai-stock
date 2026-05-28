@@ -151,6 +151,20 @@ export const ENDPOINTS = [
     },
   },
 
+  // ---- quotes ----------------------------------------------------------
+  {
+    group: "quotes",
+    method: "GET",
+    path: "/quotes",
+    implemented: true,
+    label: "批次查詢即時報價",
+    description: "傳入逗號分隔的股票代號，批次回傳最新行情快照（ask / bid / last）。快取未命中的標的回傳 stale=true 而不中斷整批。最多 50 個標的。",
+    query: { symbols: "2330,2317" },
+    queryParamSpecs: {
+      symbols: { description: "逗號分隔的股票代號（例如 2330,2317），最多 50 個", example: "2330,2317" },
+    },
+  },
+
   // ---- dev (LOCAL_MODE only) -------------------------------------------
   {
     group: "dev",
