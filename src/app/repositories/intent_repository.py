@@ -198,6 +198,7 @@ class IntentRepository:
         self,
         owner_user_id: UUID,
         statuses: list[str] | None,
+        trading_date: date | None,
         cursor: str | None,
         page_size: int,
     ) -> tuple[list[TradeIntentData], str | None]:
@@ -207,6 +208,8 @@ class IntentRepository:
         stmt = _select_intent_with_symbol_type().where(TradeIntent.owner_user_id == owner_user_id)
         if statuses:
             stmt = stmt.where(TradeIntent.status.in_(statuses))
+        if trading_date is not None:
+            stmt = stmt.where(TradeIntent.trading_date == trading_date)
 
         if is_terminal_only:
             stmt = stmt.order_by(TradeIntent.updated_at.desc(), TradeIntent.id.asc())

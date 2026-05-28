@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated
 from uuid import UUID
 
@@ -73,6 +74,7 @@ def list_intents(
     user: CurrentUserDep,
     intent_repo: IntentRepoDep,
     status_filter: Annotated[list[str] | None, Query(alias="status")] = None,
+    trading_date: Annotated[date | None, Query(alias="tradingDate")] = None,
     cursor: str | None = None,
     page_size: int = Query(default=50, ge=1, le=100, alias="pageSize"),
 ) -> IntentListResponse:
@@ -83,6 +85,7 @@ def list_intents(
     items, next_cursor = intent_repo.list_by_owner(
         owner_user_id=user.user_id,
         statuses=statuses,
+        trading_date=trading_date,
         cursor=cursor,
         page_size=page_size,
     )

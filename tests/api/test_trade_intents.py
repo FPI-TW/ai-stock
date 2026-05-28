@@ -269,6 +269,23 @@ def test_list_intents_status_filter(api_client: TestClient, mock_repo: MagicMock
     assert set(call_kwargs["statuses"]) == {"active", "scheduled"}
 
 
+def test_list_intents_trading_date_filter(api_client: TestClient, mock_repo: MagicMock) -> None:
+    mock_repo.list_by_owner.return_value = ([], None)
+
+    response = api_client.get("/trade-intents?tradingDate=2026-05-28")
+
+    assert response.status_code == status.HTTP_200_OK
+    call_kwargs = mock_repo.list_by_owner.call_args.kwargs
+    assert call_kwargs["trading_date"] == date(2026, 5, 28)
+
+
+def test_list_intents_invalid_trading_date_returns_422(api_client: TestClient) -> None:
+    response = api_client.get("/trade-intents?tradingDate=2026-99-99")
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
 def test_list_intents_comma_separated_status(api_client: TestClient, mock_repo: MagicMock) -> None:
     mock_repo.list_by_owner.return_value = ([], None)
 
