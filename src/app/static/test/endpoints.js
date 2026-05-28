@@ -122,6 +122,47 @@ export const ENDPOINTS = [
       intent_id: { description: "委託 ID（從列表頁複製）", example: "<貼上委託 ID>" },
     },
   },
+  {
+    group: "trade-intents",
+    method: "POST",
+    path: "/trade-intents/twap/preview",
+    implemented: true,
+    label: "TWAP 預覽",
+    description: "預覽 TWAP（時間加權平均價格）拆單計畫：依目標數量、結束時間、間隔秒數，計算切片數、起始/結束時間與每筆 slice。不會落地。",
+    examples: {
+      "台積電多單 5 張 / 60 秒 / 13:25": {
+        symbol: "2330",
+        positionSide: "long",
+        quantityLots: 5,
+        intervalSeconds: 60,
+        endTime: "13:25",
+      },
+      "台積電空單 3 張 / 30 秒 / 13:25": {
+        symbol: "2330",
+        positionSide: "short",
+        quantityLots: 3,
+        intervalSeconds: 30,
+        endTime: "13:25",
+      },
+    },
+  },
+  {
+    group: "trade-intents",
+    method: "POST",
+    path: "/trade-intents/twap/confirm",
+    implemented: true,
+    label: "TWAP 確認下單",
+    description: "確認並落地 TWAP 計畫：建立 twap_order intent 與所有 slices；用同樣的 payload 先 preview 再 confirm 即可。",
+    examples: {
+      "台積電多單 5 張 / 60 秒 / 13:25": {
+        symbol: "2330",
+        positionSide: "long",
+        quantityLots: 5,
+        intervalSeconds: 60,
+        endTime: "13:25",
+      },
+    },
+  },
 
   // ---- notifications ---------------------------------------------------
   {
@@ -162,6 +203,18 @@ export const ENDPOINTS = [
     query: { symbols: "2330,2317" },
     queryParamSpecs: {
       symbols: { description: "逗號分隔的股票代號（例如 2330,2317），最多 50 個", example: "2330,2317" },
+    },
+  },
+  {
+    group: "quotes",
+    method: "GET",
+    path: "/quotes/current-price/{symbol}",
+    implemented: true,
+    label: "查詢單一即時價（測試用）",
+    description: "向 broker demo provider 即時查單一標的的最新報價，僅允許白名單標的（2330 / 2317 / 0050 / 00878）。此 API 只在 QUOTE_PROVIDER=shioaji_demo 時可用，未來 V1 會改接正式行情。",
+    pathParams: { symbol: "2330" },
+    pathParamSpecs: {
+      symbol: { description: "白名單股票代號（2330 / 2317 / 0050 / 00878）", example: "2330" },
     },
   },
 
@@ -212,6 +265,24 @@ export const ENDPOINTS = [
     implemented: true,
     label: "Server 狀態（Dev）",
     description: "查看目前 server 狀態：環境模式、目前使用者、時鐘狀態、行情來源、訂閱中的標的。除錯與確認模式設定用。",
+  },
+  {
+    group: "dev",
+    method: "POST",
+    path: "/dev/twap/process-due-slices",
+    implemented: true,
+    label: "TWAP 處理到期切片（Dev）",
+    description: "手動觸發 TWAP worker：把已到時的 slices 推進到下一狀態。正式環境會有定時 worker，本地 demo 用此 API 模擬。回傳 processedCount。",
+    examples: { "全部到期切片": {} },
+  },
+  {
+    group: "dev",
+    method: "POST",
+    path: "/dev/twap/process-price-followups",
+    implemented: true,
+    label: "TWAP 處理價格 follow-up（Dev）",
+    description: "手動觸發 TWAP worker 的價格追蹤流程：對未成交切片依當下行情判斷是否成交或續延。回傳 processedCount。",
+    examples: { "全部追蹤": {} },
   },
 
   // ---- planned: V0.5-14 batch -----------------------------------------
