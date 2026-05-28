@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from tests.conftest import ClientFactory
 
 from app.services.quote.base import QuoteSnapshot
+from app.services.quote_lookup import MAX_SYMBOLS
 
 
 def _push_quote(
@@ -47,7 +48,7 @@ def test_get_quotes_single_symbol_with_snapshot(client_factory: ClientFactory) -
     assert row["bidPrice"] == "598.50"
     assert row["lastPrice"] == "599.00"
     assert row["stale"] is False
-    assert row["displayName"]  # registry should have something
+    assert row["displayName"] == "台積電"
 
 
 def test_get_quotes_multiple_symbols_preserve_order(client_factory: ClientFactory) -> None:
@@ -94,19 +95,33 @@ def test_get_quotes_empty_symbols_param_returns_400(client_factory: ClientFactor
 
 def test_get_quotes_too_many_symbols_returns_400(client_factory: ClientFactory) -> None:
     client = client_factory()
-    too_many = ",".join(f"99{i:02d}" for i in range(51))
+    too_many = ",".join(f"99{i:02d}" for i in range(MAX_SYMBOLS + 1))
     response = client.get("/quotes", params={"symbols": too_many})
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     body = response.json()
     assert body["error"]["code"] == "TOO_MANY_SYMBOLS"
-    assert body["error"]["details"]["limit"] == 50
-    assert body["error"]["details"]["received"] == 51
+    assert body["error"]["details"]["limit"] == MAX_SYMBOLS
+    assert body["error"]["details"]["received"] == MAX_SYMBOLS + 1
 
 
 def test_get_quotes_unknown_symbol_returns_404(client_factory: ClientFactory) -> None:
     client = client_factory()
     response = client.get("/quotes", params={"symbols": "ZZZZ"})
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    body = response.json()
+    assert body["error"]["code"] == "UNKNOWN_SYMBOL"
+    assert body["error"]["details"]["symbol"] == "ZZZZ"
+
+
+def test_get_quotes_mixed_valid_and_unknown_symbol_returns_404(
+    client_factory: ClientFactory,
+) -> None:
+    """Spec §3.3: any invalid symbol in batch rejects the whole request."""
+    client = client_factory()
+    _push_quote(client, "2330")
+    response = client.get("/quotes", params={"symbols": "2330,ZZZZ"})
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
     body = response.json()
