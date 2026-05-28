@@ -97,20 +97,7 @@ TradingSessionServiceDep = Annotated[TradingSessionService, Depends(get_trading_
 
 
 def get_quote_provider(request: Request) -> QuoteProvider:
-    """Return the process-wide quote provider stored on app.state.
-
-    `create_app()` instantiates the provider via the factory and stores it here
-    so every request shares the same in-memory subscription / snapshot state.
-    Tests substitute this dep with a `MagicMock` via `app.dependency_overrides`.
-    """
-
-    provider = getattr(request.app.state, "quote_provider", None)
-    if provider is None:
-        raise RuntimeError(
-            "quote_provider is not initialised on app.state; "
-            "check that create_app() ran and that QUOTE_PROVIDER is set."
-        )
-    return provider
+    return request.app.state.quote_provider
 
 
 QuoteProviderDep = Annotated[QuoteProvider, Depends(get_quote_provider)]
