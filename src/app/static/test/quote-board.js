@@ -53,7 +53,7 @@ export function addToWatchlist(code) {
   if (list.includes(code)) return;
   list.push(code);
   persistWatchlist(list);
-  baselinePriceByCode[code] = null; // reset baseline for new entry
+  baselinePriceByCode[code] = null;
   renderTiles({ optimistic: true });
 }
 
@@ -118,10 +118,8 @@ function renderTiles({ rows, optimistic } = {}) {
   if (!container) return;
   const watchlist = currentWatchlist();
   if (rows == null) {
-    // No fresh API data — render placeholders so UI still shows.
     rows = watchlist.map((code) => ({ symbol: code, stale: true, displayName: "" }));
   }
-  // Preserve order strictly to match watchlist; ignore extras from API.
   const byCode = Object.fromEntries(rows.map((r) => [r.symbol, r]));
   const orderedRows = watchlist.map((code) => byCode[code] || { symbol: code, stale: true, displayName: "" });
   const tilesHtml = orderedRows.map(tileHtml).join("");
@@ -129,7 +127,6 @@ function renderTiles({ rows, optimistic } = {}) {
   container.innerHTML = emptyState + tilesHtml + addTileHtml();
   bindTileEvents(container);
   if (optimistic) {
-    // Caller just added a symbol — kick polling immediately so the new tile gets data.
     void pollNow();
   }
 }
@@ -149,7 +146,7 @@ function bindTileEvents(container) {
 }
 
 // ---------------------------------------------------------------------------
-// Escape helpers (inline; small footprint)
+// Escape helpers
 // ---------------------------------------------------------------------------
 
 function escapeText(s) {
@@ -162,11 +159,81 @@ function escapeAttr(s) {
 }
 
 // ---------------------------------------------------------------------------
-// Polling — implemented in Task 9
+// Polling
 // ---------------------------------------------------------------------------
 
 export async function pollNow() {
-  // Stub; filled in Task 9.
+  const board = document.getElementById("uv-quote-board");
+  if (!board || board.hidden) return;
+  if (board.dataset.collapsed === "true") return;
+  if (document.visibilityState === "hidden") return;
+  const now = Date.now();
+  if (now < cooldownUntilMs) return;
+  const list = currentWatchlist();
+  if (list.length === 0) {
+    renderTiles({ rows: [] });
+    scheduleNextPoll();
+    return;
+  }
+
+  if (inflightController) inflightController.abort();
+  inflightController = new AbortController();
+  const signal = inflightController.signal;
+
+  let resp;
+  try {
+    resp = await sendRequest({
+      method: "GET",
+      path: "/quotes",
+      query: { symbols: list.join(",") },
+      signal,
+    });
+  } catch (err) {
+    if (err?.name === "AbortError") return;
+    onPollError(err);
+    scheduleNextPoll();
+    return;
+  }
+
+  if (resp.status === 200 && resp.body?.data) {
+    consecutiveErrors = 0;
+    cooldownUntilMs = 0;
+    renderTiles({ rows: resp.body.data });
+  } else if (resp.status === 404 && resp.body?.error?.code === "UNKNOWN_SYMBOL") {
+    const bad = resp.body.error?.details?.symbol;
+    if (bad) {
+      console.warn(`[quote-board] dropping unknown symbol ${bad} from watchlist`);
+      removeFromWatchlist(bad);
+    }
+  } else {
+    onPollError(new Error(`HTTP ${resp.status}`));
+  }
+  scheduleNextPoll();
+}
+
+function onPollError(err) {
+  consecutiveErrors += 1;
+  console.warn("[quote-board] poll failed:", err?.message || err);
+  if (consecutiveErrors >= 3) {
+    cooldownUntilMs = Date.now() + 30_000;
+    consecutiveErrors = 0;
+    console.warn("[quote-board] backing off 30s after repeated failures");
+  }
+  const container = document.getElementById("qb-tiles");
+  if (!container) return;
+  for (const tile of container.querySelectorAll(".qb-tile")) {
+    if (!tile.querySelector(".qb-tile-foot.error")) {
+      const foot = document.createElement("span");
+      foot.className = "qb-tile-foot error";
+      foot.textContent = "⚠ 連線中斷";
+      tile.appendChild(foot);
+    }
+  }
+}
+
+function scheduleNextPoll() {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = setTimeout(() => void pollNow(), POLL_MS);
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +256,7 @@ export function mountQuoteBoard() {
     toggleBtn.querySelector(".qb-toggle-label").textContent = collapsed ? "顯示" : "隱藏";
   }
   renderTiles();
+  void pollNow();
 }
 
 export function unmountQuoteBoard() {
