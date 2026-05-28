@@ -42,7 +42,7 @@ class QuoteRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     symbol: str
-    display_name: str | None = Field(default=None, serialization_alias="displayName")
+    display_name: str = Field(serialization_alias="displayName")
     ask_price: Decimal | None = Field(default=None, serialization_alias="askPrice")
     bid_price: Decimal | None = Field(default=None, serialization_alias="bidPrice")
     last_price: Decimal | None = Field(default=None, serialization_alias="lastPrice")
