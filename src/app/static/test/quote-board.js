@@ -256,6 +256,8 @@ export function mountQuoteBoard() {
     toggleBtn.querySelector(".qb-toggle-label").textContent = collapsed ? "顯示" : "隱藏";
   }
   renderTiles();
+  installBoardControls();
+  bindVisibility();
   void pollNow();
 }
 
@@ -273,4 +275,46 @@ export function unmountQuoteBoard() {
   baselinePriceByCode = {};
   consecutiveErrors = 0;
   cooldownUntilMs = 0;
+}
+
+// ---------------------------------------------------------------------------
+// DOM control wiring (toggle / refresh buttons + page visibility)
+// ---------------------------------------------------------------------------
+
+function installBoardControls() {
+  const toggleBtn = document.getElementById("qb-toggle-btn");
+  const refreshBtn = document.getElementById("qb-refresh-btn");
+  const board = document.getElementById("uv-quote-board");
+  if (toggleBtn && !toggleBtn.dataset.bound) {
+    toggleBtn.dataset.bound = "true";
+    toggleBtn.addEventListener("click", () => {
+      const wasCollapsed = board.dataset.collapsed === "true";
+      const next = !wasCollapsed;
+      board.dataset.collapsed = next ? "true" : "false";
+      localStorage.setItem(COLLAPSED_KEY, next ? "true" : "false");
+      toggleBtn.setAttribute("aria-expanded", next ? "false" : "true");
+      toggleBtn.querySelector(".qb-toggle-label").textContent = next ? "顯示" : "隱藏";
+      if (next) {
+        if (pollTimer) clearTimeout(pollTimer);
+        if (inflightController) inflightController.abort();
+      } else {
+        void pollNow();
+      }
+    });
+  }
+  if (refreshBtn && !refreshBtn.dataset.bound) {
+    refreshBtn.dataset.bound = "true";
+    refreshBtn.addEventListener("click", () => void pollNow());
+  }
+}
+
+let visibilityBound = false;
+function bindVisibility() {
+  if (visibilityBound) return;
+  visibilityBound = true;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      void pollNow();
+    }
+  });
 }

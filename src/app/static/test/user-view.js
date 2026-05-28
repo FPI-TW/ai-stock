@@ -18,6 +18,7 @@ import {
   renderIdentityMenu,
   syncDevUserSwitcher,
 } from "/test-assets/app.js";
+import { mountQuoteBoard, unmountQuoteBoard, addToWatchlist, setAddSymbolHandler } from "./quote-board.js";
 
 // ---------------------------------------------------------------------------
 // Strategy 中文 label — 與 notification_template.py 同步
@@ -241,7 +242,7 @@ async function refreshNotifications() {
 
   const notifs = resp.body?.data || [];
   const unread = notifs.filter((n) => !n.readAt).length;
-  document.getElementById("uv-notif-count").textContent = `${unread} 未讀 / ${notifs.length} 筆`;
+  renderNotifCount(unread, notifs.length);
 
   if (notifs.length === 0) {
     list.appendChild(emptyState("", "尚無通知", "委託觸發後會在這裡顯示"));
@@ -249,6 +250,19 @@ async function refreshNotifications() {
   }
 
   for (const notif of notifs) list.appendChild(renderNotifCard(notif));
+}
+
+function renderNotifCount(unread, total) {
+  const countEl = document.getElementById("uv-notif-count");
+  countEl.innerHTML = "";
+  if (total === 0) {
+    countEl.textContent = "—";
+    return;
+  }
+  const badgeClass = unread > 0 ? "unread" : "all-read";
+  const badgeText = unread > 0 ? `${unread} 未讀` : "全部已讀";
+  countEl.appendChild(el("span", { className: `uv-count-badge ${badgeClass}` }, [badgeText]));
+  countEl.appendChild(el("span", { className: "uv-count-total" }, [`/ ${total} 筆`]));
 }
 
 function renderNotifCard(notif) {
@@ -724,6 +738,29 @@ export function closeDetail() {
 }
 
 // ---------------------------------------------------------------------------
+// Symbol picker for watchlist (quote board "加入自選")
+// ---------------------------------------------------------------------------
+
+function openSymbolPickerForWatchlist() {
+  // Minimal version: prompt for code, validate via GET /symbols/{symbol},
+  // then add to watchlist. A polished picker (reuse of order-sheet search) can
+  // replace this later without affecting the quote-board public API.
+  const code = window.prompt("加入自選 — 輸入股票代號（例如 2330）");
+  if (!code) return;
+  const trimmed = code.trim();
+  if (!trimmed) return;
+  sendRequest({ method: "GET", path: `/symbols/${encodeURIComponent(trimmed)}` })
+    .then((resp) => {
+      if (resp.status === 200) {
+        addToWatchlist(trimmed);
+      } else {
+        alert(resp.body?.error?.message || `找不到 ${trimmed}`);
+      }
+    })
+    .catch(() => alert("加入失敗，請稍候再試"));
+}
+
+// ---------------------------------------------------------------------------
 // Custom confirm dialog
 // ---------------------------------------------------------------------------
 
@@ -881,5 +918,11 @@ export function initUserView() {
 }
 
 export function onEnterUserMode() {
+  setAddSymbolHandler(openSymbolPickerForWatchlist);
+  mountQuoteBoard();
   refreshDashboard();
+}
+
+export function onLeaveUserMode() {
+  unmountQuoteBoard();
 }

@@ -1118,6 +1118,7 @@ function applyMode(mode, uv, sv) {
     btn.setAttribute("aria-selected", String(isActive));
   }
   repositionModeIndicator();
+  if (mode !== "user") uv.onLeaveUserMode?.();
   if (mode === "user") uv.onEnterUserMode();
   if (mode === "service") sv.onEnterServiceMode();
 }
