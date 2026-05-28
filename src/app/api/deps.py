@@ -20,6 +20,7 @@ from app.repositories.notification_repository import NotificationRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.services.quote.base import QuoteProvider
 from app.services.quote.current_price import CurrentPriceProvider
+from app.services.quote_lookup import QuoteLookupService
 from app.services.symbol import SymbolService
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -250,3 +251,13 @@ def get_twap_slice_worker_command(
 
 
 TwapSliceWorkerCommandDep = Annotated[TwapSliceWorkerCommand, Depends(get_twap_slice_worker_command)]
+
+
+def get_quote_lookup_service(
+    symbols: SymbolServiceDep,
+    provider: QuoteProviderDep,
+) -> QuoteLookupService:
+    return QuoteLookupService(symbols, provider)
+
+
+QuoteLookupServiceDep = Annotated[QuoteLookupService, Depends(get_quote_lookup_service)]
