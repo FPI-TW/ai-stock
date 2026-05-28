@@ -296,6 +296,7 @@ function installBoardControls() {
   if (toggleBtn && !toggleBtn.dataset.bound) {
     toggleBtn.dataset.bound = "true";
     toggleBtn.addEventListener("click", () => {
+      if (!board) return;
       const wasCollapsed = board.dataset.collapsed === "true";
       const next = !wasCollapsed;
       board.dataset.collapsed = next ? "true" : "false";
@@ -303,8 +304,14 @@ function installBoardControls() {
       toggleBtn.setAttribute("aria-expanded", next ? "false" : "true");
       toggleBtn.querySelector(".qb-toggle-label").textContent = next ? "顯示" : "隱藏";
       if (next) {
-        if (pollTimer) clearTimeout(pollTimer);
-        if (inflightController) inflightController.abort();
+        if (pollTimer) {
+          clearTimeout(pollTimer);
+          pollTimer = null;
+        }
+        if (inflightController) {
+          inflightController.abort();
+          inflightController = null;
+        }
       } else {
         void pollNow();
       }
