@@ -343,7 +343,10 @@ function bindUserChange() {
   if (userChangeBound) return;
   userChangeBound = true;
   window.addEventListener("ai-stock:user-changed", () => {
-    if (inflightController) inflightController.abort();
+    if (inflightController) {
+      inflightController.abort();
+      inflightController = null;
+    }
     baselinePriceByCode = {};
     renderTiles();
     void pollNow();
