@@ -48,8 +48,8 @@ PRODUCTION_SYMBOL_SEED: list[dict[str, Any]] = [
     },
 ]
 
-# 測試專用標的：用來驗證 halted / unsupported tradable_status 在 service / API
-# 層的拒絕行為。V1 importer 上線後應從 seed 移除，改放到 test fixture。
+# 測試專用標的：用來驗證 halted tradable_status 在 service / API 層的拒絕行為。
+# V1 importer 上線後應從 seed 移除，改放到 test fixture。
 TEST_FIXTURE_SYMBOL_SEED: list[dict[str, Any]] = [
     {
         "symbol": "9999",
@@ -57,13 +57,6 @@ TEST_FIXTURE_SYMBOL_SEED: list[dict[str, Any]] = [
         "market": "TWSE",
         "instrument_type": "stock",
         "tradable_status": "halted",
-    },
-    {
-        "symbol": "8888",
-        "display_name": "測試unsupported狀態股票",
-        "market": "TWSE",
-        "instrument_type": "stock",
-        "tradable_status": "unsupported",
     },
 ]
 

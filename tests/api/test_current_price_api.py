@@ -104,6 +104,15 @@ def test_current_price_rejects_symbol_outside_test_allowlist(monkeypatch: pytest
     assert body["error"]["details"] == {"symbol": "1101", "allowed": ["0050", "00878", "2317", "2330"]}
 
 
+def test_current_price_rejects_symbol_before_provider_check(client_factory: Callable[[], TestClient]) -> None:
+    response = client_factory().get("/quotes/current-price/2230")
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    body = response.json()
+    assert body["error"]["code"] == "CURRENT_PRICE_SYMBOL_NOT_ALLOWED"
+    assert body["error"]["details"] == {"symbol": "2230", "allowed": ["0050", "00878", "2317", "2330"]}
+
+
 def test_current_price_requires_shioaji_provider(client_factory: Callable[[], TestClient]) -> None:
     response = client_factory().get("/quotes/current-price/2330")
 

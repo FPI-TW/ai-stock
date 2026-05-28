@@ -33,6 +33,7 @@ def clear_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
         "LOCAL_USER_ID",
         "LOCAL_MODE",
         "REQUEST_ID_HEADER",
+        "CORS_ALLOW_ORIGINS",
         "QUOTE_PROVIDER",
         "SHIOAJI_API_KEY",
         "SHIOAJI_SECRET_KEY",

@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import register_exception_handlers
 from app.api.routes.dev import router as dev_router
@@ -77,6 +78,14 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
     app.state.request_id_header = settings.request_id_header
     app.state.quote_provider = build_quote_provider(settings)
+    allow_origins = [origin.strip() for origin in settings.cors_allow_origins.split(",") if origin.strip()]
+    if allow_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allow_origins,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     app.add_middleware(RequestIdMiddleware, header_name=settings.request_id_header)
     register_exception_handlers(app)
     app.include_router(health_router)
