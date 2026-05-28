@@ -178,6 +178,7 @@ def test_get_quotes_mixed_valid_and_unknown_returns_404(
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert response.json()["error"]["code"] == "UNKNOWN_SYMBOL"
+    assert response.json()["error"]["details"]["symbol"] == "ZZZZ"
 
 
 def test_get_quotes_works_in_production_mode(
