@@ -11,11 +11,12 @@ from app.commands.trigger_intent import TriggerIntentInput, persist_trigger
 from app.db.models.core import TradeIntent as TradeIntentRow
 from app.domain.price import InvalidTypeError, PriceRequest, PriceService, SecurityType
 from app.domain.quote_evaluation import QuoteEvaluator
-from app.domain.trade_intent import TradeIntentData
+from app.domain.trade_intent import MARKET_ORDER_STRATEGIES, TradeIntentData
 from app.domain.trading_session import TradingSessionService
 from app.domain.trigger_event import quote_snapshot_to_jsonb
 from app.repositories.intent_repository import IntentRepository
-from app.services.quote.base import QuoteProvider, QuoteUnavailableError
+from app.services.quote.base import QuoteProvider, QuoteProviderError, QuoteSnapshot, QuoteUnavailableError
+from app.services.quote.current_price import CurrentPriceProvider
 from app.services.quote.intent_reconciler import reconcile_after_terminal_transition, reconcile_on_create
 from app.services.symbol import SymbolService
 
@@ -31,6 +32,9 @@ _TRIGGER_REF: dict[str, str] = {
     "sell_price_alert": "bid",
     "limit_buy_order": "ask",
     "limit_sell_order": "bid",
+    "market_order": "ask",
+    "market_buy_order": "ask",
+    "market_sell_order": "bid",
     "trailing_stop_alert": "bid",
 }
 
@@ -112,6 +116,8 @@ class CreateTradeIntentCommand:
                 trail_value = inp.trail_value
                 if inp.trail_mode == "fixed_amount":
                     PriceService.validate_fixed_amount_tick(security_type, inp.trail_value)
+            elif inp.strategy in MARKET_ORDER_STRATEGIES:
+                effective_price = None
             else:
                 if inp.target_price is None:
                     raise ValueError(f"{inp.strategy} requires target_price")
@@ -160,7 +166,9 @@ class CreateTradeIntentCommand:
             #    intents skip — they wait for the next-day activation path.
             #    Folded into this transaction so dispatcher can never observe
             #    an active-but-pre-trigger window.
-            if initial_status == "active":
+            if inp.strategy in MARKET_ORDER_STRATEGIES and initial_status == "active":
+                self._apply_inline_market_order_trigger(intent_id, inp.symbol)
+            elif initial_status == "active":
                 self._apply_inline_trigger_if_quote_met(intent_id, inp.symbol, now, security_type)
 
             self._db.commit()
@@ -266,6 +274,68 @@ class CreateTradeIntentCommand:
                 quote_time=quote.quote_time,
             ),
         )
+
+    def _apply_inline_market_order_trigger(self, intent_id: UUID, symbol: str) -> None:
+        try:
+            quote = self._get_market_order_quote(symbol)
+        except QuoteProviderError as exc:
+            logger.warning(
+                "create: market order quote unavailable for %s, intent %s stays active: %s",
+                symbol,
+                intent_id,
+                exc,
+            )
+            return
+
+        if quote.bid_price is None and quote.ask_price is None and quote.last_price is None:
+            logger.warning(
+                "create: market order quote has no usable price for %s, intent %s stays active",
+                symbol,
+                intent_id,
+            )
+            return
+
+        intent_row = self._db.execute(select(TradeIntentRow).where(TradeIntentRow.id == intent_id)).scalar_one()
+        is_sell_side = intent_row.strategy == "market_sell_order"
+        trigger_price = quote.bid_price if is_sell_side else quote.ask_price
+        trigger_reference_price_type = "bid" if is_sell_side else "ask"
+        fallback_used = False
+        if trigger_price is None:
+            trigger_price = quote.last_price
+            trigger_reference_price_type = "last_fallback"
+            fallback_used = True
+        if trigger_price is None or trigger_price <= 0:
+            logger.warning(
+                "create: market order quote has no usable price for %s, intent %s stays active",
+                symbol,
+                intent_id,
+            )
+            return
+
+        persist_trigger(
+            self._db,
+            intent_row,
+            TriggerIntentInput(
+                intent_id=intent_row.id,
+                trigger_price=trigger_price,
+                trigger_reference_price_type=trigger_reference_price_type,
+                fallback_used=fallback_used,
+                quote_snapshot=quote_snapshot_to_jsonb(quote),
+                quote_time=quote.quote_time,
+            ),
+        )
+
+    def _get_market_order_quote(self, symbol: str) -> QuoteSnapshot:
+        if isinstance(self._quote_provider, CurrentPriceProvider):
+            try:
+                return self._quote_provider.get_current_price(symbol)
+            except QuoteProviderError:
+                pass
+
+        quotes = self._quote_provider.get_quotes([symbol])
+        if not quotes:
+            raise QuoteUnavailableError(symbol)
+        return quotes[0]
 
 
 class CancelTradeIntentCommand:

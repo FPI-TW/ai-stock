@@ -25,6 +25,7 @@ def _plan() -> TwapPlan:
         position_side="long",
         trading_phase=TradingDayPhase.PRE_MARKET,
         trading_date=date(2026, 5, 28),
+        requested_start_time=time(9, 0),
         start_at=start_at,
         requested_end_time=time(9, 5),
         end_at=datetime(2026, 5, 28, 9, 5, tzinfo=TAIPEI),
@@ -132,6 +133,7 @@ def test_twap_preview_returns_schedule(client: TestClient, plan_command: MagicMo
             "positionSide": "long",
             "quantityLots": 2,
             "intervalSeconds": 300,
+            "startTime": "09:00",
             "endTime": "09:05",
         },
     )
@@ -140,6 +142,8 @@ def test_twap_preview_returns_schedule(client: TestClient, plan_command: MagicMo
     data = response.json()["data"]
     assert data["strategy"] == "twap_order"
     assert data["positionSide"] == "long"
+    assert data["startTime"] == "09:00:00"
+    assert data["endTime"] == "09:05:00"
     assert data["availableSliceCount"] == 2
     assert data["slices"][0]["plannedQuantityLots"] == 1
 
@@ -160,6 +164,7 @@ def test_twap_confirm_creates_intent_and_returns_slices(
             "positionSide": "long",
             "quantityLots": 2,
             "intervalSeconds": 300,
+            "startTime": "09:00",
             "endTime": "09:05",
         },
     )
@@ -167,6 +172,7 @@ def test_twap_confirm_creates_intent_and_returns_slices(
     assert response.status_code == status.HTTP_201_CREATED
     data = response.json()["data"]
     assert data["strategy"] == "twap_order"
+    assert data["twap"]["startTime"] == "09:00:00"
     assert data["twap"]["materializedSliceCount"] == 2
     assert len(data["twapSlices"]) == 2
 
@@ -192,6 +198,23 @@ def test_twap_preview_rejects_seconds_in_end_time(client: TestClient) -> None:
             "quantityLots": 2,
             "intervalSeconds": 1,
             "endTime": "09:00:00",
+        },
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_twap_preview_rejects_seconds_in_start_time(client: TestClient) -> None:
+    response = client.post(
+        "/trade-intents/twap/preview",
+        json={
+            "symbol": "2330",
+            "positionSide": "long",
+            "quantityLots": 2,
+            "intervalSeconds": 1,
+            "startTime": "09:00:00",
+            "endTime": "09:05",
         },
     )
 

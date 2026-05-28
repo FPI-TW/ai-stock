@@ -34,6 +34,7 @@ class TwapPlanInput:
     position_side: str
     quantity_lots: int
     interval_seconds: int
+    start_time: time | None
     end_time: time
     owner_user_id: UUID
 
@@ -66,6 +67,7 @@ class TwapPlanCommand:
             position_side=inp.position_side,
             quantity_lots=inp.quantity_lots,
             interval_seconds=inp.interval_seconds,
+            start_time=inp.start_time,
             end_time=inp.end_time,
             now=self._session_service.now_taipei(),
             session_service=self._session_service,

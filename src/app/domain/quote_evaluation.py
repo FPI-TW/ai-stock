@@ -72,6 +72,10 @@ class QuoteEvaluator:
             return self._evaluate_buy(quote, intent.target_price_effective)
         if intent.strategy in {"sell_price_alert", "limit_sell_order"}:
             return self._evaluate_sell(quote, intent.target_price_effective)
+        if intent.strategy in {"market_order", "market_buy_order"}:
+            return self._evaluate_market_buy(quote)
+        if intent.strategy == "market_sell_order":
+            return self._evaluate_market_sell(quote)
         if intent.strategy == "trailing_stop_alert":
             return self._evaluate_trailing_stop(quote, intent, now)
         return EvaluationResult(should_trigger=False, skip_reason=SkipReason.UNSUPPORTED_STRATEGY)
@@ -122,6 +126,40 @@ class QuoteEvaluator:
                 )
             return EvaluationResult(should_trigger=False, skip_reason=SkipReason.CONDITION_NOT_MET)
         if quote.last_price is not None and quote.last_price >= target:
+            return EvaluationResult(
+                should_trigger=True,
+                trigger_price=quote.last_price,
+                trigger_reference_price_type="last_fallback",
+                fallback_used=True,
+            )
+        return EvaluationResult(should_trigger=False, skip_reason=SkipReason.CONDITION_NOT_MET)
+
+    @staticmethod
+    def _evaluate_market_buy(quote: QuoteSnapshot) -> EvaluationResult:
+        if quote.ask_price is not None:
+            return EvaluationResult(
+                should_trigger=True,
+                trigger_price=quote.ask_price,
+                trigger_reference_price_type="ask",
+            )
+        if quote.last_price is not None:
+            return EvaluationResult(
+                should_trigger=True,
+                trigger_price=quote.last_price,
+                trigger_reference_price_type="last_fallback",
+                fallback_used=True,
+            )
+        return EvaluationResult(should_trigger=False, skip_reason=SkipReason.CONDITION_NOT_MET)
+
+    @staticmethod
+    def _evaluate_market_sell(quote: QuoteSnapshot) -> EvaluationResult:
+        if quote.bid_price is not None:
+            return EvaluationResult(
+                should_trigger=True,
+                trigger_price=quote.bid_price,
+                trigger_reference_price_type="bid",
+            )
+        if quote.last_price is not None:
             return EvaluationResult(
                 should_trigger=True,
                 trigger_price=quote.last_price,

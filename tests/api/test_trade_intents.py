@@ -42,6 +42,11 @@ _LIMIT_BUY_PAYLOAD = {
     "transactionMode": "partial_fill_allowed",
     "notificationMode": "single",
 }
+_MARKET_PAYLOAD = {
+    "symbol": "2330",
+    "strategy": "market_buy_order",
+    "quantityLots": 1,
+}
 _TRAILING_STOP_PAYLOAD = {
     "symbol": "2330",
     "strategy": "trailing_stop_alert",
@@ -62,6 +67,7 @@ def _make_intent(
     trail_mode: str | None = None,
     trail_value: Decimal | None = None,
     filled_quantity_lots: int = 0,
+    transaction_mode: str = "single_notification",
 ) -> TradeIntentData:
     now = datetime.now(tz=UTC)
     return TradeIntentData(
@@ -73,7 +79,7 @@ def _make_intent(
         quantity_lots=quantity_lots,
         target_price_original=Decimal(price) if price is not None else None,
         target_price_effective=Decimal(price) if price is not None else None,
-        trigger_reference_price_type="ask" if "buy" in strategy else "bid",
+        trigger_reference_price_type="ask" if "buy" in strategy or strategy == "market_order" else "bid",
         trading_date=date.today(),
         time_in_force="day",
         status=status,
@@ -83,6 +89,7 @@ def _make_intent(
         trail_mode=trail_mode,
         trail_value=trail_value,
         filled_quantity_lots=filled_quantity_lots,
+        transaction_mode=transaction_mode,
     )
 
 
@@ -175,6 +182,55 @@ def test_create_triggered_limit_order_returns_filled_quantity(
     assert data["strategy"] == "limit_buy_order"
     assert data["status"] == "triggered"
     assert data["filledQuantityLots"] == data["quantityLots"]
+
+
+def test_create_market_order_success(api_client: TestClient, mock_create_command: MagicMock) -> None:
+    mock_create_command.execute.return_value = _make_intent(
+        strategy="market_buy_order",
+        status="triggered",
+        price=None,
+        filled_quantity_lots=1,
+        transaction_mode="partial_fill_allowed",
+    )
+
+    response = api_client.post("/trade-intents", json=_MARKET_PAYLOAD)
+
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()["data"]
+    assert data["strategy"] == "market_buy_order"
+    assert data["targetPriceOriginal"] is None
+    assert data["transactionMode"] == "partial_fill_allowed"
+    assert data["status"] == "triggered"
+    assert data["filledQuantityLots"] == data["quantityLots"]
+    call_input = mock_create_command.execute.call_args.args[0]
+    assert call_input.transaction_mode == "partial_fill_allowed"
+
+
+def test_create_market_sell_order_success(api_client: TestClient, mock_create_command: MagicMock) -> None:
+    mock_create_command.execute.return_value = _make_intent(
+        strategy="market_sell_order",
+        status="triggered",
+        price=None,
+        filled_quantity_lots=1,
+        transaction_mode="partial_fill_allowed",
+    )
+
+    response = api_client.post(
+        "/trade-intents",
+        json={
+            "symbol": "2330",
+            "strategy": "market_sell_order",
+            "quantityLots": 1,
+        },
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()["data"]
+    assert data["strategy"] == "market_sell_order"
+    assert data["transactionMode"] == "partial_fill_allowed"
+    call_input = mock_create_command.execute.call_args.args[0]
+    assert call_input.strategy == "market_sell_order"
+    assert call_input.transaction_mode == "partial_fill_allowed"
 
 
 def test_create_trailing_stop_success(api_client: TestClient, mock_create_command: MagicMock) -> None:

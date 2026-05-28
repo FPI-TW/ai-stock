@@ -46,6 +46,7 @@ from app.domain.trade_intent import IntentNotFoundError
 from app.domain.trigger_event import DuplicateTriggerError, TriggerError, TriggerEventData
 from app.services.notification_template import (
     render_limit_order_triggered,
+    render_market_order_triggered,
     render_price_triggered,
     render_trailing_stop_triggered,
 )
@@ -130,7 +131,18 @@ def persist_trigger(
     target_price_effective = intent.target_price_effective
     baseline_at_trigger = None
     dynamic_trigger_price_at_trigger = None
-    if intent.strategy in {"limit_buy_order", "limit_sell_order"}:
+    if intent.strategy in {"market_order", "market_buy_order", "market_sell_order"}:
+        notification_type = "market_order_triggered"
+        target_price_effective = inp.trigger_price
+        title, body = render_market_order_triggered(
+            symbol=intent.symbol,
+            strategy=intent.strategy,
+            trigger_price=inp.trigger_price,
+            filled_quantity_lots=intent.quantity_lots,
+            quantity_lots=intent.quantity_lots,
+            quote_time=inp.quote_time,
+        )
+    elif intent.strategy in {"limit_buy_order", "limit_sell_order"}:
         if intent.target_price_effective is None:
             raise RuntimeError("limit order trigger requires target_price_effective")
         notification_type = "limit_order_triggered"

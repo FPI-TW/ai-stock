@@ -8,6 +8,7 @@ import pytest
 
 from app.services.notification_template import (
     render_limit_order_triggered,
+    render_market_order_triggered,
     render_price_triggered,
     render_trailing_stop_triggered,
     render_twap_price_followup,
@@ -147,6 +148,34 @@ class TestRenderLimitOrderTriggered:
                 strategy="limit_buy_order",
                 target_price=Decimal("600"),
                 trigger_price=Decimal("599.5"),
+                filled_quantity_lots=1,
+                quantity_lots=1,
+                quote_time=datetime(2026, 5, 11, 10, 0, 5),
+            )
+
+
+class TestRenderMarketOrderTriggered:
+    def test_market_order_body_contains_fill_and_reference_price(self) -> None:
+        title, body = render_market_order_triggered(
+            symbol="2330",
+            strategy="market_buy_order",
+            trigger_price=Decimal("600"),
+            filled_quantity_lots=1,
+            quantity_lots=1,
+            quote_time=QUOTE_TIME,
+        )
+
+        assert title == "2330 市價買單已觸發"
+        assert "策略：市價買單" in body
+        assert "成交參考價：600.00" in body
+        assert "成交 1 張 / 委託 1 張" in body
+
+    def test_naive_quote_time_raises(self) -> None:
+        with pytest.raises(TypeError, match="timezone-aware"):
+            render_market_order_triggered(
+                symbol="2330",
+                strategy="market_order",
+                trigger_price=Decimal("600"),
                 filled_quantity_lots=1,
                 quantity_lots=1,
                 quote_time=datetime(2026, 5, 11, 10, 0, 5),

@@ -63,7 +63,7 @@ class TradeIntent(TimestampMixin, Base):
             "strategy IN ("
             "'buy_price_alert', 'sell_price_alert', "
             "'limit_buy_order', 'limit_sell_order', 'trailing_stop_alert', "
-            "'twap_order'"
+            "'market_order', 'market_buy_order', 'market_sell_order', 'twap_order'"
             ")",
             name="strategy",
         ),
@@ -81,9 +81,14 @@ class TradeIntent(TimestampMixin, Base):
         CheckConstraint(
             "((strategy = 'trailing_stop_alert' AND target_price_original IS NULL "
             "AND target_price_effective IS NULL) OR "
+            "(strategy IN ('market_order', 'market_buy_order', 'market_sell_order') AND target_price_original IS NULL "
+            "AND target_price_effective IS NULL) OR "
             "(strategy = 'twap_order' AND target_price_original IS NULL "
             "AND target_price_effective IS NULL) OR "
-            "(strategy NOT IN ('trailing_stop_alert', 'twap_order') AND target_price_original > 0 "
+            "(strategy NOT IN ("
+            "'trailing_stop_alert', 'market_order', 'market_buy_order', "
+            "'market_sell_order', 'twap_order'"
+            ") AND target_price_original > 0 "
             "AND target_price_effective > 0))",
             name="target_price_presence",
         ),
@@ -302,14 +307,14 @@ class Notification(Base):
         CheckConstraint(
             "type IN ("
             "'price_triggered', 'limit_order_triggered', 'trailing_stop_triggered', "
-            "'twap_slice', 'twap_price_followup'"
+            "'market_order_triggered', 'twap_slice', 'twap_price_followup'"
             ")",
             name="type",
         ),
         CheckConstraint(
             "(type NOT IN ("
             "'price_triggered', 'limit_order_triggered', 'trailing_stop_triggered', "
-            "'twap_slice', 'twap_price_followup'"
+            "'market_order_triggered', 'twap_slice', 'twap_price_followup'"
             ")) "
             "OR (trade_intent_id IS NOT NULL)",
             name="triggered_notification_intent",
