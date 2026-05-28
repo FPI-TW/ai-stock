@@ -261,7 +261,7 @@ Non-terminal statuses：
 - 除息 / 行情資料異常轉 `paused_data_issue`。
 - 暫停交易 / 盤中停止交易轉 `paused_market_status`。
 
-Expiry 需有雙保險：expiry job 於收盤後將 day intents 轉 `expired`，但 quote evaluator 每輪評估前仍需檢查 market session，一般盤外不得觸發。若收盤後仍存在應過期的 active intents，需產生 admin alert；補跑 expiry job 後轉 `expired`，不發到價通知。
+Expiry 需有雙保險：expiry job 或 lightweight lifecycle reconciliation 於收盤後將 day intents 轉 `expired`，但 quote evaluator 每輪評估前仍需檢查 market session，一般盤外不得觸發。若收盤後仍存在應過期的 active intents，需產生 admin alert；補跑 expiry job / lifecycle reconciliation 後轉 `expired`，不發到價通知。
 
 `invalid_for_day` 需產生 system notification，至少送 `in_app`，Telegram 依觸發當下使用者設定派送。通知文案需說明原因，例如超出漲跌停、今日停止買賣，且不得稱為到價通知。OCO group 任一腳 `invalid_for_day` 時，整組轉 `invalid_for_day` 並通知使用者。
 

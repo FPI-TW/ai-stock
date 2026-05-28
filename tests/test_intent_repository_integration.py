@@ -1,10 +1,11 @@
 """Integration tests for IntentRepository against a real PostgreSQL database."""
 
 from collections.abc import Generator
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from alembic import command
@@ -22,6 +23,8 @@ from app.domain.trade_intent import (
     TradeIntentData,
 )
 from app.repositories.intent_repository import IntentRepository
+
+TAIPEI = ZoneInfo("Asia/Taipei")
 
 
 def _alembic_config() -> Config:
@@ -179,6 +182,61 @@ def test_create_after_terminal_allows_new_intent(repo: IntentRepository) -> None
 
 
 @pytest.mark.integration
+def test_create_after_expired_allows_new_intent(repo: IntentRepository) -> None:
+    owner = uuid4()
+    intent = _create(repo, owner_user_id=owner)
+    count = repo.system_expire_day_intents_through(date(2026, 5, 12), datetime(2026, 5, 12, 13, 30, tzinfo=TAIPEI))
+    repo.commit()
+
+    assert count == 1
+    expired = repo.find_by_id(intent.id, owner)
+    assert expired.status == "expired"
+
+    new_intent = _create(repo, owner_user_id=owner)
+    assert new_intent.id != intent.id
+    assert new_intent.status == "active"
+
+
+@pytest.mark.integration
+def test_activate_scheduled_day_intents(repo: IntentRepository) -> None:
+    owner = uuid4()
+    intent = _create(repo, owner_user_id=owner, status="scheduled", trading_date=date(2026, 5, 12))
+
+    count = repo.system_activate_scheduled_day_intents(
+        date(2026, 5, 12),
+        datetime(2026, 5, 12, 9, 0, tzinfo=TAIPEI),
+    )
+    repo.commit()
+
+    assert count == 1
+    activated = repo.find_by_id(intent.id, owner)
+    assert activated.status == "active"
+
+
+@pytest.mark.integration
+def test_expire_day_intents_through_does_not_expire_future_scheduled(repo: IntentRepository) -> None:
+    owner = uuid4()
+    stale = _create(repo, owner_user_id=owner, status="active", trading_date=date(2026, 5, 12))
+    future = _create(
+        repo,
+        owner_user_id=owner,
+        status="scheduled",
+        trading_date=date(2026, 5, 13),
+        target_price="101.0000",
+    )
+
+    count = repo.system_expire_day_intents_through(
+        date(2026, 5, 12),
+        datetime(2026, 5, 12, 13, 30, tzinfo=TAIPEI),
+    )
+    repo.commit()
+
+    assert count == 1
+    assert repo.find_by_id(stale.id, owner).status == "expired"
+    assert repo.find_by_id(future.id, owner).status == "scheduled"
+
+
+@pytest.mark.integration
 def test_cancel_already_cancelled_returns_same_state(repo: IntentRepository) -> None:
     owner = uuid4()
     intent = _create(repo, owner_user_id=owner)
@@ -305,6 +363,18 @@ def test_active_or_scheduled_symbols_excludes_terminal_intents(repo: IntentRepos
     owner = uuid4()
     intent = _create(repo, owner_user_id=owner)
     repo.cancel(intent.id, owner)
+
+    symbols = repo.active_or_scheduled_symbols()
+
+    assert symbols == set()
+
+
+@pytest.mark.integration
+def test_active_or_scheduled_symbols_excludes_expired_intents(repo: IntentRepository) -> None:
+    owner = uuid4()
+    _create(repo, owner_user_id=owner)
+    repo.system_expire_day_intents_through(date(2026, 5, 12), datetime(2026, 5, 12, 13, 30, tzinfo=TAIPEI))
+    repo.commit()
 
     symbols = repo.active_or_scheduled_symbols()
 

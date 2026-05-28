@@ -24,8 +24,7 @@ V0.5 不做正式 market calendar importer 或 scheduled jobs，但仍需要基�
 - 不做正式 holiday calendar importer。
 - 不做半日交易。
 - 不做臨時休市。
-- 不做 activation scheduled job。
-- 不做 expiry scheduled job。
+- 不做正式 scheduler；activation/expiry 由 API、quote dispatcher、dev tooling、TWAP worker 進入點先執行 lightweight lifecycle reconciliation。
 - 不做 market status pause/resume。
 
 ## 規則
@@ -43,12 +42,19 @@ Create intent：
 - 若 now 在 regular session 前：`status = scheduled`，`trading_date = today(Taipei)`。
 - 若 now 在收盤後或週末：`status = scheduled`，`trading_date = next weekday`。
 
+Lifecycle reconciliation：
+
+- 盤中：`trading_date = today` 的 `scheduled` day intent 轉 `active`。
+- 盤後：`trading_date <= today` 且仍為 `scheduled` / `active` 的 day intent 轉 `expired`。
+- 盤前：只過期 `trading_date < today` 的殘留 open intent，不過期當日盤前 scheduled intent。
+- 週末 / 非交易日：只過期已落在今日以前的殘留 open intent；未來 trading_date 的 scheduled intent 保持 scheduled。
+
 Evaluator：
 
 - 只有 `active` intent 可評估。
 - `now` 必須在 regular session。
 - `quote_time` 必須在 regular session。
-- 不做自動 activation/expiry job；狀態轉換可留待 V1。
+- 評估前先跑 lifecycle reconciliation，避免收盤後殘留 active intent 被觸發。
 
 ## 建議 Interface
 

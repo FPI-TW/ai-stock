@@ -17,6 +17,7 @@ import logging
 from fastapi import APIRouter
 
 from app.api.deps import (
+    IntentLifecycleCommandDep,
     IntentRepoDep,
     QuoteEvaluatorDep,
     QuoteProviderDep,
@@ -52,7 +53,9 @@ def evaluate_quotes(
     evaluator: QuoteEvaluatorDep,
     trigger_cmd: TriggerIntentCommandDep,
     session_service: TradingSessionServiceDep,
+    lifecycle: IntentLifecycleCommandDep,
 ) -> EvaluateQuotesResponse:
+    lifecycle.run()
     if request.symbols:
         symbols = sorted(set(request.symbols))
     else:

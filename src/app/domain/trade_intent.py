@@ -6,8 +6,8 @@ from uuid import UUID
 from app.domain.price import SecurityType
 
 CANCELLABLE_STATUSES = frozenset({"active", "scheduled"})
-TERMINAL_STATUSES = frozenset({"triggered", "cancelled"})
-VALID_STATUSES = frozenset({"active", "scheduled", "triggered", "cancelled"})
+TERMINAL_STATUSES = frozenset({"triggered", "expired", "cancelled"})
+VALID_STATUSES = frozenset({"active", "scheduled", "triggered", "expired", "cancelled"})
 BUY_SIDE_STRATEGIES = frozenset({"buy_price_alert", "limit_buy_order"})
 SELL_SIDE_STRATEGIES = frozenset({"sell_price_alert", "limit_sell_order", "trailing_stop_alert"})
 

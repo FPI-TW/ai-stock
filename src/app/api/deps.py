@@ -5,6 +5,7 @@ from fastapi import Depends, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.errors import ApiError, ErrorCode
+from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.commands.notification import MarkNotificationReadCommand
 from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand
 from app.commands.trigger_intent import TriggerIntentCommand
@@ -65,6 +66,16 @@ def get_trading_session_service() -> TradingSessionService:
 
 
 TradingSessionServiceDep = Annotated[TradingSessionService, Depends(get_trading_session_service)]
+
+
+def get_intent_lifecycle_command(
+    intent_repo: IntentRepoDep,
+    session_service: TradingSessionServiceDep,
+) -> IntentLifecycleCommand:
+    return IntentLifecycleCommand(intent_repo, session_service)
+
+
+IntentLifecycleCommandDep = Annotated[IntentLifecycleCommand, Depends(get_intent_lifecycle_command)]
 
 
 def get_quote_provider(request: Request) -> QuoteProvider:

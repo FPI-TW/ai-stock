@@ -24,11 +24,16 @@ class FakeResult:
         *,
         rows: list[tuple[TwapSlice, TradeIntent]] | None = None,
         scalar: int | None = None,
+        rowcount: int = 0,
     ) -> None:
         self._rows = rows or []
         self._scalar = scalar
+        self.rowcount = rowcount
 
     def tuples(self) -> "FakeResult":
+        return self
+
+    def scalars(self) -> "FakeResult":
         return self
 
     def all(self) -> list[tuple[TwapSlice, TradeIntent]]:
@@ -49,6 +54,8 @@ class FakeSession:
         self.rolled_back = False
 
     def execute(self, _stmt: object) -> FakeResult:
+        if type(_stmt).__name__ == "Update":
+            return FakeResult(rowcount=0)
         if not self.results:
             raise AssertionError("unexpected execute")
         return self.results.pop(0)
@@ -156,11 +163,16 @@ def _slice(
     )
 
 
-def _worker(fake_db: FakeSession, provider: FakeQuoteProvider) -> TwapSliceWorkerCommand:
+def _worker(
+    fake_db: FakeSession,
+    provider: FakeQuoteProvider,
+    *,
+    now: datetime = NOW,
+) -> TwapSliceWorkerCommand:
     return TwapSliceWorkerCommand(
         db=cast(Session, fake_db),
         quote_provider=provider,
-        session_service=TradingSessionService(clock=lambda: NOW),
+        session_service=TradingSessionService(clock=lambda: now),
     )
 
 
@@ -185,6 +197,19 @@ def test_process_due_slice_with_price_creates_primary_notification_and_completes
     assert intent.status == "triggered"
     assert intent.triggered_at == NOW
     assert fake_db.committed is True
+
+
+def test_process_due_slices_after_close_skips_notifications() -> None:
+    after_close = datetime(2026, 5, 28, 13, 31, 0, tzinfo=TAIPEI)
+    intent = _intent(status="active", position_side="long")
+    slice_row = _slice(intent, status="pending")
+    fake_db = FakeSession([FakeResult(rows=[(slice_row, intent)])])
+
+    output = _worker(fake_db, FakeQuoteProvider(_snapshot()), now=after_close).process_due_slices()
+
+    assert output.processed_count == 0
+    assert fake_db.added_notifications == []
+    assert fake_db.results
 
 
 def test_process_due_slice_without_price_sends_primary_notification_and_schedules_followup() -> None:

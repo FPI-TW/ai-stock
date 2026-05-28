@@ -8,6 +8,7 @@ from app.api.deps import (
     CancelTradeIntentCommandDep,
     CreateTradeIntentCommandDep,
     CurrentUserDep,
+    IntentLifecycleCommandDep,
     IntentRepoDep,
     TwapConfirmCommandDep,
     TwapPlanCommandDep,
@@ -81,6 +82,7 @@ def create_intent(
 def list_intents(
     user: CurrentUserDep,
     intent_repo: IntentRepoDep,
+    lifecycle: IntentLifecycleCommandDep,
     status_filter: Annotated[list[str] | None, Query(alias="status")] = None,
     trading_date: Annotated[date | None, Query(alias="tradingDate")] = None,
     cursor: str | None = None,
@@ -89,6 +91,7 @@ def list_intents(
     statuses = _parse_status_list(status_filter)
     _validate_statuses(statuses)
     validate_cursor(cursor)
+    lifecycle.run()
 
     items, next_cursor = intent_repo.list_by_owner(
         owner_user_id=user.user_id,
@@ -149,7 +152,9 @@ def get_intent(
     intent_id: UUID,
     user: CurrentUserDep,
     intent_repo: IntentRepoDep,
+    lifecycle: IntentLifecycleCommandDep,
 ) -> IntentDetailResponse:
+    lifecycle.run()
     intent = intent_repo.find_by_id(intent_id, user.user_id)
     slices = intent_repo.list_twap_slices(intent_id, user.user_id) if intent.strategy == "twap_order" else None
     return IntentDetailResponse(data=map_to_detail_response_data(intent, slices))
@@ -161,7 +166,9 @@ def cancel_intent(
     user: CurrentUserDep,
     command: CancelTradeIntentCommandDep,
     intent_repo: IntentRepoDep,
+    lifecycle: IntentLifecycleCommandDep,
 ) -> IntentDetailResponse:
+    lifecycle.run()
     intent = command.execute(CancelTradeIntentInput(intent_id=intent_id, owner_user_id=user.user_id))
     slices = intent_repo.list_twap_slices(intent_id, user.user_id) if intent.strategy == "twap_order" else None
     return IntentDetailResponse(data=map_to_detail_response_data(intent, slices))

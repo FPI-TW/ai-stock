@@ -99,6 +99,16 @@ class TradingSessionService:
         _require_aware(now)
         return "active" if self.is_within_regular_session(now) else "scheduled"
 
+    def get_expirable_day_intent_cutoff(self, now: datetime) -> date:
+        """Return the latest trading_date whose day intents can no longer trigger."""
+
+        _require_aware(now)
+        taipei = now.astimezone(TAIPEI_TZ)
+        today = taipei.date()
+        if self.get_trading_day_phase(taipei) == TradingDayPhase.POST_MARKET:
+            return today
+        return today - timedelta(days=1)
+
     def verify_trading_hours(self, now: datetime, quote_time: datetime) -> None:
         """Raise OutsideSessionError if now or quote_time is outside the regular session."""
         _require_aware(now)
