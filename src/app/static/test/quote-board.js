@@ -9,6 +9,8 @@
 import { sendRequest, getSelectedUser } from "./app.js";
 
 const POLL_MS = 3000;
+const MAX_CONSECUTIVE_ERRORS = 3;
+const BACKOFF_MS = 30_000;
 const WATCHLIST_KEY = "ai-stock-user-watchlist";
 const COLLAPSED_KEY = "ai-stock-user-quote-board-collapsed";
 
@@ -204,6 +206,11 @@ export async function pollNow() {
     if (bad) {
       console.warn(`[quote-board] dropping unknown symbol ${bad} from watchlist`);
       removeFromWatchlist(bad);
+    } else {
+      // Backend regression guard: UNKNOWN_SYMBOL without details.symbol leaves
+      // us unable to identify which entry to drop, so treat as generic error
+      // (triggers backoff) instead of looping.
+      onPollError(new Error("UNKNOWN_SYMBOL response missing details.symbol"));
     }
   } else {
     onPollError(new Error(`HTTP ${resp.status}`));
@@ -214,8 +221,8 @@ export async function pollNow() {
 function onPollError(err) {
   consecutiveErrors += 1;
   console.warn("[quote-board] poll failed:", err?.message || err);
-  if (consecutiveErrors >= 3) {
-    cooldownUntilMs = Date.now() + 30_000;
+  if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+    cooldownUntilMs = Date.now() + BACKOFF_MS;
     consecutiveErrors = 0;
     console.warn("[quote-board] backing off 30s after repeated failures");
   }
@@ -258,6 +265,7 @@ export function mountQuoteBoard() {
   renderTiles();
   installBoardControls();
   bindVisibility();
+  bindUserChange();
   void pollNow();
 }
 
@@ -316,5 +324,21 @@ function bindVisibility() {
     if (document.visibilityState === "visible") {
       void pollNow();
     }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// User identity change — reset baselines, abort inflight, immediate re-poll
+// ---------------------------------------------------------------------------
+
+let userChangeBound = false;
+function bindUserChange() {
+  if (userChangeBound) return;
+  userChangeBound = true;
+  window.addEventListener("ai-stock:user-changed", () => {
+    if (inflightController) inflightController.abort();
+    baselinePriceByCode = {};
+    renderTiles();
+    void pollNow();
   });
 }
