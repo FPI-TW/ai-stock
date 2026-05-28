@@ -101,6 +101,7 @@ V0.5 已落地的設計決策影響 V1 工單拆解：
 | BE-V1-17 | EC2/RDS deployment readiness、backup/restore、production hardening         | AFK  | P2     |   20h | BE-V1-01, BE-V1-05, BE-V1-15               | [BE-V1-17-deployment-hardening.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v1/BE-V1-17-deployment-hardening.md) |
 | BE-V1-18 | Production contract/integration/adapter test hardening                     | AFK  | P2     |   40h | BE-V1-05, BE-V1-11, BE-V1-16               | [BE-V1-18-production-tests.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v1/BE-V1-18-production-tests.md) |
 | BE-V1-19 | Production OpenAPI examples 與 frontend contract fixtures                  | AFK  | P1     |   15h | BE-V1-10, BE-V1-12                         | [BE-V1-19-openapi-fixtures.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v1/BE-V1-19-openapi-fixtures.md) |
+| BE-V1-20 | TWAP 時間加權平均價格策略                                                 | AFK  | P1     |   28h | BE-V0.5-06, BE-V0.5-10, BE-V0.5-13         | [BE-V1-20-twap-orders.md](/Users/hezongyu/Desktop/repository/ai-stock/docs/orders/v1/BE-V1-20-twap-orders.md) |
 
 ## 7. V1 工單群組與建議交付順序
 

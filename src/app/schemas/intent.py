@@ -1,13 +1,15 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 from app.api.schemas.base import OwnerScopedRequestModel
 from app.domain.price import format_price_str
-from app.domain.trade_intent import TradeIntentData
+from app.domain.trade_intent import TradeIntentData, TwapSliceData
+from app.domain.twap import TwapPlan
 
 
 class _BaseIntentCreateRequest(OwnerScopedRequestModel):
@@ -108,8 +110,38 @@ class IntentResponseData(BaseModel):
     baseline: str | None = None
     dynamic_trigger_price: str | None = Field(default=None, serialization_alias="dynamicTriggerPrice")
     baseline_updated_at: datetime | None = Field(default=None, serialization_alias="baselineUpdatedAt")
+    twap: "TwapSummaryData | None" = None
     created_at: datetime = Field(serialization_alias="createdAt")
     cancelled_at: datetime | None = Field(default=None, serialization_alias="cancelledAt")
+
+
+class TwapSummaryData(BaseModel):
+    position_side: str = Field(serialization_alias="positionSide")
+    interval_seconds: int = Field(serialization_alias="intervalSeconds")
+    end_time: time = Field(serialization_alias="endTime")
+    start_at: datetime = Field(serialization_alias="startAt")
+    end_at: datetime = Field(serialization_alias="endAt")
+    available_slice_count: int = Field(serialization_alias="availableSliceCount")
+    materialized_slice_count: int = Field(serialization_alias="materializedSliceCount")
+
+
+class TwapSliceResponseData(BaseModel):
+    id: UUID | None = None
+    sequence_no: int = Field(serialization_alias="sequenceNo")
+    scheduled_at: datetime = Field(serialization_alias="scheduledAt")
+    planned_quantity_lots: int = Field(serialization_alias="plannedQuantityLots")
+    status: str | None = None
+    primary_notification_id: UUID | None = Field(default=None, serialization_alias="primaryNotificationId")
+    notified_at: datetime | None = Field(default=None, serialization_alias="notifiedAt")
+    primary_price_available: bool | None = Field(default=None, serialization_alias="primaryPriceAvailable")
+    primary_reference_price: str | None = Field(default=None, serialization_alias="primaryReferencePrice")
+    primary_reference_price_type: str | None = Field(default=None, serialization_alias="primaryReferencePriceType")
+    primary_quote_time: datetime | None = Field(default=None, serialization_alias="primaryQuoteTime")
+    price_followup_required: bool | None = Field(default=None, serialization_alias="priceFollowupRequired")
+    price_followup_attempts: int | None = Field(default=None, serialization_alias="priceFollowupAttempts")
+    next_price_followup_at: datetime | None = Field(default=None, serialization_alias="nextPriceFollowupAt")
+    price_followup_notification_id: UUID | None = Field(default=None, serialization_alias="priceFollowupNotificationId")
+    price_followup_sent_at: datetime | None = Field(default=None, serialization_alias="priceFollowupSentAt")
 
 
 class IntentCreateResponse(BaseModel):
@@ -122,8 +154,55 @@ class IntentListResponse(BaseModel):
     page_size: int = Field(serialization_alias="pageSize")
 
 
+class IntentDetailResponseData(IntentResponseData):
+    twap_slices: list[TwapSliceResponseData] | None = Field(default=None, serialization_alias="twapSlices")
+
+
 class IntentDetailResponse(BaseModel):
-    data: IntentResponseData
+    data: IntentDetailResponseData
+
+
+class TwapPlanRequest(OwnerScopedRequestModel):
+    symbol: str
+    position_side: Literal["long", "short"] = Field(validation_alias="positionSide")
+    quantity_lots: int = Field(validation_alias="quantityLots")
+    interval_seconds: int = Field(validation_alias="intervalSeconds")
+    end_time: time = Field(validation_alias="endTime")
+
+    @field_validator("end_time", mode="before")
+    @classmethod
+    def _validate_end_time_precision(cls, value: object) -> object:
+        if isinstance(value, str):
+            parts = value.split(":")
+            if len(parts) == 2 and all(len(part) == 2 and part.isdigit() for part in parts):
+                hour = int(parts[0])
+                minute = int(parts[1])
+                if 0 <= hour <= 23 and 0 <= minute <= 59:
+                    return time(hour, minute)
+        raise PydanticCustomError("twap_end_time_format", "endTime must use HH:MM format")
+
+
+class TwapPlanData(BaseModel):
+    symbol: str
+    strategy: Literal["twap_order"] = "twap_order"
+    position_side: Literal["long", "short"] = Field(serialization_alias="positionSide")
+    trading_phase: str = Field(serialization_alias="tradingPhase")
+    trading_date: date = Field(serialization_alias="tradingDate")
+    target_quantity_lots: int = Field(serialization_alias="targetQuantityLots")
+    interval_seconds: int = Field(serialization_alias="intervalSeconds")
+    start_at: datetime = Field(serialization_alias="startAt")
+    end_at: datetime = Field(serialization_alias="endAt")
+    available_slice_count: int = Field(serialization_alias="availableSliceCount")
+    materialized_slice_count: int = Field(serialization_alias="materializedSliceCount")
+    slices: list[TwapSliceResponseData]
+
+
+class TwapPreviewResponse(BaseModel):
+    data: TwapPlanData
+
+
+class TwapConfirmResponse(BaseModel):
+    data: IntentDetailResponseData
 
 
 def map_to_response_data(intent: TradeIntentData) -> IntentResponseData:
@@ -153,6 +232,90 @@ def map_to_response_data(intent: TradeIntentData) -> IntentResponseData:
         baseline=format_price_str(intent.baseline) if intent.baseline else None,
         dynamic_trigger_price=format_price_str(intent.dynamic_trigger_price) if intent.dynamic_trigger_price else None,
         baseline_updated_at=intent.baseline_updated_at,
+        twap=map_twap_summary(intent),
         created_at=intent.created_at,
         cancelled_at=intent.cancelled_at,
+    )
+
+
+def map_to_detail_response_data(
+    intent: TradeIntentData,
+    twap_slices: list[TwapSliceData] | None = None,
+) -> IntentDetailResponseData:
+    base = map_to_response_data(intent)
+    return IntentDetailResponseData(
+        **base.model_dump(),
+        twap_slices=[map_twap_slice_to_response_data(s) for s in twap_slices] if twap_slices is not None else None,
+    )
+
+
+def map_twap_summary(intent: TradeIntentData) -> TwapSummaryData | None:
+    if intent.strategy != "twap_order":
+        return None
+    if (
+        intent.position_side is None
+        or intent.twap_interval_seconds is None
+        or intent.twap_end_time is None
+        or intent.twap_start_at is None
+        or intent.twap_end_at is None
+        or intent.twap_available_slice_count is None
+        or intent.twap_materialized_slice_count is None
+    ):
+        raise RuntimeError(f"TWAP intent missing summary fields: {intent.id}")
+    return TwapSummaryData(
+        position_side=intent.position_side,
+        interval_seconds=intent.twap_interval_seconds,
+        end_time=intent.twap_end_time,
+        start_at=intent.twap_start_at,
+        end_at=intent.twap_end_at,
+        available_slice_count=intent.twap_available_slice_count,
+        materialized_slice_count=intent.twap_materialized_slice_count,
+    )
+
+
+def map_twap_plan(symbol: str, plan: TwapPlan) -> TwapPlanData:
+    return TwapPlanData(
+        symbol=symbol,
+        position_side=cast(Literal["long", "short"], plan.position_side),
+        trading_phase=plan.trading_phase.value,
+        trading_date=plan.trading_date,
+        target_quantity_lots=plan.target_quantity_lots,
+        interval_seconds=plan.interval_seconds,
+        start_at=plan.start_at,
+        end_at=plan.end_at,
+        available_slice_count=plan.available_slice_count,
+        materialized_slice_count=plan.materialized_slice_count,
+        slices=[
+            TwapSliceResponseData(
+                sequence_no=s.sequence_no,
+                scheduled_at=s.scheduled_at,
+                planned_quantity_lots=s.planned_quantity_lots,
+            )
+            for s in plan.slices
+        ],
+    )
+
+
+def map_twap_slice_to_response_data(slice_data: TwapSliceData) -> TwapSliceResponseData:
+    return TwapSliceResponseData(
+        id=slice_data.id,
+        sequence_no=slice_data.sequence_no,
+        scheduled_at=slice_data.scheduled_at,
+        planned_quantity_lots=slice_data.planned_quantity_lots,
+        status=slice_data.status,
+        primary_notification_id=slice_data.primary_notification_id,
+        notified_at=slice_data.notified_at,
+        primary_price_available=slice_data.primary_price_available,
+        primary_reference_price=(
+            format_price_str(slice_data.primary_reference_price)
+            if slice_data.primary_reference_price is not None
+            else None
+        ),
+        primary_reference_price_type=slice_data.primary_reference_price_type,
+        primary_quote_time=slice_data.primary_quote_time,
+        price_followup_required=slice_data.price_followup_required,
+        price_followup_attempts=slice_data.price_followup_attempts,
+        next_price_followup_at=slice_data.next_price_followup_at,
+        price_followup_notification_id=slice_data.price_followup_notification_id,
+        price_followup_sent_at=slice_data.price_followup_sent_at,
     )

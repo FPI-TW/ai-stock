@@ -216,7 +216,8 @@ V0.5 小計：223.5 engineer-hours。
 | BE-V1-17 | EC2/RDS deployment readiness、backup/restore、production hardening         | P2     |   20h | BE-V1-01, BE-V1-05, BE-V1-15   |
 | BE-V1-18 | Production contract/integration/adapter test hardening                     | P0     |   40h | BE-V1-05, BE-V1-11, BE-V1-16   |
 | BE-V1-19 | Production OpenAPI examples 與 frontend contract fixtures                  | P1     |   15h | BE-V1-10, BE-V1-12             |
+| BE-V1-20 | TWAP 時間加權平均價格策略                                                 | P1     |   28h | BE-V0.5-06, BE-V0.5-10, BE-V0.5-13 |
 
-V1 additional 小計：582.5 engineer-hours。
+V1 additional 小計：610.5 engineer-hours。
 
 總估時：806 engineer-hours。

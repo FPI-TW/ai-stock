@@ -12,3 +12,11 @@ class EvaluateQuotesData(BaseModel):
 
 class EvaluateQuotesResponse(BaseModel):
     data: EvaluateQuotesData
+
+
+class TwapWorkerData(BaseModel):
+    processed_count: int = Field(serialization_alias="processedCount")
+
+
+class TwapWorkerResponse(BaseModel):
+    data: TwapWorkerData

@@ -22,6 +22,7 @@ from app.api.deps import (
     QuoteProviderDep,
     TradingSessionServiceDep,
     TriggerIntentCommandDep,
+    TwapSliceWorkerCommandDep,
 )
 from app.commands.trigger_intent import (
     IntentNotActiveError,
@@ -29,7 +30,13 @@ from app.commands.trigger_intent import (
 )
 from app.domain.trade_intent import IntentNotFoundError
 from app.domain.trigger_event import DuplicateTriggerError, quote_snapshot_to_jsonb
-from app.schemas.dev import EvaluateQuotesData, EvaluateQuotesRequest, EvaluateQuotesResponse
+from app.schemas.dev import (
+    EvaluateQuotesData,
+    EvaluateQuotesRequest,
+    EvaluateQuotesResponse,
+    TwapWorkerData,
+    TwapWorkerResponse,
+)
 from app.services.quote.base import QuoteUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -111,3 +118,15 @@ def evaluate_quotes(
             triggered_intent_ids=triggered_ids,
         )
     )
+
+
+@router.post("/twap/process-due-slices", response_model=TwapWorkerResponse)
+def process_twap_due_slices(worker: TwapSliceWorkerCommandDep) -> TwapWorkerResponse:
+    output = worker.process_due_slices()
+    return TwapWorkerResponse(data=TwapWorkerData(processed_count=output.processed_count))
+
+
+@router.post("/twap/process-price-followups", response_model=TwapWorkerResponse)
+def process_twap_price_followups(worker: TwapSliceWorkerCommandDep) -> TwapWorkerResponse:
+    output = worker.process_price_followups()
+    return TwapWorkerResponse(data=TwapWorkerData(processed_count=output.processed_count))

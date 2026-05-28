@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, SessionTransaction
 from sqlalchemy.sql import Select
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.db.models.core import Symbol, TradeIntent
+from app.db.models.core import Symbol, TradeIntent, TwapSlice
 from app.domain.price import SecurityType
 from app.domain.trade_intent import (
     CANCELLABLE_STATUSES,
@@ -19,7 +19,9 @@ from app.domain.trade_intent import (
     IntentNotFoundError,
     InvalidCursorError,
     TradeIntentData,
+    TwapSliceData,
 )
+from app.domain.twap import TWAP_STRATEGY, TwapDuplicateActivePlanError, TwapPlan
 
 
 def _to_domain(row: TradeIntent, security_type: SecurityType) -> TradeIntentData:
@@ -50,6 +52,39 @@ def _to_domain(row: TradeIntent, security_type: SecurityType) -> TradeIntentData
         dynamic_trigger_price=row.dynamic_trigger_price,
         baseline_updated_at=row.baseline_updated_at,
         security_type=security_type,
+        position_side=row.position_side,
+        twap_interval_seconds=row.twap_interval_seconds,
+        twap_end_time=row.twap_end_time,
+        twap_start_at=row.twap_start_at,
+        twap_end_at=row.twap_end_at,
+        twap_available_slice_count=row.twap_available_slice_count,
+        twap_materialized_slice_count=row.twap_materialized_slice_count,
+    )
+
+
+def _twap_slice_to_domain(row: TwapSlice) -> TwapSliceData:
+    return TwapSliceData(
+        id=row.id,
+        trade_intent_id=row.trade_intent_id,
+        owner_user_id=row.owner_user_id,
+        symbol=row.symbol,
+        sequence_no=row.sequence_no,
+        scheduled_at=row.scheduled_at,
+        planned_quantity_lots=row.planned_quantity_lots,
+        status=row.status,
+        primary_notification_id=row.primary_notification_id,
+        notified_at=row.notified_at,
+        primary_price_available=row.primary_price_available,
+        primary_reference_price=row.primary_reference_price,
+        primary_reference_price_type=row.primary_reference_price_type,
+        primary_quote_time=row.primary_quote_time,
+        price_followup_required=row.price_followup_required,
+        price_followup_attempts=row.price_followup_attempts,
+        next_price_followup_at=row.next_price_followup_at,
+        price_followup_notification_id=row.price_followup_notification_id,
+        price_followup_sent_at=row.price_followup_sent_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 
@@ -169,6 +204,74 @@ class IntentRepository:
             raise DuplicateIntentError(owner_user_id, symbol, strategy) from exc
         return row.id
 
+    def create_twap(
+        self,
+        *,
+        owner_user_id: UUID,
+        symbol: str,
+        twap_plan: TwapPlan,
+        execution_mode: str,
+        time_in_force: str,
+        status: str,
+        trigger_reference_price_type: str,
+    ) -> UUID:
+        duplicate = self._db.execute(
+            select(TradeIntent).where(
+                TradeIntent.owner_user_id == owner_user_id,
+                TradeIntent.symbol == symbol,
+                TradeIntent.strategy == TWAP_STRATEGY,
+                TradeIntent.position_side == twap_plan.position_side,
+                TradeIntent.trading_date == twap_plan.trading_date,
+                TradeIntent.status.in_(CANCELLABLE_STATUSES),
+            )
+        ).scalar_one_or_none()
+        if duplicate is not None:
+            raise TwapDuplicateActivePlanError(owner_user_id, symbol, twap_plan.position_side)
+
+        intent_id = uuid4()
+        row = TradeIntent(
+            id=intent_id,
+            owner_user_id=owner_user_id,
+            symbol=symbol,
+            strategy=TWAP_STRATEGY,
+            execution_mode=execution_mode,
+            quantity_lots=twap_plan.target_quantity_lots,
+            target_price_original=None,
+            target_price_effective=None,
+            trigger_reference_price_type=trigger_reference_price_type,
+            trading_date=twap_plan.trading_date,
+            time_in_force=time_in_force,
+            status=status,
+            transaction_mode="single_notification",
+            notification_mode="single",
+            position_side=twap_plan.position_side,
+            twap_interval_seconds=twap_plan.interval_seconds,
+            twap_end_time=twap_plan.requested_end_time,
+            twap_start_at=twap_plan.start_at,
+            twap_end_at=twap_plan.end_at,
+            twap_available_slice_count=twap_plan.available_slice_count,
+            twap_materialized_slice_count=twap_plan.materialized_slice_count,
+        )
+        self._db.add(row)
+        for slice_plan in twap_plan.slices:
+            self._db.add(
+                TwapSlice(
+                    id=uuid4(),
+                    trade_intent_id=intent_id,
+                    owner_user_id=owner_user_id,
+                    symbol=symbol,
+                    sequence_no=slice_plan.sequence_no,
+                    scheduled_at=slice_plan.scheduled_at,
+                    planned_quantity_lots=slice_plan.planned_quantity_lots,
+                    status="pending",
+                )
+            )
+        try:
+            self._db.flush()
+        except IntegrityError as exc:
+            raise TwapDuplicateActivePlanError(owner_user_id, symbol, twap_plan.position_side) from exc
+        return intent_id
+
     def system_update_trailing_baseline(
         self,
         intent_id: UUID,
@@ -193,6 +296,21 @@ class IntentRepository:
         if row is None or row.owner_user_id != owner_user_id:
             raise IntentNotFoundError(intent_id)
         return _to_domain(row, SecurityType(instrument_type))
+
+    def list_twap_slices(self, intent_id: UUID, owner_user_id: UUID) -> list[TwapSliceData]:
+        intent = self._db.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one_or_none()
+        if intent is None or intent.owner_user_id != owner_user_id:
+            raise IntentNotFoundError(intent_id)
+        rows = (
+            self._db.execute(
+                select(TwapSlice)
+                .where(TwapSlice.trade_intent_id == intent_id, TwapSlice.owner_user_id == owner_user_id)
+                .order_by(TwapSlice.sequence_no.asc())
+            )
+            .scalars()
+            .all()
+        )
+        return [_twap_slice_to_domain(row) for row in rows]
 
     def list_by_owner(
         self,
@@ -314,6 +432,32 @@ class IntentRepository:
             .values(status="cancelled", updated_at=func.now(), cancelled_at=func.now()),
             execution_options={"synchronize_session": False},
         )
+        if row.strategy == TWAP_STRATEGY:
+            self._db.execute(
+                update(TwapSlice)
+                .where(TwapSlice.trade_intent_id == intent_id, TwapSlice.status == "pending")
+                .values(
+                    status="cancelled",
+                    price_followup_required=False,
+                    next_price_followup_at=None,
+                    updated_at=func.now(),
+                ),
+                execution_options={"synchronize_session": False},
+            )
+            self._db.execute(
+                update(TwapSlice)
+                .where(
+                    TwapSlice.trade_intent_id == intent_id,
+                    TwapSlice.price_followup_required.is_(True),
+                    TwapSlice.price_followup_notification_id.is_(None),
+                )
+                .values(
+                    price_followup_required=False,
+                    next_price_followup_at=None,
+                    updated_at=func.now(),
+                ),
+                execution_options={"synchronize_session": False},
+            )
         # refresh within the same transaction so func.now() values are read back
         # without a separate roundtrip after commit
         self._db.refresh(row)

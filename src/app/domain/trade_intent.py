@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from uuid import UUID
 
@@ -79,3 +79,35 @@ class TradeIntentData:
     dynamic_trigger_price: Decimal | None = None
     baseline_updated_at: datetime | None = None
     security_type: SecurityType = SecurityType.STOCK
+    position_side: str | None = None
+    twap_interval_seconds: int | None = None
+    twap_end_time: time | None = None
+    twap_start_at: datetime | None = None
+    twap_end_at: datetime | None = None
+    twap_available_slice_count: int | None = None
+    twap_materialized_slice_count: int | None = None
+
+
+@dataclass(frozen=True)
+class TwapSliceData:
+    id: UUID
+    trade_intent_id: UUID
+    owner_user_id: UUID
+    symbol: str
+    sequence_no: int
+    scheduled_at: datetime
+    planned_quantity_lots: int
+    status: str
+    primary_notification_id: UUID | None
+    notified_at: datetime | None
+    primary_price_available: bool | None
+    primary_reference_price: Decimal | None
+    primary_reference_price_type: str | None
+    primary_quote_time: datetime | None
+    price_followup_required: bool
+    price_followup_attempts: int
+    next_price_followup_at: datetime | None
+    price_followup_notification_id: UUID | None
+    price_followup_sent_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
