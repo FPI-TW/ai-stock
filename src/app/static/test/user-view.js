@@ -116,6 +116,40 @@ async function refreshDashboard() {
   await Promise.all([refreshIntents(), refreshNotifications()]);
 }
 
+// ---------------------------------------------------------------------------
+// Dashboard auto-refresh
+// ---------------------------------------------------------------------------
+// 服務端推送行情觸發 intent 後，user mode 的 intent 狀態與通知計數會變。
+// 不輪詢就只能仰賴使用者手動按 refresh 或切換模式來抓新狀態。
+// 5 秒一次足夠（變化頻率遠低於行情），分頁不在前景時暫停以省流量。
+
+const DASHBOARD_POLL_MS = 5000;
+let dashboardPollTimer = null;
+let dashboardVisibilityBound = false;
+
+function startDashboardPoll() {
+  stopDashboardPoll();
+  dashboardPollTimer = setInterval(() => {
+    if (document.visibilityState === "hidden") return;
+    void refreshDashboard();
+  }, DASHBOARD_POLL_MS);
+  if (!dashboardVisibilityBound) {
+    dashboardVisibilityBound = true;
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && dashboardPollTimer) {
+        void refreshDashboard();
+      }
+    });
+  }
+}
+
+function stopDashboardPoll() {
+  if (dashboardPollTimer) {
+    clearInterval(dashboardPollTimer);
+    dashboardPollTimer = null;
+  }
+}
+
 async function refreshIntents() {
   const list = document.getElementById("uv-intent-list");
   list.innerHTML = "";
@@ -921,8 +955,10 @@ export function onEnterUserMode() {
   setAddSymbolHandler(openSymbolPickerForWatchlist);
   mountQuoteBoard();
   refreshDashboard();
+  startDashboardPoll();
 }
 
 export function onLeaveUserMode() {
   unmountQuoteBoard();
+  stopDashboardPoll();
 }
