@@ -266,7 +266,10 @@ export function mountQuoteBoard() {
   installBoardControls();
   bindVisibility();
   bindUserChange();
-  void pollNow();
+  // Defer first poll to next macrotask so renderTiles() DOM mutation doesn't
+  // race with Playwright's actionability check on neighboring UI elements
+  // (e.g. #user-mode-trigger). Subsequent polls are already async via setTimeout.
+  setTimeout(() => void pollNow(), 0);
 }
 
 export function unmountQuoteBoard() {
