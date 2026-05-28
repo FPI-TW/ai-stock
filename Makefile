@@ -10,7 +10,7 @@ install-hooks:
 	uv run pre-commit install --install-hooks --hook-type pre-commit --hook-type pre-push
 
 dev:
-	uv run uvicorn app.main:app --app-dir src --reload
+	uv run uvicorn app.main:app --app-dir src --reload --port 8100
 
 lint:
 	uv run ruff check .
