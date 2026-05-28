@@ -209,7 +209,7 @@ class IntentRepository:
         *,
         owner_user_id: UUID,
         symbol: str,
-        plan: TwapPlan,
+        twap_plan: TwapPlan,
         execution_mode: str,
         time_in_force: str,
         status: str,
@@ -220,13 +220,13 @@ class IntentRepository:
                 TradeIntent.owner_user_id == owner_user_id,
                 TradeIntent.symbol == symbol,
                 TradeIntent.strategy == TWAP_STRATEGY,
-                TradeIntent.position_side == plan.position_side,
-                TradeIntent.trading_date == plan.trading_date,
+                TradeIntent.position_side == twap_plan.position_side,
+                TradeIntent.trading_date == twap_plan.trading_date,
                 TradeIntent.status.in_(CANCELLABLE_STATUSES),
             )
         ).scalar_one_or_none()
         if duplicate is not None:
-            raise TwapDuplicateActivePlanError(owner_user_id, symbol, plan.position_side)
+            raise TwapDuplicateActivePlanError(owner_user_id, symbol, twap_plan.position_side)
 
         intent_id = uuid4()
         row = TradeIntent(
@@ -235,25 +235,25 @@ class IntentRepository:
             symbol=symbol,
             strategy=TWAP_STRATEGY,
             execution_mode=execution_mode,
-            quantity_lots=plan.target_quantity_lots,
+            quantity_lots=twap_plan.target_quantity_lots,
             target_price_original=None,
             target_price_effective=None,
             trigger_reference_price_type=trigger_reference_price_type,
-            trading_date=plan.trading_date,
+            trading_date=twap_plan.trading_date,
             time_in_force=time_in_force,
             status=status,
             transaction_mode="single_notification",
             notification_mode="single",
-            position_side=plan.position_side,
-            twap_interval_seconds=plan.interval_seconds,
-            twap_end_time=plan.end_time,
-            twap_start_at=plan.start_at,
-            twap_end_at=plan.end_at,
-            twap_available_slice_count=plan.available_slice_count,
-            twap_materialized_slice_count=plan.materialized_slice_count,
+            position_side=twap_plan.position_side,
+            twap_interval_seconds=twap_plan.interval_seconds,
+            twap_end_time=twap_plan.requested_end_time,
+            twap_start_at=twap_plan.start_at,
+            twap_end_at=twap_plan.end_at,
+            twap_available_slice_count=twap_plan.available_slice_count,
+            twap_materialized_slice_count=twap_plan.materialized_slice_count,
         )
         self._db.add(row)
-        for slice_plan in plan.slices:
+        for slice_plan in twap_plan.slices:
             self._db.add(
                 TwapSlice(
                     id=uuid4(),
@@ -269,7 +269,7 @@ class IntentRepository:
         try:
             self._db.flush()
         except IntegrityError as exc:
-            raise TwapDuplicateActivePlanError(owner_user_id, symbol, plan.position_side) from exc
+            raise TwapDuplicateActivePlanError(owner_user_id, symbol, twap_plan.position_side) from exc
         return intent_id
 
     def system_update_trailing_baseline(

@@ -100,7 +100,7 @@ class TwapConfirmCommand(TwapPlanCommand):
             intent_id = self._intent_repo.create_twap(
                 owner_user_id=inp.owner_user_id,
                 symbol=inp.symbol,
-                plan=plan,
+                twap_plan=plan,
                 execution_mode=TWAP_EXECUTION_MODE,
                 time_in_force=TWAP_TIME_IN_FORCE,
                 status=initial_status,
