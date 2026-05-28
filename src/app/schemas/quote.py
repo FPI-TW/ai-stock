@@ -1,6 +1,7 @@
 from datetime import datetime
+from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.config import CURRENT_PRICE_SOURCE_NAME
 from app.domain.price import format_price_str
@@ -33,3 +34,21 @@ def map_current_price(snapshot: QuoteSnapshot) -> CurrentPriceData:
         source=CURRENT_PRICE_SOURCE_NAME,
         test_feature=True,
     )
+
+
+class QuoteRead(BaseModel):
+    """Single symbol quote snapshot returned by GET /quotes."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    symbol: str
+    display_name: str | None = Field(default=None, serialization_alias="displayName")
+    ask_price: Decimal | None = Field(default=None, serialization_alias="askPrice")
+    bid_price: Decimal | None = Field(default=None, serialization_alias="bidPrice")
+    last_price: Decimal | None = Field(default=None, serialization_alias="lastPrice")
+    quote_time: datetime | None = Field(default=None, serialization_alias="quoteTime")
+    stale: bool = False
+
+
+class QuoteListResponse(BaseModel):
+    data: list[QuoteRead]
