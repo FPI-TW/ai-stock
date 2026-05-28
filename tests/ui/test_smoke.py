@@ -13,9 +13,11 @@ Marked `ui` so they stay out of the default `pytest` run; trigger via
 
 from __future__ import annotations
 
+import re
+
 import httpx
 import pytest
-from playwright.sync_api import Page
+from playwright.sync_api import Page, expect
 
 from .conftest import (
     alice_headers,
@@ -135,3 +137,74 @@ def test_service_push_wrong_side_surfaces_diagnostic(
     finally:
         cancel_all_active_intents(api, alice_headers())
         reset_clock(api)
+
+
+@pytest.mark.ui
+def test_service_quote_side_chips_use_animated_indicator(
+    page: Page,
+    live_server_url: str,
+) -> None:
+    """服務端 ask/bid/last 類型切換要和頂部列一樣有平移 indicator。"""
+
+    page.goto(f"{live_server_url}/test")
+    page.click('.mode-toggle button[data-mode="service"]')
+
+    chips = page.locator("#svc-side-chips")
+    indicator = chips.locator("> .seg-indicator")
+    expect(indicator).to_have_count(1)
+
+    page.click('#svc-side-chips button[data-side="bid"]')
+    expect(page.locator('#svc-side-chips button[data-side="bid"]')).to_have_class(re.compile(r"\bactive\b"))
+    page.wait_for_function(
+        """() => {
+            const indicator = document.querySelector("#svc-side-chips > .seg-indicator");
+            const active = document.querySelector('#svc-side-chips button[data-side="bid"]');
+            return indicator
+                && active
+                && indicator.style.transform
+                && indicator.style.width === `${active.offsetWidth}px`
+                && indicator.style.height === `${active.offsetHeight}px`
+                && getComputedStyle(indicator).backgroundColor === "rgb(255, 255, 255)"
+                && getComputedStyle(indicator).borderTopWidth === "1px";
+        }"""
+    )
+
+
+@pytest.mark.ui
+def test_user_quote_board_polls_and_renders(
+    page: Page,
+    live_server_url: str,
+) -> None:
+    """進使用者模式後，預塞的 watchlist symbol 應該在 5 秒內出現非 "—" 的價格。"""
+    httpx.post(
+        f"{live_server_url}/dev/push-quote",
+        json={
+            "symbol": "2330",
+            "askPrice": "599.00",
+            "bidPrice": "598.50",
+            "lastPrice": "599.00",
+        },
+        timeout=5.0,
+    )
+
+    page.goto(f"{live_server_url}/test")
+    page.evaluate(
+        """() => {
+            const users = JSON.parse(localStorage.getItem("ai-stock-test-users") || "{}");
+            users.alice = "11111111-1111-1111-1111-111111111111";
+            localStorage.setItem("ai-stock-test-users", JSON.stringify(users));
+            localStorage.setItem("ai-stock-test-selected-user", "alice");
+            localStorage.setItem(
+                "ai-stock-user-watchlist",
+                JSON.stringify({ alice: ["2330"] })
+            );
+        }"""
+    )
+    page.reload()
+    page.click('.mode-toggle button[data-mode="user"]')
+
+    tile = page.locator('.qb-tile[data-symbol="2330"]')
+    expect(tile).to_be_visible(timeout=10_000)
+    expect(tile).not_to_have_class(re.compile(r"\bstale\b"), timeout=8_000)
+    price = tile.locator(".qb-tile-price")
+    expect(price).not_to_have_text("—", timeout=8_000)
