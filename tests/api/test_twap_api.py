@@ -27,6 +27,7 @@ def _plan() -> TwapPlan:
         trading_date=date(2026, 5, 28),
         start_at=start_at,
         end_at=datetime(2026, 5, 28, 9, 5, tzinfo=TAIPEI),
+        end_time=time(9, 5),
         interval_seconds=300,
         target_quantity_lots=2,
         available_slice_count=2,

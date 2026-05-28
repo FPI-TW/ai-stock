@@ -246,7 +246,7 @@ class IntentRepository:
             notification_mode="single",
             position_side=plan.position_side,
             twap_interval_seconds=plan.interval_seconds,
-            twap_end_time=plan.end_at.timetz().replace(tzinfo=None),
+            twap_end_time=plan.end_time,
             twap_start_at=plan.start_at,
             twap_end_at=plan.end_at,
             twap_available_slice_count=plan.available_slice_count,

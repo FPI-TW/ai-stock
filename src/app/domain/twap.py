@@ -143,6 +143,7 @@ class TwapPlan:
     trading_date: date
     start_at: datetime
     end_at: datetime
+    end_time: time
     interval_seconds: int
     target_quantity_lots: int
     available_slice_count: int
@@ -205,6 +206,7 @@ def build_twap_plan(
         trading_date=trading_date,
         start_at=start_at,
         end_at=end_at,
+        end_time=end_time,
         interval_seconds=interval_seconds,
         target_quantity_lots=quantity_lots,
         available_slice_count=available_slice_count,
