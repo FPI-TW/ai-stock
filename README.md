@@ -103,7 +103,26 @@ make test-integration
 
 `make test-integration` 會注入 local compose 使用的 `DATABASE_URL`。
 
-等價 uv 指令：
+## Symbol Seed
+
+V0.5 沒有正式 symbol importer，需要手動把 minimal symbol master 灌入 DB。**第一次 setup（或新建 DB）之後跑一次即可**：
+
+```bash
+make seed
+```
+
+內容（依 BE-V0.5-04）：
+
+- 4 筆 production 標的：`2330` 台積電、`2317` 鴻海、`0050` 元大台灣50、`00878` 國泰永續高股息
+- 2 筆測試 fixture：`9999`（halted）、`8888`（unsupported），用來驗證 service / API 層對非 `tradable` 標的的拒絕行為
+
+`seed_symbols` 使用 `INSERT ... ON CONFLICT DO UPDATE`，重複跑不會炸 unique constraint。
+
+未跑 seed 的後果：`GET /symbols` 回空陣列、`POST /trade-intents` 對任何 symbol 都會 422 `UNKNOWN_SYMBOL`。
+
+> 設計取捨：seed 採手動指令而非 migration 自動植入 / app 啟動自動 seed。原因見 BE-V0.5-04 §Seed 建議 line 40（三選一）；V1 production importer 預期會取代這份 seed，現在不把 seed 綁進 migration 或 boot 流程，避免後續抽換時牽動部署腳本。
+
+## 等價 uv 指令
 
 ```bash
 uv sync
@@ -113,6 +132,7 @@ uv run ruff format --check .
 uv run mypy src tests
 uv run alembic upgrade head
 uv run alembic downgrade base
+PYTHONPATH=src uv run python -m app.db.seed
 uv run pytest
 DATABASE_URL=postgresql+psycopg://ai_stock:ai_stock@localhost:5432/ai_stock uv run pytest -m integration
 ```
