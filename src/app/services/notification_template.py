@@ -21,6 +21,12 @@ _LIMIT_ORDER_LABELS = {
     "limit_sell_order": "限價賣單",
 }
 
+_MARKET_ORDER_LABELS = {
+    "market_order": "市價單",
+    "market_buy_order": "市價買單",
+    "market_sell_order": "市價賣單",
+}
+
 _DISCLAIMER = "僅通知、未下單、不保證成交。"
 
 _POSITION_LABELS = {
@@ -81,6 +87,35 @@ def render_limit_order_triggered(
         f"標的：{symbol}",
         f"目標價：{format_price_str(target_price)}",
         f"觸發價：{format_price_str(trigger_price)}",
+        f"成交 {filled_quantity_lots} 張 / 委託 {quantity_lots} 張",
+        f"報價時間：{quote_time_taipei}",
+        "",
+        _DISCLAIMER,
+    ]
+    return title, "\n".join(body_lines)
+
+
+def render_market_order_triggered(
+    *,
+    symbol: str,
+    strategy: str,
+    trigger_price: Decimal,
+    filled_quantity_lots: int,
+    quantity_lots: int,
+    quote_time: datetime,
+) -> tuple[str, str]:
+    if strategy not in _MARKET_ORDER_LABELS:
+        raise ValueError(f"Unsupported market order strategy for notification: {strategy!r}")
+    if quote_time.tzinfo is None:
+        raise TypeError(f"quote_time must be timezone-aware: {quote_time!r}")
+
+    label = _MARKET_ORDER_LABELS[strategy]
+    quote_time_taipei = quote_time.astimezone(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    title = f"{symbol} {label}已觸發"
+    body_lines = [
+        f"策略：{label}",
+        f"標的：{symbol}",
+        f"成交參考價：{format_price_str(trigger_price)}",
         f"成交 {filled_quantity_lots} 張 / 委託 {quantity_lots} 張",
         f"報價時間：{quote_time_taipei}",
         "",

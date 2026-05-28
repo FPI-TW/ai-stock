@@ -8,8 +8,9 @@ from app.domain.price import SecurityType
 CANCELLABLE_STATUSES = frozenset({"active", "scheduled"})
 TERMINAL_STATUSES = frozenset({"triggered", "expired", "cancelled"})
 VALID_STATUSES = frozenset({"active", "scheduled", "triggered", "expired", "cancelled"})
-BUY_SIDE_STRATEGIES = frozenset({"buy_price_alert", "limit_buy_order"})
-SELL_SIDE_STRATEGIES = frozenset({"sell_price_alert", "limit_sell_order", "trailing_stop_alert"})
+BUY_SIDE_STRATEGIES = frozenset({"buy_price_alert", "limit_buy_order", "market_order", "market_buy_order"})
+SELL_SIDE_STRATEGIES = frozenset({"sell_price_alert", "limit_sell_order", "trailing_stop_alert", "market_sell_order"})
+MARKET_ORDER_STRATEGIES = frozenset({"market_order", "market_buy_order", "market_sell_order"})
 
 
 class IntentError(Exception):

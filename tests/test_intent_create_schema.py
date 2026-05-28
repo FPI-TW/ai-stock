@@ -9,11 +9,13 @@ from app.schemas.intent import (
     BuyPriceAlertCreateRequest,
     IntentCreateRequest,
     LimitBuyOrderCreateRequest,
+    MarketOrderCreateRequest,
     TrailingStopAlertCreateRequest,
 )
 
 _union_adapter: TypeAdapter[IntentCreateRequest] = TypeAdapter(IntentCreateRequest)
 _limit_buy_adapter = TypeAdapter(LimitBuyOrderCreateRequest)
+_market_order_adapter = TypeAdapter(MarketOrderCreateRequest)
 _trailing_adapter = TypeAdapter(TrailingStopAlertCreateRequest)
 
 
@@ -60,6 +62,20 @@ def test_create_intent_union_dispatches_trailing_stop_strategy() -> None:
     assert request.trail_value == Decimal("5.0")
 
 
+def test_create_intent_union_dispatches_market_order_strategy() -> None:
+    request = _union_adapter.validate_python(
+        {
+            "symbol": "2330",
+            "strategy": "market_buy_order",
+            "quantityLots": 1,
+        }
+    )
+
+    assert isinstance(request, MarketOrderCreateRequest)
+    assert request.transaction_mode == "partial_fill_allowed"
+    assert request.notification_mode == "single"
+
+
 def test_limit_buy_order_subschema_accepts_mode_defaults() -> None:
     request = _limit_buy_adapter.validate_python(
         {
@@ -89,6 +105,22 @@ def test_limit_buy_order_subschema_rejects_per_fill_notification_mode() -> None:
     error = exc.value.errors()[0]
     assert error["loc"] == ("notificationMode",)
     assert error["type"] == "literal_error"
+
+
+def test_market_order_subschema_rejects_target_price() -> None:
+    with pytest.raises(ValidationError) as exc:
+        _market_order_adapter.validate_python(
+            {
+                "symbol": "2330",
+                "strategy": "market_sell_order",
+                "quantityLots": 1,
+                "targetPrice": "600",
+            }
+        )
+
+    error = exc.value.errors()[0]
+    assert error["loc"] == ("targetPrice",)
+    assert error["type"] == "extra_forbidden"
 
 
 def test_trailing_stop_subschema_accepts_percentage() -> None:

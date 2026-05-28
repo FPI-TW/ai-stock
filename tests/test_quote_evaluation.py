@@ -21,7 +21,7 @@ SESSION_QUOTE_TIME = datetime(2026, 5, 11, 9, 59, 55, tzinfo=TAIPEI)  # 5s befor
 
 def make_intent(
     strategy: str = "buy_price_alert",
-    target: Decimal = Decimal("100"),
+    target: Decimal | None = Decimal("100"),
     trail_mode: str | None = None,
     trail_value: Decimal | None = None,
     baseline: Decimal | None = None,
@@ -192,6 +192,42 @@ class TestLimitOrders:
         assert result.should_trigger
         assert result.trigger_reference_price_type == "last_fallback"
         assert result.fallback_used is True
+
+
+class TestMarketOrder:
+    def test_market_order_triggers_with_ask(self, evaluator: QuoteEvaluator) -> None:
+        result = evaluator.evaluate(
+            _snapshot(ask_price=Decimal("100")),
+            make_intent("market_buy_order", target=None),
+            SESSION_NOW,
+        )
+
+        assert result.should_trigger
+        assert result.trigger_price == Decimal("100")
+        assert result.trigger_reference_price_type == "ask"
+
+    def test_market_order_falls_back_to_last(self, evaluator: QuoteEvaluator) -> None:
+        result = evaluator.evaluate(
+            _snapshot(last_price=Decimal("100")),
+            make_intent("market_buy_order", target=None),
+            SESSION_NOW,
+        )
+
+        assert result.should_trigger
+        assert result.trigger_price == Decimal("100")
+        assert result.trigger_reference_price_type == "last_fallback"
+        assert result.fallback_used is True
+
+    def test_market_sell_order_triggers_with_bid(self, evaluator: QuoteEvaluator) -> None:
+        result = evaluator.evaluate(
+            _snapshot(bid_price=Decimal("99")),
+            make_intent("market_sell_order", target=None),
+            SESSION_NOW,
+        )
+
+        assert result.should_trigger
+        assert result.trigger_price == Decimal("99")
+        assert result.trigger_reference_price_type == "bid"
 
 
 class TestTrailingStopAlert:

@@ -20,7 +20,7 @@ from app.db.models.core import Notification, Symbol, TriggerEvent
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
 from app.repositories.intent_repository import IntentRepository
-from app.services.quote.base import QuoteSnapshot
+from app.services.quote.base import QuoteSnapshot, QuoteUnavailableError
 from app.services.quote.in_memory import InMemoryQuoteProvider
 
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -85,6 +85,20 @@ def repo(db_session: Session) -> IntentRepository:
 @pytest.fixture
 def quote_provider() -> InMemoryQuoteProvider:
     return InMemoryQuoteProvider()
+
+
+class CurrentPriceOnlyQuoteProvider(InMemoryQuoteProvider):
+    def __init__(self, snapshot: QuoteSnapshot) -> None:
+        super().__init__()
+        self.snapshot = snapshot
+        self.current_price_symbols: list[str] = []
+
+    def get_quotes(self, symbols: list[str]) -> list[QuoteSnapshot]:
+        raise QuoteUnavailableError(symbols[0])
+
+    def get_current_price(self, symbol: str) -> QuoteSnapshot:
+        self.current_price_symbols.append(symbol)
+        return self.snapshot
 
 
 def _build_client(quote_provider: InMemoryQuoteProvider, now_utc: datetime) -> Generator[TestClient]:
@@ -233,3 +247,71 @@ def test_create_with_last_fallback_triggers_and_records_metadata(
     trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
     assert trigger_row.trigger_reference_price_type == "last_fallback"
     assert trigger_row.fallback_used is True
+
+
+@pytest.mark.integration
+def test_market_order_create_triggers_immediately(
+    db_session: Session,
+    client: TestClient,
+    quote_provider: InMemoryQuoteProvider,
+) -> None:
+    quote_provider.push_quote(_snapshot(ask="600"))
+
+    response = client.post(
+        "/trade-intents",
+        json={
+            "symbol": "2330",
+            "strategy": "market_buy_order",
+            "quantityLots": 2,
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()["data"]
+    assert body["strategy"] == "market_buy_order"
+    assert body["status"] == "triggered"
+    assert body["transactionMode"] == "partial_fill_allowed"
+    assert body["targetPriceOriginal"] is None
+    assert body["filledQuantityLots"] == 2
+
+    intent_id = UUID(body["id"])
+    trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
+    assert trigger_row.target_price_effective == Decimal("600.0000")
+    assert trigger_row.trigger_price == Decimal("600.0000")
+    assert trigger_row.trigger_reference_price_type == "ask"
+
+    notification_row = db_session.execute(
+        select(Notification).where(Notification.trade_intent_id == intent_id)
+    ).scalar_one()
+    assert notification_row.type == "market_order_triggered"
+
+
+@pytest.mark.integration
+def test_market_order_create_uses_current_price_snapshot_when_stream_cache_is_cold(
+    db_session: Session,
+) -> None:
+    quote_provider = CurrentPriceOnlyQuoteProvider(_snapshot(ask="600"))
+    client_context = _build_client(quote_provider, SESSION_NOW_UTC)
+    client = next(client_context)
+
+    try:
+        response = client.post(
+            "/trade-intents",
+            json={
+                "symbol": "2330",
+                "strategy": "market_buy_order",
+                "quantityLots": 2,
+            },
+        )
+    finally:
+        client_context.close()
+
+    assert response.status_code == 201
+    body = response.json()["data"]
+    intent_id = UUID(body["id"])
+    assert body["status"] == "triggered"
+    assert body["targetPriceEffective"] == "600.0000"
+    assert body["filledQuantityLots"] == 2
+    assert quote_provider.current_price_symbols == ["2330"]
+    trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
+    assert trigger_row.trigger_price == Decimal("600.0000")

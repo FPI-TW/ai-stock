@@ -10,6 +10,9 @@ from app.domain.trade_intent import derive_order_side
         ("sell_price_alert", "sell"),
         ("limit_buy_order", "buy"),
         ("limit_sell_order", "sell"),
+        ("market_order", "buy"),
+        ("market_buy_order", "buy"),
+        ("market_sell_order", "sell"),
         ("trailing_stop_alert", "sell"),
     ],
 )

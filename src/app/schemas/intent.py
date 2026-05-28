@@ -50,6 +50,18 @@ class LimitSellOrderCreateRequest(_LimitOrderCreateRequest):
     strategy: Literal["limit_sell_order"]
 
 
+class MarketOrderCreateRequest(_BaseIntentCreateRequest):
+    strategy: Literal["market_order", "market_buy_order", "market_sell_order"]
+    transaction_mode: Literal["partial_fill_allowed"] = Field(
+        default="partial_fill_allowed",
+        validation_alias="transactionMode",
+    )
+    notification_mode: Literal["single"] = Field(
+        default="single",
+        validation_alias="notificationMode",
+    )
+
+
 class TrailingStopAlertCreateRequest(_BaseIntentCreateRequest):
     strategy: Literal["trailing_stop_alert"]
     trail_mode: Literal["percentage", "fixed_amount"] = Field(validation_alias="trailMode")
@@ -78,6 +90,7 @@ type IntentCreateRequest = Annotated[
     | SellPriceAlertCreateRequest
     | LimitBuyOrderCreateRequest
     | LimitSellOrderCreateRequest
+    | MarketOrderCreateRequest
     | TrailingStopAlertCreateRequest,
     Field(discriminator="strategy"),
 ]
