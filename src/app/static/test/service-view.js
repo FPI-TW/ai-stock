@@ -368,6 +368,52 @@ async function evaluateQuotes() {
 }
 
 // ---------------------------------------------------------------------------
+// TWAP worker buttons — manual demo trigger
+// ---------------------------------------------------------------------------
+
+async function runTwapWorker(path, label) {
+  setLog("svc-twap-log", `${label}…`);
+  const resp = await sendRequest({ method: "POST", path });
+  if (resp.status >= 200 && resp.status < 300) {
+    const processed = resp.body?.data?.processedCount ?? 0;
+    setLog("svc-twap-log", `${label} ✓\n處理切片：${processed} 筆`, processed > 0 ? "ok" : "");
+    if (processed > 0) notifyDashboardStale(path);
+  } else {
+    setLog("svc-twap-log", `${label} 失敗 ${resp.status}\n${JSON.stringify(resp.body?.error || resp.body, null, 2)}`, "err");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Broker demo current price — single-symbol live lookup
+// ---------------------------------------------------------------------------
+
+async function fetchCurrentPrice(symbol) {
+  setLog("svc-current-price-log", `查詢 ${symbol}…`);
+  const resp = await sendRequest({
+    method: "GET",
+    path: `/quotes/current-price/${encodeURIComponent(symbol)}`,
+  });
+  if (resp.status >= 200 && resp.status < 300) {
+    const d = resp.body?.data || {};
+    const lines = [
+      `標的：${d.symbol || symbol}`,
+      `成交：${d.currentPrice ?? "—"}`,
+      `買價：${d.bidPrice ?? "—"}`,
+      `賣價：${d.askPrice ?? "—"}`,
+      `行情時間：${d.quoteTime ? fmtClock(d.quoteTime) : "—"}`,
+      `來源：${d.source || "—"}`,
+    ];
+    setLog("svc-current-price-log", lines.join("\n"), "ok");
+  } else {
+    setLog(
+      "svc-current-price-log",
+      `失敗 ${resp.status}\n${JSON.stringify(resp.body?.error || resp.body, null, 2)}`,
+      "err",
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Server state display
 // ---------------------------------------------------------------------------
 
@@ -461,6 +507,19 @@ export function initServiceView() {
 
   // Eval
   $("svc-eval-btn").addEventListener("click", evaluateQuotes);
+
+  // TWAP worker
+  $("svc-twap-due-btn").addEventListener("click", () =>
+    runTwapWorker("/dev/twap/process-due-slices", "處理到期切片"),
+  );
+  $("svc-twap-followup-btn").addEventListener("click", () =>
+    runTwapWorker("/dev/twap/process-price-followups", "處理價格追蹤"),
+  );
+
+  // Broker demo current price
+  for (const btn of document.querySelectorAll(".svc-twap-symbols [data-symbol]")) {
+    btn.addEventListener("click", () => fetchCurrentPrice(btn.dataset.symbol));
+  }
 
   // Refresh button in topbar
   $("svc-refresh-btn").addEventListener("click", refreshServerState);

@@ -195,7 +195,10 @@
       <div class="uv-container">
         <header class="uv-header">
           <h2>我的委託</h2>
-          <button type="button" id="uv-create-btn" class="uv-primary-btn">+ 新增委託</button>
+          <div class="uv-header-actions">
+            <button type="button" id="uv-twap-btn" class="uv-secondary-btn">TWAP 拆單</button>
+            <button type="button" id="uv-create-btn" class="uv-primary-btn">+ 新增委託</button>
+          </div>
         </header>
 
         <section id="uv-quote-board" class="qb-board" hidden>
@@ -327,6 +330,38 @@
             </div>
           </section>
 
+          <!-- TWAP Worker -->
+          <section class="svc-card">
+            <header class="svc-card-head">
+              <h3>TWAP Worker</h3>
+              <span class="svc-card-hint">手動觸發 TWAP 拆單背景作業，本地 demo 用</span>
+            </header>
+            <div class="svc-card-body">
+              <div class="svc-field-row">
+                <button type="button" id="svc-twap-due-btn" class="svc-secondary-btn">處理到期切片</button>
+                <button type="button" id="svc-twap-followup-btn" class="svc-secondary-btn">處理價格追蹤</button>
+              </div>
+              <div id="svc-twap-log" class="svc-log" hidden></div>
+            </div>
+          </section>
+
+          <!-- Broker Demo 即時查價 -->
+          <section class="svc-card">
+            <header class="svc-card-head">
+              <h3>Broker Demo 即時查價</h3>
+              <span class="svc-card-hint">向 broker demo provider 查單一標的當下報價（白名單）</span>
+            </header>
+            <div class="svc-card-body">
+              <div class="svc-field-row svc-twap-symbols">
+                <button type="button" data-symbol="2330" class="svc-chip-btn">2330</button>
+                <button type="button" data-symbol="2317" class="svc-chip-btn">2317</button>
+                <button type="button" data-symbol="0050" class="svc-chip-btn">0050</button>
+                <button type="button" data-symbol="00878" class="svc-chip-btn">00878</button>
+              </div>
+              <div id="svc-current-price-log" class="svc-log" hidden></div>
+            </div>
+          </section>
+
           <!-- 服務狀態 -->
           <section class="svc-card svc-card-wide">
             <header class="svc-card-head">
@@ -342,6 +377,54 @@
         </div>
       </div>
     </section>
+
+    <!-- TWAP 拆單 modal -->
+    <div id="twap-overlay" hidden>
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="twap-title">
+        <header class="sheet-header">
+          <button type="button" id="twap-back" class="sheet-action" hidden>← 改條件</button>
+          <button type="button" id="twap-close" class="sheet-action">關閉</button>
+          <h3 id="twap-title">TWAP 拆單</h3>
+          <button type="button" id="twap-next" class="sheet-action primary">下一步</button>
+        </header>
+
+        <div class="sheet-body">
+          <div class="sheet-step twap-step" data-step="1">
+            <div class="sheet-field">
+              <label for="twap-symbol">標的代號</label>
+              <input id="twap-symbol" type="text" placeholder="例如 2330" autocomplete="off" />
+            </div>
+            <div class="sheet-field">
+              <label>方向</label>
+              <div class="twap-side-chips" id="twap-side-chips" role="tablist">
+                <button type="button" data-side="long" class="active" role="tab">多單 (long)</button>
+                <button type="button" data-side="short" role="tab">空單 (short)</button>
+              </div>
+            </div>
+            <div class="sheet-field-row">
+              <div class="sheet-field">
+                <label for="twap-quantity">總張數</label>
+                <input id="twap-quantity" type="number" min="2" value="5" />
+              </div>
+              <div class="sheet-field">
+                <label for="twap-interval">間隔（秒）</label>
+                <input id="twap-interval" type="number" min="1" value="60" />
+              </div>
+              <div class="sheet-field">
+                <label for="twap-endtime">結束時間 (HH:MM)</label>
+                <input id="twap-endtime" type="time" value="13:25" />
+              </div>
+            </div>
+          </div>
+
+          <div class="sheet-step twap-step" data-step="2" hidden>
+            <div class="twap-preview-loading" id="twap-preview-loading" hidden>計算拆單計畫中…</div>
+            <div class="twap-preview-summary" id="twap-preview-summary" hidden></div>
+            <div class="twap-preview-slices" id="twap-preview-slices"></div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- 新增委託 modal -->
     <div id="sheet-overlay" hidden>

@@ -665,6 +665,165 @@ async function submitCreate() {
 }
 
 // ---------------------------------------------------------------------------
+// TWAP 拆單 modal — preview + confirm flow
+// ---------------------------------------------------------------------------
+
+const twapState = {
+  step: 1,
+  positionSide: "long",
+  preview: null,
+};
+
+function readTwapInputs() {
+  return {
+    symbol: document.getElementById("twap-symbol").value.trim(),
+    positionSide: twapState.positionSide,
+    quantityLots: Number(document.getElementById("twap-quantity").value),
+    intervalSeconds: Number(document.getElementById("twap-interval").value),
+    endTime: document.getElementById("twap-endtime").value,
+  };
+}
+
+function validateTwapInputs(inputs) {
+  if (!inputs.symbol) return "請輸入標的代號";
+  if (!Number.isInteger(inputs.quantityLots) || inputs.quantityLots < 2) return "總張數需為 ≥ 2 的整數";
+  if (!Number.isInteger(inputs.intervalSeconds) || inputs.intervalSeconds < 1) return "間隔秒數需 ≥ 1";
+  if (!/^\d{2}:\d{2}$/.test(inputs.endTime)) return "結束時間格式需為 HH:MM";
+  return null;
+}
+
+function openTwapSheet() {
+  twapState.step = 1;
+  twapState.positionSide = "long";
+  twapState.preview = null;
+  document.getElementById("twap-symbol").value = "";
+  document.getElementById("twap-quantity").value = "5";
+  document.getElementById("twap-interval").value = "60";
+  document.getElementById("twap-endtime").value = "13:25";
+  for (const b of document.querySelectorAll("#twap-side-chips button")) {
+    b.classList.toggle("active", b.dataset.side === "long");
+  }
+  showTwapStep(1);
+  document.getElementById("twap-overlay").hidden = false;
+  setTimeout(() => document.getElementById("twap-symbol").focus(), 50);
+}
+
+function closeTwapSheet() {
+  document.getElementById("twap-overlay").hidden = true;
+}
+
+function showTwapStep(step) {
+  twapState.step = step;
+  for (const node of document.querySelectorAll(".twap-step")) {
+    node.hidden = Number(node.dataset.step) !== step;
+  }
+  document.getElementById("twap-back").hidden = step === 1;
+  document.getElementById("twap-close").hidden = step !== 1;
+  document.getElementById("twap-title").textContent = step === 1 ? "TWAP 拆單" : "確認拆單計畫";
+  document.getElementById("twap-next").textContent = step === 1 ? "預覽" : "確認送出";
+}
+
+async function fetchTwapPreview() {
+  const inputs = readTwapInputs();
+  const err = validateTwapInputs(inputs);
+  if (err) {
+    showToast(err, "error");
+    return;
+  }
+
+  showTwapStep(2);
+  document.getElementById("twap-preview-loading").hidden = false;
+  document.getElementById("twap-preview-summary").hidden = true;
+  document.getElementById("twap-preview-slices").innerHTML = "";
+
+  const resp = await sendRequest({
+    method: "POST",
+    path: "/trade-intents/twap/preview",
+    body: inputs,
+  });
+  document.getElementById("twap-preview-loading").hidden = true;
+
+  if (resp.status < 200 || resp.status >= 300) {
+    const msg = resp.body?.error?.message || `預覽失敗 (${resp.status})`;
+    showToast(msg, "error");
+    showTwapStep(1);
+    return;
+  }
+
+  twapState.preview = resp.body?.data || null;
+  renderTwapPreview(twapState.preview);
+}
+
+function renderTwapPreview(plan) {
+  if (!plan) return;
+  const sideLabel = plan.positionSide === "long" ? "多單" : "空單";
+  const summary = el("div", { className: "twap-summary-grid" }, [
+    twapSummaryRow("標的", plan.symbol),
+    twapSummaryRow("方向", sideLabel),
+    twapSummaryRow("交易日", plan.tradingDate),
+    twapSummaryRow("階段", plan.tradingPhase),
+    twapSummaryRow("總張數", `${plan.targetQuantityLots} 張`),
+    twapSummaryRow("拆 / 可建", `${plan.materializedSliceCount} / ${plan.availableSliceCount}`),
+    twapSummaryRow("間隔", `${plan.intervalSeconds} 秒`),
+    twapSummaryRow("開始 / 結束", `${fmtClockTime(plan.startAt)} → ${fmtClockTime(plan.endAt)}`),
+  ]);
+  const summaryEl = document.getElementById("twap-preview-summary");
+  summaryEl.innerHTML = "";
+  summaryEl.appendChild(summary);
+  summaryEl.hidden = false;
+
+  const slices = document.getElementById("twap-preview-slices");
+  slices.innerHTML = "";
+  if (Array.isArray(plan.slices) && plan.slices.length > 0) {
+    slices.appendChild(el("div", { className: "twap-slices-title" }, [`拆單明細（${plan.slices.length} 筆）`]));
+    for (const s of plan.slices) {
+      slices.appendChild(el("div", { className: "twap-slice-row" }, [
+        el("span", { className: "twap-slice-time" }, [fmtClockTime(s.scheduledAt)]),
+        el("span", { className: "twap-slice-qty" }, [`${s.quantityLots} 張`]),
+      ]));
+    }
+  }
+}
+
+function twapSummaryRow(label, value) {
+  return el("div", { className: "twap-summary-row" }, [
+    el("span", { className: "twap-summary-label" }, [label]),
+    el("span", { className: "twap-summary-value" }, [String(value)]),
+  ]);
+}
+
+function fmtClockTime(iso) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleString("zh-TW", { hour12: false });
+  } catch {
+    return iso;
+  }
+}
+
+async function confirmTwap() {
+  const inputs = readTwapInputs();
+  const err = validateTwapInputs(inputs);
+  if (err) {
+    showToast(err, "error");
+    return;
+  }
+  const resp = await sendRequest({
+    method: "POST",
+    path: "/trade-intents/twap/confirm",
+    body: inputs,
+  });
+  if (resp.status === 201) {
+    closeTwapSheet();
+    showToast(`TWAP 拆單已建立 — ${resp.body?.data?.symbol || inputs.symbol}`, "success");
+    refreshDashboard();
+  } else {
+    const msg = resp.body?.error?.message || `送出失敗 (${resp.status})`;
+    showToast(msg, "error");
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Toast
 // ---------------------------------------------------------------------------
 
@@ -702,6 +861,24 @@ function dismissToast(toast) {
 // ---------------------------------------------------------------------------
 
 function openIntentDetail(intent) {
+  renderIntentDetail(intent, { stale: true });
+  document.getElementById("detail-overlay").hidden = false;
+  refetchIntentDetail(intent.id).catch(() => {});
+}
+
+async function refetchIntentDetail(intentId) {
+  const resp = await sendRequest({
+    method: "GET",
+    path: `/trade-intents/${encodeURIComponent(intentId)}`,
+  });
+  if (resp.status !== 200) return;
+  const fresh = resp.body?.data;
+  if (!fresh || fresh.id !== intentId) return;
+  if (document.getElementById("detail-overlay").hidden) return;
+  renderIntentDetail(fresh, { stale: false });
+}
+
+function renderIntentDetail(intent, { stale }) {
   const body = document.getElementById("detail-body");
   document.getElementById("detail-title").textContent = `${intent.symbol} ${STRATEGY_LABEL[intent.strategy] || intent.strategy}`;
 
@@ -724,7 +901,10 @@ function openIntentDetail(intent) {
 
   body.innerHTML = "";
   body.appendChild(el("div", { className: "detail-section" }, [
-    el("div", { className: "detail-section-title" }, ["委託資訊"]),
+    el("div", { className: "detail-section-title" }, [
+      "委託資訊",
+      stale ? el("span", { className: "detail-section-stale" }, [" 更新中…"]) : null,
+    ].filter(Boolean)),
     grid,
   ]));
   body.appendChild(el("div", { className: "detail-section" }, [
@@ -742,8 +922,6 @@ function openIntentDetail(intent) {
       : null,
   ].filter(Boolean));
   body.appendChild(actions);
-
-  document.getElementById("detail-overlay").hidden = false;
 }
 
 function openNotifDetail(notif) {
@@ -857,7 +1035,7 @@ function customConfirm({ title = "確認", message = "", okText = "確定", canc
 
 export function closeAllModals() {
   let closed = false;
-  for (const id of ["detail-overlay", "sheet-overlay"]) {
+  for (const id of ["detail-overlay", "sheet-overlay", "twap-overlay"]) {
     const node = document.getElementById(id);
     if (node && !node.hidden) {
       node.hidden = true;
@@ -942,6 +1120,28 @@ export function initUserView() {
   document.getElementById("sheet-overlay").addEventListener("click", (ev) => {
     if (ev.target.id === "sheet-overlay") closeSheet();
   });
+
+  // TWAP sheet
+  document.getElementById("uv-twap-btn").addEventListener("click", openTwapSheet);
+  document.getElementById("twap-close").addEventListener("click", closeTwapSheet);
+  document.getElementById("twap-back").addEventListener("click", () => {
+    if (twapState.step > 1) showTwapStep(1);
+  });
+  document.getElementById("twap-next").addEventListener("click", async () => {
+    if (twapState.step === 1) await fetchTwapPreview();
+    else if (twapState.step === 2) await confirmTwap();
+  });
+  document.getElementById("twap-overlay").addEventListener("click", (ev) => {
+    if (ev.target.id === "twap-overlay") closeTwapSheet();
+  });
+  for (const btn of document.querySelectorAll("#twap-side-chips button")) {
+    btn.addEventListener("click", () => {
+      twapState.positionSide = btn.dataset.side;
+      for (const b of document.querySelectorAll("#twap-side-chips button")) {
+        b.classList.toggle("active", b === btn);
+      }
+    });
+  }
 
   // Step 1: symbol search
   document.getElementById("symbol-search").addEventListener("input", (ev) => {
