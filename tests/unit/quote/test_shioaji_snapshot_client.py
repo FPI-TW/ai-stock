@@ -28,12 +28,12 @@ class FakeApi:
         return self.snapshots_payload
 
 
-def _ts_ns(dt: datetime) -> int:
-    return int(dt.timestamp() * 1_000_000_000)
+def _taipei_wall_clock_ts_ns(dt: datetime) -> int:
+    return int(dt.astimezone(TAIPEI).replace(tzinfo=UTC).timestamp() * 1_000_000_000)
 
 
 def test_get_stock_snapshot_normalizes_shioaji_snapshot() -> None:
-    quote_time_utc = datetime(2026, 5, 26, 2, 30, tzinfo=UTC)
+    quote_time = datetime(2026, 5, 26, 10, 30, tzinfo=TAIPEI)
     api = FakeApi(
         [
             SimpleNamespace(
@@ -41,7 +41,7 @@ def test_get_stock_snapshot_normalizes_shioaji_snapshot() -> None:
                 buy_price=590.0,
                 sell_price=591.0,
                 close=590.5,
-                ts=_ts_ns(quote_time_utc),
+                ts=_taipei_wall_clock_ts_ns(quote_time),
             )
         ]
     )

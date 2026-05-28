@@ -73,9 +73,10 @@ def to_taipei(raw_dt: Any) -> datetime:
 def timestamp_to_taipei(raw_ts: Any) -> datetime:
     """Convert Shioaji snapshot timestamps into tz-aware Asia/Taipei datetimes.
 
-    Shioaji snapshot `ts` values are Unix timestamps and may be emitted in
-    seconds, milliseconds, microseconds, or nanoseconds depending on SDK path.
-    Normalise by magnitude before converting.
+    Shioaji snapshot `ts` values carry Taipei wall-clock time encoded as a numeric
+    timestamp, and may be emitted in seconds, milliseconds, microseconds, or
+    nanoseconds depending on SDK path. Normalise by magnitude, then attach the
+    Taipei timezone without applying another UTC→Taipei offset.
     """
 
     if not isinstance(raw_ts, int | float):
@@ -89,7 +90,7 @@ def timestamp_to_taipei(raw_ts: Any) -> datetime:
         seconds = seconds / 1_000_000
     elif abs_seconds >= 100_000_000_000:
         seconds = seconds / 1_000
-    return datetime.fromtimestamp(seconds, tz=_UTC).astimezone(_TAIPEI_TZ)
+    return datetime.fromtimestamp(seconds, tz=_UTC).replace(tzinfo=_TAIPEI_TZ)
 
 
 def now_utc() -> datetime:

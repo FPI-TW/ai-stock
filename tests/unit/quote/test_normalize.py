@@ -10,6 +10,7 @@ from app.services.quote.base import QuoteProviderUnavailableError, QuoteSnapshot
 from app.services.quote.shioaji_demo.normalize import (
     build_snapshot,
     first,
+    timestamp_to_taipei,
     to_decimal,
     to_taipei,
 )
@@ -58,6 +59,14 @@ def test_to_taipei_converts_utc_to_taipei() -> None:
 def test_to_taipei_raises_for_non_datetime() -> None:
     with pytest.raises(QuoteProviderUnavailableError):
         to_taipei("2026-05-11T10:30:00")
+
+
+def test_timestamp_to_taipei_treats_snapshot_ts_as_taipei_wall_clock() -> None:
+    wall_clock_ts = datetime(2026, 5, 28, 14, 30, tzinfo=UTC).timestamp()
+
+    result = timestamp_to_taipei(wall_clock_ts)
+
+    assert result == datetime(2026, 5, 28, 14, 30, tzinfo=TAIPEI)
 
 
 def test_build_snapshot_keeps_previous_fields_on_partial_update() -> None:
