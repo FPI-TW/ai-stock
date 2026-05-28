@@ -36,6 +36,19 @@ function escapeHtml(s) {
   }[c]));
 }
 
+// Cross-tab signal: notify any open user-mode tab that the dashboard
+// underlying data may have changed, so it can refetch immediately instead
+// of waiting for its 5-second poll.
+function notifyDashboardStale(source) {
+  try {
+    const bc = new BroadcastChannel("ai-stock-test:dashboard");
+    bc.postMessage({ type: "stale", source, at: Date.now() });
+    bc.close();
+  } catch (_) {
+    // BroadcastChannel unavailable (very old browser) — polling fallback covers it.
+  }
+}
+
 function setLog(id, text, kind) {
   const el = $(id);
   if (!text) {
@@ -305,6 +318,7 @@ async function pushQuote() {
     const lines = Object.entries(counts).map(([u, n]) => `  ${u}: ${n} 筆`).join("\n");
     setLog("svc-push-log", `${head}\n觸發 ${total} 筆通知\n${lines}`, "ok");
   }
+  notifyDashboardStale("push-quote");
   refreshServerState();
 }
 
@@ -331,6 +345,7 @@ async function callSetClock(body, label) {
   const resp = await sendRequest({ method: "POST", path: "/dev/set-clock", body });
   if (resp.status >= 200 && resp.status < 300) {
     setLog("svc-clock-log", `${label} ✓`, "ok");
+    notifyDashboardStale("set-clock");
     refreshServerState();
   } else {
     setLog("svc-clock-log", `失敗 ${resp.status}\n${JSON.stringify(resp.body?.error || resp.body, null, 2)}`, "err");
@@ -346,6 +361,7 @@ async function evaluateQuotes() {
     const evaluated = resp.body?.data?.evaluatedIntents ?? "—";
     const triggered = resp.body?.data?.triggeredIntentIds?.length ?? 0;
     setLog("svc-eval-log", `評估完成\n標的：${symbol || "全部"}\n評估委託：${evaluated}\n觸發：${triggered} 筆`, "ok");
+    if (triggered > 0) notifyDashboardStale("evaluate-quotes");
   } else {
     setLog("svc-eval-log", `失敗 ${resp.status}\n${JSON.stringify(resp.body?.error || resp.body, null, 2)}`, "err");
   }

@@ -124,8 +124,11 @@ async function refreshDashboard() {
 // 5 秒一次足夠（變化頻率遠低於行情），分頁不在前景時暫停以省流量。
 
 const DASHBOARD_POLL_MS = 5000;
+const STALE_DEBOUNCE_MS = 250;
 let dashboardPollTimer = null;
 let dashboardVisibilityBound = false;
+let dashboardStaleChannel = null;
+let staleDebounceTimer = null;
 
 function startDashboardPoll() {
   stopDashboardPoll();
@@ -141,6 +144,19 @@ function startDashboardPoll() {
       }
     });
   }
+  // 即時跨分頁更新：服務端推送行情 / 改時鐘 / 重評估 完成後會 broadcast，
+  // 同瀏覽器的 user mode 分頁立即重抓 dashboard，不必等下一個 5 秒 tick。
+  // Debounce 250ms 處理連續推送（避免 10 連推就 10 連 refresh）。
+  try {
+    dashboardStaleChannel = new BroadcastChannel("ai-stock-test:dashboard");
+    dashboardStaleChannel.onmessage = (ev) => {
+      if (ev.data?.type !== "stale") return;
+      clearTimeout(staleDebounceTimer);
+      staleDebounceTimer = setTimeout(() => void refreshDashboard(), STALE_DEBOUNCE_MS);
+    };
+  } catch (_) {
+    // BroadcastChannel unavailable — polling fallback still works.
+  }
 }
 
 function stopDashboardPoll() {
@@ -148,6 +164,11 @@ function stopDashboardPoll() {
     clearInterval(dashboardPollTimer);
     dashboardPollTimer = null;
   }
+  if (dashboardStaleChannel) {
+    dashboardStaleChannel.close();
+    dashboardStaleChannel = null;
+  }
+  clearTimeout(staleDebounceTimer);
 }
 
 async function refreshIntents() {
