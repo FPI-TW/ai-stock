@@ -80,6 +80,7 @@ Response：
 Query：
 
 - `status` optional，可重複或逗號分隔。
+- `tradingDate` optional，格式 `YYYY-MM-DD`，用於查詢特定交易日期的追蹤單。
 - `cursor` optional。
 - `pageSize` optional，預設 50，最大 100。
 

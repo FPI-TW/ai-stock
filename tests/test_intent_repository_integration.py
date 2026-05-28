@@ -143,7 +143,7 @@ def test_list_by_owner_preserves_symbol_security_type(repo: IntentRepository) ->
     owner = uuid4()
     _create(repo, owner_user_id=owner, symbol="0050")
 
-    results, _ = repo.list_by_owner(owner, statuses=["active"], cursor=None, page_size=10)
+    results, _ = repo.list_by_owner(owner, statuses=["active"], trading_date=None, cursor=None, page_size=10)
 
     assert results[0].security_type is SecurityType.ETF
 
@@ -197,15 +197,33 @@ def test_list_active_keyset_pagination(repo: IntentRepository) -> None:
     _create(repo, owner_user_id=owner, target_price="200.0000")
     _create(repo, owner_user_id=owner, target_price="300.0000")
 
-    page1, cursor1 = repo.list_by_owner(owner, statuses=["active"], cursor=None, page_size=2)
+    page1, cursor1 = repo.list_by_owner(owner, statuses=["active"], trading_date=None, cursor=None, page_size=2)
     assert len(page1) == 2
     assert cursor1 is not None
 
-    page2, cursor2 = repo.list_by_owner(owner, statuses=["active"], cursor=cursor1, page_size=2)
+    page2, cursor2 = repo.list_by_owner(owner, statuses=["active"], trading_date=None, cursor=cursor1, page_size=2)
     assert len(page2) == 1
     assert cursor2 is None
 
     assert len({i.id for i in page1 + page2}) == 3
+
+
+@pytest.mark.integration
+def test_list_by_owner_filters_trading_date(repo: IntentRepository) -> None:
+    owner = uuid4()
+    included = _create(repo, owner_user_id=owner, target_price="100.0000", trading_date=date(2026, 5, 28))
+    _create(repo, owner_user_id=owner, target_price="200.0000", trading_date=date(2026, 5, 29))
+
+    results, cursor = repo.list_by_owner(
+        owner,
+        statuses=None,
+        trading_date=date(2026, 5, 28),
+        cursor=None,
+        page_size=10,
+    )
+
+    assert cursor is None
+    assert [intent.id for intent in results] == [included.id]
 
 
 @pytest.mark.integration
@@ -216,11 +234,11 @@ def test_list_terminal_keyset_pagination(repo: IntentRepository) -> None:
     repo.cancel(i1.id, owner)
     repo.cancel(i2.id, owner)
 
-    page1, cursor = repo.list_by_owner(owner, statuses=["cancelled"], cursor=None, page_size=1)
+    page1, cursor = repo.list_by_owner(owner, statuses=["cancelled"], trading_date=None, cursor=None, page_size=1)
     assert len(page1) == 1
     assert cursor is not None
 
-    page2, cursor2 = repo.list_by_owner(owner, statuses=["cancelled"], cursor=cursor, page_size=1)
+    page2, cursor2 = repo.list_by_owner(owner, statuses=["cancelled"], trading_date=None, cursor=cursor, page_size=1)
     assert len(page2) == 1
     assert cursor2 is None
 
@@ -240,7 +258,13 @@ def test_list_mixed_statuses_uses_active_sort_order(repo: IntentRepository) -> N
     i2 = _create(repo, owner_user_id=owner, target_price="200.0000")
     repo.cancel(i1.id, owner)  # i1.updated_at is now the most recent
 
-    results, _ = repo.list_by_owner(owner, statuses=["active", "cancelled"], cursor=None, page_size=10)
+    results, _ = repo.list_by_owner(
+        owner,
+        statuses=["active", "cancelled"],
+        trading_date=None,
+        cursor=None,
+        page_size=10,
+    )
 
     assert {r.id for r in results} == {i1.id, i2.id}
     # active sort: created_at DESC → i2 (created later) first
@@ -255,7 +279,7 @@ def test_cursor_from_other_owner_raises_invalid_cursor(repo: IntentRepository) -
     intent = _create(repo, owner_user_id=owner_a)
 
     with pytest.raises(InvalidCursorError):
-        repo.list_by_owner(owner_b, statuses=None, cursor=str(intent.id), page_size=10)
+        repo.list_by_owner(owner_b, statuses=None, trading_date=None, cursor=str(intent.id), page_size=10)
 
 
 # ----------------------------------------------------------------------
