@@ -177,7 +177,7 @@ Buckets（建議起始值，由 env override）：
 
 DB-backed bucket 為 V1 簡化版；多 instance 部署時 contention 不嚴重（PostgreSQL row lock + update）。Redis swap 可在 BE-V1-17 後評估。
 
-> **登入鎖定錯誤碼**：BE-V1-01 與本工單須對齊（`LOGIN_LOCKED` vs `RATE_LIMITED`），以 BE-V1-01 實作時定案者為準，本工單沿用同一碼。
+> **登入鎖定錯誤碼（已定案）**：`login:email` 失敗鎖定回 `LOGIN_LOCKED`（帳號層、使用者有感）；`login:ip` abuse 與其餘 endpoint 節流回 `RATE_LIMITED`。兩者皆 429 + `Retry-After`，差別在 `code`。本工單沿用此分流。
 
 `RATE_LIMITED` 統一 429 + `Retry-After` header。
 
@@ -258,7 +258,7 @@ Endpoint：留 admin endpoint stub（`POST /admin/users/{id}/anonymize`）但需
 - [ ] `audit_events` migration 可 upgrade / downgrade。
 - [ ] 所有 audit stub callers refactor 到 `AuditEventWriter`，舊 stub log 移除。
 - [ ] `IdempotencyService` 對 same key + same payload 回 cached response；different payload 回 409。
-- [ ] Login 5 次失敗 / 15 分鐘 → `RATE_LIMITED` 並 set `Retry-After`。
+- [ ] Login 5 次失敗 / 15 分鐘 → `LOGIN_LOCKED`（429）並 set `Retry-After`；`login:ip` abuse 與其餘節流回 `RATE_LIMITED`。
 - [ ] Mutating endpoint 缺 `Idempotency-Key` → 400。
 - [ ] Retention sweep 對各 table 正確刪 row；job idempotent。
 - [ ] User anonymization：email / chat_id / mfa_secret 全部匿名化；intent / audit 保留 user_id reference。

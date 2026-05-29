@@ -252,7 +252,7 @@ Rules：
 新增：
 
 - `LOGIN_FAILED`：401。
-- `LOGIN_LOCKED`：429。
+- `LOGIN_LOCKED`：429。`login:email` 失敗鎖定（連續密碼錯誤）專用——使用者有感的帳號層鎖定。
 - `INVITATION_INVALID`：400。
 - `INVITATION_EXPIRED`：410。
 - `INVITATION_CONSUMED`：409。
@@ -260,7 +260,7 @@ Rules：
 - `REFRESH_INVALID`：401。
 - `REFRESH_REUSE_DETECTED`：401（同時觸發 admin alert log）。
 - `CSRF_FAILED`：403。
-- `RATE_LIMITED`：429。
+- `RATE_LIMITED`：429。純流量節流（`login:ip` abuse、password reset、其餘 endpoint）；與 `LOGIN_LOCKED` 分流。
 - `UNAUTHENTICATED`：401。
 - 既有 `FORBIDDEN`：403（保留給 BE-V1-02 authorization）。
 
@@ -306,4 +306,4 @@ Rules：
 - Mailer interface：`class Mailer(Protocol): def send(self, message: EmailMessage) -> None`。V1 stub 印 log，BE-V1-11 / R3 再接 SES / SMTP。
 - 所有 state mutation 都要透過 command handler，controller 只 transport validation。
 - BE-V1-02 接手 role/owner-scope authorization，本工單只在 `deps.py` 提供 `current_user` 與 `require_role('admin')` 的最小骨架。
-- **RateLimiter 邊界（與 BE-V1-16 協調）**：`rate_limit_buckets` table 與 `RateLimiter.consume()` primitive **由本工單建立**，schema/signature 對齊 BE-V1-16；本工單只接 auth buckets。BE-V1-16 直接沿用此 primitive、勿重建/勿另開表，只負責擴充其餘 endpoint buckets 與 audit/idempotency/retention。登入鎖定錯誤碼（`LOGIN_LOCKED` vs `RATE_LIMITED`）須與 BE-V1-16 對齊，實作前先定案。
+- **RateLimiter 邊界（與 BE-V1-16 協調）**：`rate_limit_buckets` table 與 `RateLimiter.consume()` primitive **由本工單建立**，schema/signature 對齊 BE-V1-16；本工單只接 auth buckets。BE-V1-16 直接沿用此 primitive、勿重建/勿另開表，只負責擴充其餘 endpoint buckets 與 audit/idempotency/retention。**錯誤碼分流（已定案）**：`login:email` 失敗鎖定回 `LOGIN_LOCKED`；`login:ip` abuse 與其餘節流回 `RATE_LIMITED`；兩者皆 429 + `Retry-After`，差別在 `code` 供前端決定訊息。BE-V1-16 沿用同一分流。
