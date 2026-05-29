@@ -22,7 +22,7 @@ V0.5 / 早期 V1 工單一直以 structured log + stub interface 代替正式 au
 
 - 新增 `audit_events` table。
 - 新增 `idempotency_keys` table（取代 BE-V1-10 csv-only impl，集中所有 mutating API）。
-- 新增 `RateLimiter`：DB-backed 或 Redis-backed（V1 可先 DB-backed，後續 swap）。
+- **沿用** BE-V1-01 已建立的 `RateLimiter`（`rate_limit_buckets` table + token-bucket `consume()`）；**勿重建、勿另開表**。本工單只把 buckets 擴到其餘 mutating endpoint、加 env override 與 `Retry-After`。（DB-backed，Redis swap 延到 BE-V1-17 後評估。）
 - 新增 retention 排程 jobs。
 - 新增 user anonymization command。
 - Refactor 所有之前的 audit stub callers 改寫到 `AuditEventWriter`。
@@ -87,15 +87,15 @@ Indexes：
 
 Unique：`(owner_user_id, key, endpoint)`。Index：`expires_at`。
 
-### `rate_limit_buckets`
+### `rate_limit_buckets`（已由 BE-V1-01 建立，本工單沿用）
 
-簡單 DB-backed token bucket（也可改 Redis）：
+簡單 DB-backed token bucket（也可改 Redis）。**此 table 與 `RateLimiter` 已在 BE-V1-01 建立**，本工單不重建，只擴充 bucket configs：
 
 - `bucket_key text primary key`
 - `tokens double precision not null`
 - `last_refill_at timestamptz not null`
 
-Bucket key 例：`login:email:foo@example.com`、`password_reset:ip:1.2.3.4`、`create_intent:user:<uuid>`。
+Bucket key 例：`login:email:foo@example.com`、`password_reset:ip:1.2.3.4`（← 此兩類已由 BE-V1-01 接上）、`create_intent:user:<uuid>`（← 本工單新增）。
 
 ### `retention_executions`
 
@@ -173,7 +173,11 @@ Buckets（建議起始值，由 env override）：
 - `bind_code:user:<id>`: 1 / 1min。
 - `webhook:telegram`: 60 / 1min（防偽造）。
 
+`RateLimiter` 與 `rate_limit_buckets` table **已由 BE-V1-01 建立並接上 auth buckets**（`login:*`、`password_reset:*`、invitation/bind 重寄）；本工單**沿用**，只新增上述其餘 endpoint buckets，勿重建。
+
 DB-backed bucket 為 V1 簡化版；多 instance 部署時 contention 不嚴重（PostgreSQL row lock + update）。Redis swap 可在 BE-V1-17 後評估。
+
+> **登入鎖定錯誤碼**：BE-V1-01 與本工單須對齊（`LOGIN_LOCKED` vs `RATE_LIMITED`），以 BE-V1-01 實作時定案者為準，本工單沿用同一碼。
 
 `RATE_LIMITED` 統一 429 + `Retry-After` header。
 

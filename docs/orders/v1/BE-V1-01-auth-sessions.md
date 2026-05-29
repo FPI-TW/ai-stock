@@ -29,7 +29,7 @@ V1 不開放公開註冊；帳號由 admin（BE-V1-13）建立並寄 invitation�
 - Login / logout / refresh / password reset 全部寫 audit placeholder（BE-V1-16 補正式 audit log table，本工單只保留 stub 介面）。
 - CSRF 防護：所有 state-changing requests 需驗 CSRF token，refresh 透過 HttpOnly cookie。
 - 取代 `api/deps.py::get_current_user` 的 `LocalUserContext`，改為從 auth context 解析。
-- Rate limit：登入失敗鎖定、password reset、invitation 重寄。
+- Rate limit：登入失敗鎖定、password reset、invitation 重寄。**本工單把 `RateLimiter` token-bucket primitive 提前自 BE-V1-16 建立**（見下方 DB Schema `rate_limit_buckets` 與工程注意事項），但只接 auth 自己的 buckets；其餘 mutating endpoint 的 buckets 與 audit/idempotency/retention 仍由 BE-V1-16 負責。
 - 確保 `LOCAL_MODE=true` 仍能跑 dev console，但 dev local auth 必須改走「測試 user」帳號（不再 hardcode `local-user`）。
 
 ## 非目標
@@ -98,6 +98,26 @@ Rule：同一 user 只能存在一筆 `consumed_at is null and revoked_at is nul
 Indexes：`(user_id, revoked_at)`、`token_hash unique`。
 
 Refresh token reuse 偵測：若一筆 `token_hash` 被消費且 `revoked_reason = rotated` 後再被使用，整條 user 的 refresh chain 全部 revoke（`reuse_detected`）並產生 admin alert（透過 structured log，BE-V1-15 接收）。
+
+### `rate_limit_buckets`（primitive 提前自 BE-V1-16）
+
+簡單 DB-backed token bucket（schema 與 BE-V1-16 一致，由本工單建立、BE-V1-16 沿用勿重建）：
+
+- `bucket_key text primary key`
+- `tokens double precision not null`
+- `last_refill_at timestamptz not null`
+
+`app/services/rate_limit/limiter.py`：
+
+```python
+class RateLimiter:
+    def consume(self, *, bucket_key: str, capacity: int, refill_per_second: float, cost: int = 1) -> bool: ...
+```
+
+- 採 token bucket（`refill_per_second`），天然無固定窗邊界問題，滿足「time-window 不能跨界算錯」。
+- **本工單只接 auth buckets**：`login:email:<email>`（capacity 5 / 5 per 15min）、`login:ip:<ip>`（30 / 15min）、`password_reset:email:<email>`（3 / 1h）、`password_reset:ip:<ip>`（10 / 1h）、invitation/bind 重寄。
+- 其餘 mutating endpoint buckets（`create_intent`、`csv_confirm`、`webhook:telegram` …）+ env override + `Retry-After` 由 BE-V1-16 擴充。
+- DB-backed 為 V1 簡化版（PostgreSQL row lock + update）；Redis swap 延到 BE-V1-17 後評估。
 
 ### `trade_intents` / `trigger_events` / `notifications` 既有欄位
 
@@ -286,3 +306,4 @@ Rules：
 - Mailer interface：`class Mailer(Protocol): def send(self, message: EmailMessage) -> None`。V1 stub 印 log，BE-V1-11 / R3 再接 SES / SMTP。
 - 所有 state mutation 都要透過 command handler，controller 只 transport validation。
 - BE-V1-02 接手 role/owner-scope authorization，本工單只在 `deps.py` 提供 `current_user` 與 `require_role('admin')` 的最小骨架。
+- **RateLimiter 邊界（與 BE-V1-16 協調）**：`rate_limit_buckets` table 與 `RateLimiter.consume()` primitive **由本工單建立**，schema/signature 對齊 BE-V1-16；本工單只接 auth buckets。BE-V1-16 直接沿用此 primitive、勿重建/勿另開表，只負責擴充其餘 endpoint buckets 與 audit/idempotency/retention。登入鎖定錯誤碼（`LOGIN_LOCKED` vs `RATE_LIMITED`）須與 BE-V1-16 對齊，實作前先定案。
