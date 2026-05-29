@@ -135,7 +135,10 @@ def test_trigger_active_intent_writes_three_rows_atomically(
     db_session: Session,
     trigger_cmd: TriggerIntentCommand,
     repo: IntentRepository,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    dispatched: list[Notification] = []
+    monkeypatch.setattr("app.commands.trigger_intent.dispatch_notification_to_telegram", dispatched.append)
     owner = uuid4()
     intent_id = _create_active_intent(repo, db_session, owner_user_id=owner)
 
@@ -163,6 +166,8 @@ def test_trigger_active_intent_writes_three_rows_atomically(
     assert "100.00" in result.notification.rendered_body
     assert "99.00" in result.notification.rendered_body
     assert "僅通知、未下單、不保證成交" in result.notification.rendered_body
+    assert len(dispatched) == 1
+    assert dispatched[0].id == result.notification.id
 
 
 @pytest.mark.integration

@@ -26,6 +26,7 @@ from app.services.notification_template import render_twap_price_followup, rende
 from app.services.quote.base import QuoteProvider, QuoteProviderError, QuoteSnapshot
 from app.services.quote.intent_reconciler import reconcile_on_create
 from app.services.symbol import SymbolService
+from app.services.telegram_notification import dispatch_notification_to_telegram
 
 
 @dataclass(frozen=True)
@@ -214,6 +215,7 @@ class TwapSliceWorkerCommand:
         )
         self._db.add(notification)
         self._db.flush()
+        dispatch_notification_to_telegram(notification)
 
         followup_required = price is None
         slice_row.status = "notified"
@@ -264,6 +266,7 @@ class TwapSliceWorkerCommand:
         )
         self._db.add(notification)
         self._db.flush()
+        dispatch_notification_to_telegram(notification)
         slice_row.price_followup_required = False
         slice_row.next_price_followup_at = None
         slice_row.price_followup_notification_id = notification.id

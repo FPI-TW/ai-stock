@@ -50,6 +50,7 @@ from app.services.notification_template import (
     render_price_triggered,
     render_trailing_stop_triggered,
 )
+from app.services.telegram_notification import dispatch_notification_to_telegram
 
 
 class IntentNotActiveError(TriggerError):
@@ -234,6 +235,8 @@ def persist_trigger(
     if result.rowcount == 0:
         raise IntentNotActiveError(intent.id, "stale")
     db.add(notification_row)
+    db.flush()
+    dispatch_notification_to_telegram(notification_row)
     return trigger_row, notification_row
 
 

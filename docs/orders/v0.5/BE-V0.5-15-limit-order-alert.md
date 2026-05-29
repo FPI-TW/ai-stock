@@ -138,7 +138,7 @@ Template 要求（in_app body 與 title）：
   - quote time。
   - 「僅通知、未下單、不保證成交」。
 
-Telegram template 在 V1-11 / V1-12 補；V0.5 仍只 in_app。
+Telegram 正式 binding、settings 與 delivery attempts 在 V1-11 / V1-12 補；V0.5 只做 env-based 最小同步，Telegram 文字沿用站內 `rendered_title` / `rendered_body`。
 
 ## API
 

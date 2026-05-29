@@ -10,7 +10,7 @@
 
 ## 背景
 
-V0.5 只需要展示 trigger 後有站內通知資料可查看。正式 channel settings、delivery attempts、Telegram delivery、read/unread 複雜偏好都留到 V1。
+V0.5 只需要展示 trigger 後有站內通知資料可查看。後續補上最小 Telegram 同步：當 `TELEGRAM_BOT_TOKEN` 與 `TELEGRAM_CHAT_ID` 皆有值時，所有 notification 以相同 title/body best-effort 送往單一 Telegram chat。正式 channel settings、delivery attempts、binding、retry worker、read/unread 複雜偏好都留到 V1。
 
 ## 目標
 
@@ -22,7 +22,7 @@ V0.5 只需要展示 trigger 後有站內通知資料可查看。正式 channel 
 ## 非目標
 
 - 不做 NotificationDelivery。
-- 不做 Telegram。
+- 不做 Telegram binding / delivery attempts / retry worker。
 - 不做通知偏好。
 - 不做 retry。
 - 不做 template versioning。

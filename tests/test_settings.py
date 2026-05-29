@@ -43,3 +43,42 @@ def test_malformed_local_user_id_raises(monkeypatch: pytest.MonkeyPatch) -> None
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)  # type: ignore[call-arg]
+
+
+def test_telegram_settings_are_optional(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setenv("LOCAL_MODE", "true")
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.telegram_bot_token is None
+    assert settings.telegram_chat_id is None
+    assert settings.telegram_timeout_seconds == 5.0
+
+
+def test_telegram_settings_parse_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat-1")
+    monkeypatch.setenv("TELEGRAM_TIMEOUT_SECONDS", "2.5")
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.telegram_bot_token == "bot-token"
+    assert settings.telegram_chat_id == "chat-1"
+    assert settings.telegram_timeout_seconds == 2.5
+
+
+def test_twap_worker_settings_parse_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("TWAP_WORKER_ENABLED", "false")
+    monkeypatch.setenv("TWAP_WORKER_INTERVAL_SECONDS", "3.5")
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.twap_worker_enabled is False
+    assert settings.twap_worker_interval_seconds == 3.5
