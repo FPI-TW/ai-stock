@@ -273,6 +273,7 @@ class TwapSliceWorkerCommand:
         slice_row.price_followup_sent_at = now
 
     def _complete_intent_if_all_slices_done(self, intent_row: TradeIntent, now: datetime) -> None:
+        self._db.flush()
         pending_count = self._db.execute(
             select(func.count())
             .select_from(TwapSlice)

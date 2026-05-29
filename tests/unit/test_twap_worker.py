@@ -211,6 +211,7 @@ def test_process_due_slice_with_price_creates_primary_notification_and_completes
     assert intent.status == "triggered"
     assert intent.triggered_at == NOW
     assert fake_db.committed is True
+    assert fake_db.flushed_count == 2
     assert dispatched == [notification]
 
 
@@ -240,6 +241,7 @@ def test_process_due_slices_creates_notification_for_each_slice(monkeypatch: pyt
     assert second_slice.primary_notification_id == second_notification.id
     assert dispatched == [first_notification, second_notification]
     assert fake_db.committed is True
+    assert fake_db.flushed_count == 4
 
 
 def test_process_due_slices_after_close_skips_notifications() -> None:
