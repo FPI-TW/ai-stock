@@ -4,6 +4,7 @@ from typing import cast
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+import pytest
 from sqlalchemy.orm import Session
 
 from app.commands.twap import TwapSliceWorkerCommand
@@ -176,7 +177,20 @@ def _worker(
     )
 
 
-def test_process_due_slice_with_price_creates_primary_notification_and_completes_intent() -> None:
+def _capture_telegram_dispatch(monkeypatch: pytest.MonkeyPatch) -> list[Notification]:
+    dispatched: list[Notification] = []
+
+    def fake_dispatch(notification: Notification) -> None:
+        dispatched.append(notification)
+
+    monkeypatch.setattr("app.commands.twap.dispatch_notification_to_telegram", fake_dispatch)
+    return dispatched
+
+
+def test_process_due_slice_with_price_creates_primary_notification_and_completes_intent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatched = _capture_telegram_dispatch(monkeypatch)
     intent = _intent(status="active", position_side="long")
     slice_row = _slice(intent, status="pending")
     fake_db = FakeSession([FakeResult(rows=[(slice_row, intent)]), FakeResult(scalar=0)])
@@ -197,6 +211,37 @@ def test_process_due_slice_with_price_creates_primary_notification_and_completes
     assert intent.status == "triggered"
     assert intent.triggered_at == NOW
     assert fake_db.committed is True
+    assert fake_db.flushed_count == 2
+    assert dispatched == [notification]
+
+
+def test_process_due_slices_creates_notification_for_each_slice(monkeypatch: pytest.MonkeyPatch) -> None:
+    dispatched = _capture_telegram_dispatch(monkeypatch)
+    intent = _intent(status="active", position_side="long")
+    first_slice = _slice(intent, sequence_no=1, status="pending")
+    second_slice = _slice(intent, sequence_no=2, status="pending")
+    fake_db = FakeSession(
+        [
+            FakeResult(rows=[(first_slice, intent), (second_slice, intent)]),
+            FakeResult(scalar=1),
+            FakeResult(scalar=0),
+        ]
+    )
+
+    output = _worker(fake_db, FakeQuoteProvider(_snapshot())).process_due_slices()
+
+    assert output.processed_count == 2
+    assert len(fake_db.added_notifications) == 2
+    first_notification, second_notification = fake_db.added_notifications
+    assert first_notification.type == "twap_slice"
+    assert second_notification.type == "twap_slice"
+    assert first_notification.rendered_title == "2330 TWAP 第 1/2 筆"
+    assert second_notification.rendered_title == "2330 TWAP 第 2/2 筆"
+    assert first_slice.primary_notification_id == first_notification.id
+    assert second_slice.primary_notification_id == second_notification.id
+    assert dispatched == [first_notification, second_notification]
+    assert fake_db.committed is True
+    assert fake_db.flushed_count == 4
 
 
 def test_process_due_slices_after_close_skips_notifications() -> None:
@@ -233,7 +278,10 @@ def test_process_due_slice_without_price_sends_primary_notification_and_schedule
     assert fake_db.committed is True
 
 
-def test_process_price_followup_success_creates_followup_notification_and_clears_retry_state() -> None:
+def test_process_price_followup_success_creates_followup_notification_and_clears_retry_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatched = _capture_telegram_dispatch(monkeypatch)
     intent = _intent(position_side="short")
     slice_row = _slice(intent, status="notified", attempts=1)
     fake_db = FakeSession([FakeResult(rows=[(slice_row, intent)])])
@@ -251,6 +299,7 @@ def test_process_price_followup_success_creates_followup_notification_and_clears
     assert slice_row.price_followup_notification_id == notification.id
     assert slice_row.price_followup_sent_at == NOW
     assert fake_db.committed is True
+    assert dispatched == [notification]
 
 
 def test_process_price_followup_failure_retries_then_stops_at_third_attempt() -> None:

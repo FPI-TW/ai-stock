@@ -73,7 +73,9 @@ slice 到期時 worker 會讀取最新行情:
 
 若主通知無價格，系統會以 10 秒間隔重試 3 次。任一次取得價格後，會送出 `twap_price_followup` 候補價格通知，並標明補發時間。候補價格只影響通知歷史，不改變 intent 或 slice 狀態語意。
 
-Local mode dev worker endpoints:
+Local mode runtime 會啟動 TWAP slice background worker，依 `TWAP_WORKER_INTERVAL_SECONDS` 定期處理到期 slice 與候補價格通知。若要關閉，可設定 `TWAP_WORKER_ENABLED=false`。
+
+Dev worker endpoints 仍保留給手動補跑：
 
 - `POST /dev/twap/process-due-slices`
 - `POST /dev/twap/process-price-followups`

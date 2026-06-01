@@ -1,4 +1,5 @@
 import logging
+from asyncio import CancelledError, Task, create_task
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -20,6 +21,7 @@ from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
 from app.services.quote import build_quote_provider
 from app.services.quote_dispatcher import QuoteEvaluationDispatcher
+from app.services.twap_scheduler import TwapSliceScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +45,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     provider = app.state.quote_provider
     provider.startup()
 
+    twap_scheduler_task: Task[None] | None = None
     if settings.database_url:
         from app.db.session import get_session_factory
 
@@ -70,9 +73,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         provider.add_quote_listener(dispatcher.dispatch)
 
+        if settings.twap_worker_enabled:
+            scheduler = TwapSliceScheduler(
+                session_factory=session_factory,
+                quote_provider=provider,
+                session_service=session_service,
+                interval_seconds=settings.twap_worker_interval_seconds,
+            )
+            twap_scheduler_task = create_task(scheduler.run_forever())
+            logger.info(
+                "twap slice scheduler started",
+                extra={"interval_seconds": settings.twap_worker_interval_seconds},
+            )
+
     try:
         yield
     finally:
+        if twap_scheduler_task is not None:
+            twap_scheduler_task.cancel()
+            try:
+                await twap_scheduler_task
+            except CancelledError:
+                pass
         provider.shutdown()
 
 

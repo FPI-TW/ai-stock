@@ -104,6 +104,7 @@ V0.5 要做：
 - Development quote adapter，用於本地推進 quote，驅動正式 quote evaluation domain logic。
 - Quote evaluation 與 trigger transaction。
 - Minimal in-app notification record 與 notification list/read API。
+- Optional env-based Telegram sync：所有建立的 notification 以相同 title/body best-effort 送到單一 Telegram chat。
 - 主流程 integration tests。
 
 V0.5 不做：
@@ -111,7 +112,7 @@ V0.5 不做：
 - Auth、session、refresh token、CSRF。
 - Admin APIs。
 - CSV。
-- Telegram。
+- Telegram binding、user-level notification settings、delivery attempts、retry worker。
 - 停利 / 停損、OCO。
 - Corporate action、cash dividend adjustment、effective price preview。
 - 真實資料 importer。
@@ -251,17 +252,17 @@ V0.5 可用最小 trigger record 或直接在 `TradeIntent` 保存 trigger metad
 
 ### Notification
 
-V0.5 只需要最小站內通知：
+V0.5 使用最小 notification record，站內通知與 env-based Telegram sync 共用同一份 rendered title/body：
 
 - `owner_user_id`
 - `trade_intent_id`
-- `type = price_triggered`
+- `type`：見 `docs/notification.md`
 - `rendered_title`
 - `rendered_body`
 - `read_at`
 - `created_at`
 
-V1 再擴充 `NotificationDelivery`、template version、delivery attempts、Telegram metadata。
+Telegram sync 只在 `TELEGRAM_BOT_TOKEN` 與 `TELEGRAM_CHAT_ID` 皆有值時啟用；送出失敗不影響原 transaction。V1 再擴充 `NotificationDelivery`、template version、delivery attempts、Telegram binding/settings metadata。
 
 ## 7. 策略語意
 

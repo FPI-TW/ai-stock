@@ -21,7 +21,11 @@ class Settings(BaseSettings):
     local_mode: bool = Field(default=True, alias="LOCAL_MODE")
     request_id_header: str = Field(default="X-Request-Id", alias="REQUEST_ID_HEADER")
     cors_allow_origins: str = Field(
-        default="http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001",
+        default=(
+            "http://localhost:3000,http://127.0.0.1:3000,"
+            "http://localhost:3001,http://127.0.0.1:3001,"
+            "http://localhost:3100,http://127.0.0.1:3100"
+        ),
         alias="CORS_ALLOW_ORIGINS",
     )
 
@@ -35,6 +39,15 @@ class Settings(BaseSettings):
     shioaji_max_subscriptions: int = Field(default=5, alias="SHIOAJI_MAX_SUBSCRIPTIONS")
     shioaji_simulation: bool = Field(default=False, alias="SHIOAJI_SIMULATION")
     shioaji_demo_allowed_symbols: str | None = Field(default=None, alias="SHIOAJI_DEMO_ALLOWED_SYMBOLS")
+
+    # Telegram notification sync is enabled only when both values are present.
+    telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
+    telegram_chat_id: str | None = Field(default=None, alias="TELEGRAM_CHAT_ID")
+    telegram_timeout_seconds: float = Field(default=5.0, alias="TELEGRAM_TIMEOUT_SECONDS")
+
+    # Local V0.5 TWAP worker loop; dev endpoints remain available for manual backfill.
+    twap_worker_enabled: bool = Field(default=True, alias="TWAP_WORKER_ENABLED")
+    twap_worker_interval_seconds: float = Field(default=1.0, alias="TWAP_WORKER_INTERVAL_SECONDS")
 
     @model_validator(mode="after")
     def _enforce_local_user_id(self) -> "Settings":

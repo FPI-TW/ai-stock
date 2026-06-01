@@ -40,11 +40,25 @@ def clear_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
         "SHIOAJI_MAX_SUBSCRIPTIONS",
         "SHIOAJI_SIMULATION",
         "SHIOAJI_DEMO_ALLOWED_SYMBOLS",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
+        "TELEGRAM_TIMEOUT_SECONDS",
+        "TWAP_WORKER_ENABLED",
+        "TWAP_WORKER_INTERVAL_SECONDS",
     ):
         monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setenv("LOCAL_USER_ID", "00000000-0000-0000-0000-000000000001")
     monkeypatch.setenv("LOCAL_MODE", "true")
     monkeypatch.setenv("QUOTE_PROVIDER", "in_memory")
+    monkeypatch.setenv(
+        "CORS_ALLOW_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:3001,http://127.0.0.1:3001,"
+        "http://localhost:3100,http://127.0.0.1:3100",
+    )
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "")
+    monkeypatch.setenv("TWAP_WORKER_ENABLED", "false")
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()
