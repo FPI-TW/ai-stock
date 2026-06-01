@@ -179,6 +179,7 @@ Rules：
 - 成功：回 access token、set refresh cookie、CSRF cookie。
 - 錯誤訊息一律不洩漏 email 是否存在（`LOGIN_FAILED`）。
 - 未 active 帳號（invited / disabled）一律回 `LOGIN_FAILED`。
+- **盲算防禦（Blind Argon2id）**：當 email 不存在、帳號未 active、或 `password_hash is null`（invited 未啟用）時，仍須對一個模組級常數 dummy argon2id hash 跑一次 `verify()` 再回 `LOGIN_FAILED`，使「帳號存在」與「帳號不存在」兩條路徑耗時一致，封堵時序側信道（timing-based user enumeration）。dummy hash 在程式啟動時以相同 argon2 參數預先計算，不可在請求路徑即時 hash。
 - Audit stub：`login_success` / `login_failed`。
 
 ### `POST /auth/refresh`
@@ -272,6 +273,7 @@ Rules：
 - [ ] V0.5 既有 `local-user` 資料透過 migration 套用為 `users` row，integration tests 仍可跑通。
 - [ ] `POST /auth/login` 在密碼正確時回 access token + set HttpOnly cookie + CSRF cookie。
 - [ ] 連續 5 次失敗回 `LOGIN_LOCKED`，下次成功後 counter reset。
+- [ ] 盲算防禦：對「不存在的 email」與「存在但密碼錯誤的 active 帳號」登入，回應皆為 `LOGIN_FAILED` 且兩者耗時無顯著差異（皆有跑一次 argon2id verify）。
 - [ ] `POST /auth/refresh` rotation 後舊 token 再使用會觸發整條 chain revoke 並 log warning。
 - [ ] `POST /auth/logout` clear cookies 並 revoke refresh。
 - [ ] `POST /auth/invitations/accept` 消費 token 後第二次呼叫回 `INVITATION_CONSUMED`。
@@ -285,6 +287,7 @@ Rules：
 
 - Unit：JWT encode / decode + claim validation。
 - Unit：argon2id hash 與 verify。
+- Unit：盲算防禦——login 在 user 不存在 / `password_hash is null` 時仍呼叫 argon2id verify（以 mock/spy 驗證 verify 被呼叫，且回 `LOGIN_FAILED`），確認無早退短路。
 - Unit：refresh token rotation chain 與 reuse detection。
 - Unit：rate limit counter 行為（time-window 不能跨界算錯）。
 - Integration：invitation accept → login → refresh → logout 全鏈路。
@@ -298,6 +301,7 @@ Rules：
 ## 工程注意事項
 
 - argon2id 用 `argon2-cffi`，參數 `time_cost=3`, `memory_cost=65536`, `parallelism=4`（可由 env override）。
+- 盲算防禦的 dummy hash 必須用「與正式登入相同的 argon2 參數」在啟動時（或模組載入時）預先計算並快取；若參數可由 env override，dummy hash 須跟著同一份參數產生，否則時序仍會露餡。dummy verify 的結果一律視為失敗，不得用其布林值短路流程。
 - 不可在 log 印明文 token、明文密碼、refresh token；只能印 token id。
 - 不要在 access JWT 放 email 或 role 以外的 PII；前端要取 profile 應透過 `/auth/me`。
 - Refresh cookie path `/auth/refresh`，避免在其他 API 被瀏覽器自動帶上。
