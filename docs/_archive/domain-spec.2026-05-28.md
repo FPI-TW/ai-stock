@@ -10,27 +10,22 @@ V1 不串接券商、不送出真實委託。系統只負責建立交易意圖�
 
 - 台股現股與台股 ETF。
 - UI 單筆建立。
+- CSV 前端解析、預覽、確認後批次建立。
 - Telegram 通知與 UI 站內通知。
 - 買賣到價提醒。
 - 停利 / 停損提醒。
 - 停利 + 停損 OCO 群組提醒。
-- 限價到價提醒（`limit_buy_order` / `limit_sell_order`，notify-only）。
-- 市價委託意圖提醒（`market_order` / `market_buy_order` / `market_sell_order`，notify-only）。
-- TWAP 時間加權切片意圖提醒（`twap_order`，notify-only）。
-- 移動停損提醒（`trailing_stop_alert`，原列 V1.5，已提前交付）。
 - 現金股利除息固定金額調整。
 - 使用者層級通知通道設定。
-- Admin 管理使用者、corporate actions、系統告警與 kill switch。
+- Admin 管理使用者、symbol master、corporate actions、market calendar、系統告警與 kill switch。
 
 不支援能力：
 
 - 券商串接。
 - 自動下單。
-- 移動停利（trailing take-profit，移動停損已提前交付至 V1）。
-- 證交所自動匯入 symbol master / market calendar（屬 V2；V1 用 seed / 固定時段）。
-- 國定假日 / 颱風臨時休市 / 半日盤 / 補班自動處理（屬 V2）。
-- 漲跌停超出當日限制驗證與 `invalid_for_day` 生命週期（屬 V2）。
-- CSV 批次匯入。
+- 市價單。
+- TWAP。
+- 移動停利 / 移動停損。
 - 零股、金額模式。
 - 空單進場。
 - 通訊軟體文字或語音建立交易意圖。
@@ -41,8 +36,6 @@ V1 不串接券商、不送出真實委託。系統只負責建立交易意圖�
 - 使用者匯出資料。
 
 ### V1.5：移動停利與移動停損通知
-
-> 移動停損（`trailing_stop_alert`）屬 V1；V1.5 剩餘範圍為移動停利（trailing take-profit）。
 
 V1.5 仍為 notify-only，不送單、不建立券商委託草稿。
 
@@ -63,15 +56,8 @@ V2 逐步開放券商串接。使用者必須人工確認才送單。
 - `execution_mode = notify_only | manual_confirm_order`
 - notify-only 模式永久保留。
 - 初期只支援限價單。
-- TWAP 下單能力移至 V2 逐步開放（V1 已支援 TWAP notify-only 切片意圖）。
+- TWAP 移至 V2 逐步開放。
 - 停利、停損、TWAP 等下單能力依 capability matrix 逐步開放，不因 V1 可通知而自動可下單。
-
-參考資料與排程 production 化：
-
-- Symbol master importer（TWSE ISIN 自動匯入）+ admin override。
-- Market calendar service：國定假日 / 颱風臨時休市 / 半日盤 / 補班 + admin override。
-- Scheduled job 執行框架與 activation / expiry / reschedule 排程（防重跑 `(job_name, trading_date)`）。
-- 漲跌停驗證與 `invalid_for_day` 生命週期（見 §10）。
 
 人工確認送單流程：
 
@@ -140,7 +126,7 @@ V1 固定為 `notify_only`。
 - `day`
 - `gtc_until`
 
-V1 所有外部入口只允許 `day`。`gtc_until` 僅預留，不對 UI、Telegram 開放。
+V1 所有外部入口只允許 `day`。`gtc_until` 僅預留，不對 UI、CSV、Telegram 開放。
 
 `day` 定義：
 
@@ -159,12 +145,9 @@ V1 所有外部入口只允許 `day`。`gtc_until` 僅預留，不對 UI、Teleg
 | `take_profit_alert` | 支援 | 支援 | 逐步開放 | 需重新審核 |
 | `stop_loss_alert` | 支援 | 支援 | 逐步開放 | 需重新審核 |
 | `trailing_take_profit_alert` | 不支援 | 支援 | 逐步開放 | 需重新審核 |
-| `trailing_stop_loss_alert`（code：`trailing_stop_alert`）| 支援 | 支援 | 逐步開放 | 需重新審核 |
-| `limit_buy_order` / `limit_sell_order` | 支援 | 支援 | 逐步開放 | 需重新審核 |
-| `TWAP`（code：`twap_order`）| 支援 | 支援 | 逐步開放 | 需重新審核 |
-| 市價單（code：`market_order` / `market_buy_order` / `market_sell_order`）| 支援 | 支援 | 初期不支援 | 需重新審核 |
-
-> V1 capability matrix 中標「支援」者均為 notify-only 意圖提醒（不送券商委託）。
+| `trailing_stop_loss_alert` | 不支援 | 支援 | 逐步開放 | 需重新審核 |
+| `TWAP` | 不支援 | 不支援 | 逐步開放 | 需重新審核 |
+| 市價單 | 不支援 | 不支援 | 初期不支援 | 需重新審核 |
 
 ## 4. 策略語意與觸發方向
 
@@ -204,17 +187,6 @@ V1 允許使用者聲明空單持倉，但不驗證實際持倉。第二版接�
 
 V1 不支援做空進場，只支援空單的停利 / 停損回補提醒。
 
-### 市價單意圖（notify-only）
-
-`market_order` / `market_buy_order` / `market_sell_order` 為 notify-only 市價意圖提醒，語意與「到價提醒」不同：
-
-- **無價格條件**：不等任何目標價。
-- **即時觸發**：意圖轉 active 後，在**下一個有效報價**即觸發（市場休市時等下一盤首個有效報價）。
-- **參考價**：買用 `ask`、賣用 `bid`；缺則 fallback 到 `last_price` 並標 `fallback_used = true`。
-- **一次性**：每個 intent 僅觸發一次（`trigger_events` 對 `trade_intent_id` unique）。
-
-> 設計意圖：市價單是「將來接券商後『價格到了就下單』」的 notify-only 影子版本——市價委託本就應即時成交，故「有報價就觸發」在 V2 下單語意下正確。**前端不可呈現為「等某價位」**。
-
 ## 5. OCO 群組
 
 V1 支援停利 + 停損群組。
@@ -245,7 +217,7 @@ OCO 規則：
 
 ### TradeIntent Status
 
-`TradeIntent` 本身沒有 draft 狀態：後端不保存草稿態的 `TradeIntent`，單筆表單於前端填寫，使用者確認後才建立。
+V1 不在後端保存 `draft`。表單與 CSV preview 在前端完成，使用者確認後才建立 `TradeIntent`。
 
 主要狀態：
 
@@ -285,7 +257,7 @@ Non-terminal statuses：
 - 條件成立後轉 `triggered`。
 - `day` 收盤後未觸發轉 `expired`。
 - 使用者取消轉 `cancelled`。
-- 當日價格限制或交易日規則導致無法監控轉 `invalid_for_day`（觸發來源——漲跌停驗證、臨時休市改期——屬 V2；V1 保留此 status 值但不產生）。
+- 當日價格限制或交易日規則導致無法監控轉 `invalid_for_day`。
 - 除息 / 行情資料異常轉 `paused_data_issue`。
 - 暫停交易 / 盤中停止交易轉 `paused_market_status`。
 
@@ -332,6 +304,8 @@ UI 單筆建立的除息互動：
 - 查看站內通知。
 - Telegram 綁定狀態。
 
+CSV 上傳可桌面優先。
+
 TradeIntent 列表以 trading date + status 作為主軸，而非單純建立時間。建議分組：
 
 - 今日監控中：`active`
@@ -349,6 +323,73 @@ TradeIntent 列表以 trading date + status 作為主軸，而非單純建立時
 - 可用日期區間查詢。
 - 單次查詢最多 90 天。
 - 2 年外資料依保留政策不可查或已清除。
+- CSV batch history 同樣預設近 30 天。
+
+### CSV
+
+CSV 僅支援 Web UI 上傳，不支援通訊軟體 CSV。
+
+流程：
+
+1. 前端解析 CSV。
+2. 前端呼叫後端 validation / preview API。
+3. 後端回傳權威 normalized rows、錯誤、effective target、調整說明與 trading date。
+4. 前端展示後端預覽結果。
+5. 使用者確認後送出。
+6. 後端收到與 UI 單筆建立一致的 normalized payload 或 batch draft id。
+7. 後端逐筆重新驗證。
+8. 全部通過才在同一 transaction 建立。
+
+前端只負責讀檔與初步格式處理，不負責權威計算除息調整、tick rounding、漲跌停或交易日推導。
+
+CSV preview / batch draft 規則：
+
+- 後端建立 `csv_batch_draft` 保存 preview 結果。
+- Draft 有效 15 分鐘。
+- 使用者確認建立時，後端仍重新驗證。
+- 若 draft 過期，要求重新 preview。
+- 若重新驗證結果和 preview 不一致，拒絕建立並要求重新 preview。
+
+CSV 採 all-or-nothing：
+
+- 任一列錯誤，整批不建立。
+- 回傳每列錯誤。
+
+CSV 標的格式：
+
+- 只接受標準台股代號，例如 `2330`。
+- 不接受公司名稱、模糊搜尋、`TWSE:2330`、`2330.TW`。
+
+CSV 分為兩種 template，對應兩個 UI 建立入口，不允許混用。
+
+買賣到價提醒 CSV：
+
+- `symbol`
+- `side`
+- `quantity_lots`
+- `target_price`
+
+其中 `side = buy | sell`。
+
+持倉停利 / 停損 CSV：
+
+- `symbol`
+- `position_side`
+- `quantity_lots`
+- `take_profit_price`
+- `stop_loss_price`
+
+其中 `position_side = long | short`。`take_profit_price` 與 `stop_loss_price` 可只填一個；兩者都填時建立 OCO group。
+
+後端保留 metadata：
+
+- `input_source = csv`
+- `batch_import_id`
+- `source_row_number`
+- `source_file_name`
+- `raw_row_hash`
+
+不長期保存 CSV 原始檔，只保存 batch metadata、normalized rows 與 row hash。
 
 ### Telegram
 
@@ -431,7 +472,7 @@ V1 必須實作台股 tick size table，用於：
 - 除息調整後價格修正。
 - V2 drift ticks 計算。
 
-使用者原始目標價若不符合 tick size，拒絕建立並提示最近合法價格。
+使用者原始目標價若不符合 tick size，拒絕建立並提示最近合法價格。CSV 該列錯誤，整批不建立。
 
 ### 除息調整
 
@@ -493,9 +534,7 @@ V1 只套用 cash dividend。配股與其他 corporate action types 可匯入並
 
 ## 10. 漲跌停與市場狀態
 
-> **本節屬 V2。** V1 不做漲跌停超出驗證，也不做盤中停止交易自動偵測（V1 用固定一般盤時段）；以下描述 V2 目標行為。
-
-V2 day intent 的有效目標價若超出當日漲跌停：
+V1 day intent 的有效目標價若超出當日漲跌停：
 
 - 建立時可判定則拒絕。
 - scheduled 啟用前才判定則轉 `invalid_for_day` 並通知使用者。
@@ -503,7 +542,7 @@ V2 day intent 的有效目標價若超出當日漲跌停：
 市場狀態：
 
 - 暫停交易 / 停止買賣：阻擋或停用監控。
-- 處置股、注意股、全額交割：只提示，不阻擋。
+- 處置股、注意股、全額交割：V1 只提示，不阻擋。
 - V2 下單時再強化交易限制檢查。
 
 ## 11. Quote 監控
@@ -676,7 +715,7 @@ V1 不開放公開註冊。帳號由 admin 建立。
 
 V1 不支援 team / workspace，但所有使用者資料必須有明確 owner scope：
 
-- TradeIntent、Notification、Telegram binding 都需保存 `owner_user_id`。
+- TradeIntent、Notification、CSV batch、Telegram binding 都需保存 `owner_user_id`。
 - User-facing API 一律從 auth context 取得 user id，不接受 client 傳入 owner id。
 - Admin API 如需查使用者資料，需使用明確 endpoint、明確權限並寫 audit。
 - DB index 需考慮 `owner_user_id` + status / trading_date。
@@ -745,8 +784,6 @@ V1 密碼規則採 MVP 設定：
 - 登入錯誤訊息不可透露 email 是否存在。
 - Password reset 與 admin 重寄 invitation link 也需 rate limit。
 
-> 「鎖定 15 分鐘」採 token-bucket（`login:email` capacity 5 / refill 5 per 15min）：達上限回 `LOGIN_LOCKED`，之後漸進回補而非固定窗一次解鎖，語意等價於「滾動 15 分鐘內最多約 5 次嘗試」。
-
 角色：
 
 - `user`
@@ -757,6 +794,7 @@ V1 先只保留 `user` / `admin` 兩種角色，`system_admin`、`support_admin`
 User 可做：
 
 - 建立 / 取消自己的 TradeIntent。
+- 上傳 CSV 建立自己的 TradeIntent。
 - 綁定自己的 Telegram。
 - 查看自己的通知與歷史。
 
@@ -788,11 +826,9 @@ Admin 不可做：
 
 ## 14. Symbol Master 與 Market Calendar
 
-> **本節屬 V2。** V1 使用 seed symbol master 與固定一般盤時段（Mon–Fri 09:00–13:30 Asia/Taipei，不含假日 / 補班 / 颱風 / 半日盤）；以下描述 V2 目標行為。
-
 ### Symbol Master
 
-V2 建立內部 symbol master，作為輸入驗證、行情、除息資料對齊共同基準。
+V1 建立內部 symbol master，作為輸入驗證、行情、除息資料對齊共同基準。
 
 至少包含：
 
@@ -811,7 +847,7 @@ V2 建立內部 symbol master，作為輸入驗證、行情、除息資料對齊
 
 ### Market Calendar Service
 
-V2 建立獨立 `MarketCalendarService`。
+V1 建立獨立 `MarketCalendarService`。
 
 能力：
 
@@ -847,6 +883,7 @@ V2 建立獨立 `MarketCalendarService`。
 V1 需要建立上限：
 
 - 單一使用者 active / scheduled intents 上限：200。
+- 單一 CSV batch 上限：100。
 - 單一使用者單一標的 active / scheduled intents 上限：20。
 
 禁止同一使用者在同一交易日建立完全相同的 active / scheduled `TradeIntent`。
@@ -884,7 +921,7 @@ Runtime process 邊界：
 - Web/API process。
 - Quote evaluator worker。
 - Notification worker。
-- Scheduled jobs worker，負責 corporate action import、snapshot generation、expiry job。
+- Scheduled jobs worker，負責 market calendar、symbol import、corporate action import、snapshot generation、expiry job。
 
 MVP 可部署在同一台機器或同一服務群組，但需保持 process 邊界，避免 web API 流量、quote 評估與通知派送互相拖垮。
 
@@ -916,6 +953,17 @@ API error envelope 需統一：
 }
 ```
 
+CSV row errors 也需使用 code：
+
+```json
+{
+  "rowNumber": 3,
+  "code": "UNKNOWN_SYMBOL",
+  "message": "找不到標的代號",
+  "field": "symbol"
+}
+```
+
 V1 核心 error code 初始集合：
 
 - `UNKNOWN_SYMBOL`
@@ -928,6 +976,8 @@ V1 核心 error code 初始集合：
 - `DUPLICATE_INTENT`
 - `USER_INTENT_LIMIT_EXCEEDED`
 - `SYMBOL_INTENT_LIMIT_EXCEEDED`
+- `CSV_BATCH_LIMIT_EXCEEDED`
+- `CSV_BATCH_EXPIRED`
 - `OCO_PRICE_RELATION_INVALID`
 - `TELEGRAM_NOT_BOUND`
 - `IDEMPOTENCY_KEY_REQUIRED`
@@ -977,6 +1027,7 @@ HTTP status mapping：
 核心 command：
 
 - `CreateTradeIntent`
+- `CreateTradeIntentBatch`
 - `CancelTradeIntent`
 - `CancelTradeIntentGroup`
 - `ActivateScheduledIntents`
@@ -987,9 +1038,11 @@ HTTP status mapping：
 - `MarkCorporateActionSnapshotDisputed`
 - `DisableUserAccount`
 
-Create / cancel API 需支援 idempotency key：
+Create / cancel / batch confirm API 需支援 idempotency key：
 
 - `CreateTradeIntent`
+- `CreateTradeIntentBatch`
+- CSV confirm
 - `CancelTradeIntent`
 - `CancelTradeIntentGroup`
 
@@ -1044,6 +1097,7 @@ V1 必須建立 audit event log。
 - `notification_sent`
 - `notification_failed`
 - `corporate_action_adjustment_applied`
+- `csv_batch_import_confirmed`
 - `oco_sibling_cancelled`
 - `account_invited`
 - `account_activated`
@@ -1096,9 +1150,11 @@ Kill switch 必須分層控制。
 
 - TradeIntent history：2 年。
 - NotificationDelivery：2 年。
+- CSV normalized rows：2 年。
 - AuditEvent：3 年。
 - Technical logs：90 天。
 - Debug raw payload 若含敏感資料，保存 7-30 天或只存 hash / reference。
+- 原始 CSV：不長期保存。
 
 帳號刪除 / 匿名化：
 
@@ -1140,6 +1196,7 @@ V1 內部 SLO：
 - 通知延遲：`TriggerEvent` 後 10 秒內送出站內 / Telegram，排除平台故障。
 - 交易時段核心監控可用性：99.5%。
 - 除息 snapshot：開盤前完成，失敗需 admin 告警。
+- CSV batch 建立：100 筆內 5 秒完成。
 
 備份與災難恢復 MVP 目標：
 
@@ -1166,6 +1223,7 @@ Domain unit tests：
 Command / integration tests：
 
 - `CreateTradeIntent`。
+- CSV batch all-or-nothing。
 - quote trigger transaction。
 - notification outbox。
 - account disable cancellation。
@@ -1182,6 +1240,7 @@ Adapter contract tests：
 少量 E2E UI：
 
 - 建立提醒。
+- CSV preview / confirm。
 - 觸發後通知中心更新。
 - Telegram 綁定。
 
@@ -1191,8 +1250,10 @@ V1 資料來源採以下決策。
 
 近即時 quote：
 
-- V1 使用內建 quote provider，提供近即時 bid / ask / last / quote time。
-- 不接外部 licensed 行情 vendor；如未來導入，須評估 vendor 選型（支援 TWSE + TPEx、授權允許用於到價通知服務、不得依賴未授權來源或臨時爬蟲）。
+- 暫定採授權行情 vendor。
+- 實際 vendor 尚未選定。
+- Vendor 必須提供近即時 bid / ask / last / quote time，支援 TWSE + TPEx，且授權條款允許用於到價通知服務。
+- 正式交易提醒不得依賴未授權資料來源或臨時爬蟲。
 
 Corporate action：
 
@@ -1201,13 +1262,13 @@ Corporate action：
 - 策略引擎不直接讀外部來源，只讀內部 `corporate_actions` 與盤前 snapshot。
 - V1 只套用配息，配股與其他公司行動標記為 unsupported 並暫停相關提醒。
 
-Symbol master：（自動匯入屬 V2；V1 用 seed master）
+Symbol master：
 
 - Primary source 採 TWSE ISIN code list，匯入 TWSE / TPEx 股票與 ETF。
 - 停復牌、停止買賣、不可交易等狀態可由交易所公告、行情來源狀態欄位或 admin override 補充。
-- 系統內部以 `symbol_master` 作為 UI autocomplete、quote 對齊與 corporate action 對齊的共同基準。
+- 系統內部以 `symbol_master` 作為 UI autocomplete、CSV 驗證、quote 對齊與 corporate action 對齊的共同基準。
 
-Market calendar：（production service 屬 V2；V1 用固定一般盤時段，不含假日 / 補班 / 颱風 / 半日盤）
+Market calendar：
 
 - Primary source 採 TWSE market holiday schedule。
 - Regular session rule 依 TWSE trading mechanism，一般盤為 9:00-13:30。
@@ -1217,5 +1278,6 @@ Market calendar：（production service 屬 V2；V1 用固定一般盤時段，�
 
 以下項目尚需後續決策：
 
+- 授權行情 vendor 選型與合約確認。
 - V2 券商 API 與帳戶授權模型。
 - V3 自動下單的價格保護與授權模型。
