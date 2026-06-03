@@ -26,9 +26,9 @@ V1 不串接券商下單、不送出真實委託。系統只負責建立交易�
 
 - 券商下單 / 帳務 / 持倉串接。
 - 自動下單。
-- 證交所自動匯入 symbol master / market calendar（屬 V2；V1 用 seed / 固定時段）。
-- 國定假日 / 颱風臨時休市 / 半日盤 / 補班自動處理（屬 V2）。
-- 漲跌停超出當日限制驗證與 `invalid_for_day` 生命週期（屬 V2）。
+- 證交所自動匯入 symbol master / market calendar（待券商對接 / 正式營運；V1 用 seed / 固定時段）。
+- 國定假日 / 颱風臨時休市 / 半日盤 / 補班自動處理（待券商對接 / 正式營運）。
+- 漲跌停超出當日限制驗證與 `invalid_for_day` 生命週期（待券商對接 / 正式營運）。
 - 後端 CSV 專屬功能：CSV upload API、CSV preview API、batch draft、batch import、CSV row errors、CSV metadata 與 CSV retention。
 - 零股、金額模式。
 - 空單進場。
@@ -54,13 +54,6 @@ V2 逐步開放券商串接。使用者必須人工確認才送單。
 - 初期只支援限價單。
 - TWAP 人工確認下單能力移至 V2 逐步開放（V1 已交付 TWAP notify-only 切片意圖）。
 - 停利、停損、TWAP 等下單能力依 capability matrix 逐步開放，不因 V1 可通知而自動可下單。
-
-參考資料與排程 production 化：
-
-- Symbol master importer（TWSE ISIN 自動匯入）+ admin override。
-- Market calendar service：國定假日 / 颱風臨時休市 / 半日盤 / 補班 + admin override。
-- Scheduled job 執行框架與 activation / expiry / reschedule 排程（防重跑 `(job_name, trading_date)`）。
-- 漲跌停驗證與 `invalid_for_day` 生命週期（見 §10）。
 
 人工確認送單流程：
 
@@ -292,8 +285,8 @@ Non-terminal statuses：
 - 條件成立後轉 `triggered`。
 - `day` 收盤後未觸發轉 `expired`。
 - 使用者取消轉 `cancelled`。
-- 當日價格限制或交易日規則導致無法監控轉 `invalid_for_day`（觸發來源——漲跌停驗證、臨時休市改期——屬 V2；V1 保留此 status 值但不產生）。
-- 除息 / 行情資料異常轉 `paused_data_issue`。
+- 當日價格限制或交易日規則導致無法監控轉 `invalid_for_day`（觸發來源——漲跌停驗證、臨時休市改期——待券商對接 / 正式營運；V1 保留此 status 值但不產生）。
+- 除息 / snapshot 資料異常轉 `paused_data_issue`（行情資料異常自動暫停隨 licensed quote 一併延後，V1 不由 quote 觸發此狀態）。
 - 暫停交易 / 盤中停止交易轉 `paused_market_status`。
 
 Expiry 需有雙保險：expiry job 或 lightweight lifecycle reconciliation 於收盤後將 day intents 轉 `expired`，但 quote evaluator 每輪評估前仍需檢查 market session，一般盤外不得觸發。若收盤後仍存在應過期的 active intents，需產生 admin alert；補跑 expiry job / lifecycle reconciliation 後轉 `expired`，不發到價通知。
@@ -423,6 +416,8 @@ V1 不支援：
 - 正整數。
 - `1` 代表 1 張。
 
+> **V1 staging 限制**：目前報價來源 Shioaji demo 僅允許 4 檔白名單標的（`2330` / `2317` / `0050` / `00878`）、同時最多訂閱 5 檔。「台股全市場現股 / ETF」為產品目標，正式營運（待券商對接、換正式報價源）後解除；V1 staging 期間實際可監控標的受此上限約束。
+
 ## 9. 價格、tick 與除息調整
 
 ### 價格精度
@@ -510,9 +505,9 @@ V1 只套用 cash dividend。配股與其他 corporate action types 可匯入並
 
 ## 10. 漲跌停與市場狀態
 
-> **本節屬 V2。** V1 不做漲跌停超出驗證，也不做盤中停止交易自動偵測（V1 用固定一般盤時段）；以下描述 V2 目標行為。
+> **本節屬正式營運階段（待券商對接），非 V1。** V1 不做漲跌停超出驗證，也不做盤中停止交易自動偵測（V1 用固定一般盤時段）；以下描述目標行為。
 
-V2 day intent 的有效目標價若超出當日漲跌停：
+day intent 的有效目標價若超出當日漲跌停：
 
 - 建立時可判定則拒絕。
 - scheduled 啟用前才判定則轉 `invalid_for_day` 並通知使用者。
@@ -527,7 +522,7 @@ V2 day intent 的有效目標價若超出當日漲跌停：
 
 V1 使用近即時 quote，不使用逐筆即時，不使用延遲行情作為交易提醒基礎。
 
-Quote source 必須透過 provider adapter 抽象，不讓 quote evaluator 直接依賴特定資料商。V1 已接上 Shioaji quote provider 作為目前 primary quote source，且只使用行情能力；若 primary provider 故障，標示 quote unhealthy 並觸發 admin alert，不自動混用多資料源。
+Quote source 必須透過 provider adapter 抽象，不讓 quote evaluator 直接依賴特定資料商。V1 已接上 Shioaji quote provider 作為目前 primary quote source，且只使用行情能力；若 primary provider 故障，該輪不觸發、記錄 error 並告警 admin（§18），不自動混用多資料源。
 
 正式行情 vendor 尚未決定。正式 vendor 決定後，需以新的 provider adapter 串接，並重新確認授權條款、支援市場、bid / ask / last / quote time 品質與 production SLO。
 
@@ -563,7 +558,6 @@ Normalized quote 至少包含：
 
 Quote validation：
 
-- `quote_time` freshness threshold 為 10 秒，`received_at - quote_time <= 10s` 且 `now - quote_time <= 10s`。
 - `now` 必須在 regular session。
 - `quote_time` 必須在 regular session。
 - `bid_price <= ask_price`。
@@ -572,25 +566,17 @@ Quote validation：
 - bid / ask / last 都不足時不評估該 symbol。
 - 行情資料異常時不觸發，只記錄並等待下一筆有效 quote。
 
-Quote unhealthy 規則：
+Quote 失效處理：
 
-- 單次 quote fetch 失敗只記錄 error，該輪不觸發。
-- 單次 quote stale 只記錄 stale reason，該輪不觸發。
-- Invalid quote 包含 fetch error、validation error、stale quote。
-- 每個 symbol 維護 `consecutive_invalid_count` 與 `invalid_since`。
-- 單一 symbol `consecutive_invalid_count >= 3` 或 invalid duration `>= 15s` 任一成立，該 symbol 進 quote unhealthy。
-- 任一有效 quote 到來即 reset invalid count / since。
-- quote unhealthy 後，相關 active intents 轉 `paused_data_issue`，並通知使用者。
-- provider 全域故障超過門檻時，啟動全域 quote unhealthy 並告警 admin。
-- 恢復後取得 1 筆最新有效 quote，即可把 `paused_data_issue` 恢復到 active，不回放暫停期間行情。
-- 從 `paused_data_issue` 恢復時，使用最新有效 quote 立即評估；若達標則立即 trigger，notification metadata 標記 `trigger_context = resumed_from_data_issue`，文案需說明恢復監控後目前價格已符合條件。
+- 單次 quote fetch 失敗或 invalid（validation error / 缺價 / 非 session）只記錄、該輪不觸發，等待下一筆有效 quote，不改 intent 狀態。
+- V1 不做 per-symbol 健康度累計、`quote_unhealthy` 自動暫停與恢復重評（連同 licensed quote 一併延後至正式營運）；因此 V1 不會因行情問題把 intent 轉 `paused_data_issue`——該狀態 V1 僅由除息 / snapshot 爭議觸發（見 §9）。
+- provider 連線異常的 admin 告警見 §18。
 
 UI 顯示：
 
 - 最後有效行情時間。
 - 最後評估價格。
 - 資料源延遲標籤。
-- 監控健康狀態。
 
 手動刷新 quote 只更新顯示，不由前端直接觸發 `TradeIntent`。
 
@@ -807,7 +793,7 @@ Admin 不可做：
 
 ## 14. Symbol Master 與 Market Calendar
 
-> **本節屬 V2。** V1 使用 seed symbol master 與固定一般盤時段（Mon–Fri 09:00–13:30 Asia/Taipei，不含假日 / 補班 / 颱風 / 半日盤）；以下描述 V2 目標行為。
+> **本節屬正式營運階段（待券商對接），非 V1。** V1 使用 seed symbol master 與固定一般盤時段（Mon–Fri 09:00–13:30 Asia/Taipei，不含假日 / 補班 / 颱風 / 半日盤）；以下描述目標行為。
 
 ### Symbol Master
 
@@ -868,6 +854,8 @@ V1 需要建立上限：
 - 單一使用者 active / scheduled intents 上限：200。
 - 單一使用者單一標的 active / scheduled intents 上限：20。
 
+> **V1 staging 限制**：上述為產品目標上限；V1 報價源（Shioaji demo）僅 4 檔白名單 / 5 訂閱，實際可監控標的遠低於此，正式營運（待券商對接、換正式報價源）後才完整適用。
+
 禁止同一使用者在同一交易日建立完全相同的 active / scheduled `TradeIntent`。
 
 上限需做成 admin 可調 config，不寫死在程式碼。
@@ -892,7 +880,7 @@ V1 需要建立上限：
 
 停利 / 停損相對目前 quote 已成立時，也允許建立並立即觸發。UI 需提示「目前價格已符合條件，建立後會立即觸發並停止監控」。OCO group 若其中一腳立即觸發，另一腳依 OCO 規則自動取消。
 
-交易時段內建立會進入 active 的 TradeIntent 時，`CreateTradeIntent` command 需同步取得 current quote snapshot 並執行 quote validation。若 quote valid 且條件成立，同一個 command transaction 建立 intent、trigger event 與 outbox event。若 quote fetch/validation 失敗，仍建立 active intent，但不立即觸發，`last_quote_health = unavailable`，UI 顯示已建立並等待有效行情；若後續連續失敗達 unhealthy 門檻，再轉 `paused_data_issue`。Scheduled intent 不做立即觸發，等開盤 activation。
+交易時段內建立會進入 active 的 TradeIntent 時，`CreateTradeIntent` command 需同步取得 current quote snapshot 並執行 quote validation。若 quote valid 且條件成立，同一個 command transaction 建立 intent、trigger event 與 outbox event。若 quote fetch/validation 失敗，仍建立 active intent，但不立即觸發，UI 顯示已建立並等待有效行情；後續每輪取得有效 quote 即評估（V1 不因連續失效自動轉 `paused_data_issue`）。Scheduled intent 不做立即觸發，等開盤 activation。
 
 ## 16. Command、Domain Service 與 Outbox
 
@@ -1210,8 +1198,8 @@ V1 資料來源採以下決策。
 
 近即時 quote：
 
-- V1 目前使用 Shioaji quote provider，已接上並提供 bid / ask / last / quote time。
-- 正式 vendor 尚未決定；決定後再以 provider adapter 串接，需評估支援 TWSE + TPEx、授權允許用於到價通知服務、資料品質、SLO 與 fallback/切換策略。
+- V1 目前使用 Shioaji quote provider（demo tier），已接上並提供 bid / ask / last / quote time；受 demo 限制：僅 4 檔白名單標的、同時最多訂閱 5 檔。
+- 正式 vendor 尚未決定；決定後再以 provider adapter 串接，需評估支援 TWSE + TPEx、授權允許用於到價通知服務、資料品質、SLO 與 fallback/切換策略，並解除 demo 的標的 / 訂閱上限。
 - 正式交易提醒不得依賴未授權資料來源或臨時爬蟲。
 
 Corporate action：
@@ -1221,13 +1209,13 @@ Corporate action：
 - 策略引擎不直接讀外部來源，只讀內部 `corporate_actions` 與盤前 snapshot。
 - V1 只套用配息，配股與其他公司行動標記為 unsupported 並暫停相關提醒。
 
-Symbol master：（自動匯入屬 V2；V1 用 seed master）
+Symbol master：（自動匯入待券商對接 / 正式營運；V1 用 seed master）
 
 - Primary source 採 TWSE ISIN code list，匯入 TWSE / TPEx 股票與 ETF。
 - 停復牌、停止買賣、不可交易等狀態可由交易所公告、行情來源狀態欄位或 admin override 補充。
 - 系統內部以 `symbol_master` 作為 UI autocomplete、quote 對齊與 corporate action 對齊的共同基準。
 
-Market calendar：（production service 屬 V2；V1 用固定一般盤時段，不含假日 / 補班 / 颱風 / 半日盤）
+Market calendar：（production service 待券商對接 / 正式營運；V1 用固定一般盤時段，不含假日 / 補班 / 颱風 / 半日盤）
 
 - Primary source 採 TWSE market holiday schedule。
 - Regular session rule 依 TWSE trading mechanism，一般盤為 9:00-13:30。
@@ -1237,5 +1225,6 @@ Market calendar：（production service 屬 V2；V1 用固定一般盤時段，�
 
 以下項目尚需後續決策：
 
+- V1 正式營運報價源：取代 Shioaji demo（4 檔 / 5 訂閱上限），選定可支援台股全市場、授權允許到價通知的正式行情來源（預期與券商對接同期）。
 - V2 券商 API 與帳戶授權模型。
 - V3 自動下單的價格保護與授權模型。
