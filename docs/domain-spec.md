@@ -4,7 +4,7 @@
 
 ### V1：交易意圖管理與到價通知
 
-V1 不串接券商、不送出真實委託。系統只負責建立交易意圖、監控近即時 quote、套用除息調整、觸發通知與保存稽核紀錄。
+V1 不串接券商下單、不送出真實委託。系統只負責建立交易意圖、監控近即時 quote、套用除息調整、觸發通知與保存稽核紀錄。Shioaji 僅作為目前行情來源，不使用其下單、帳務或持倉能力。
 
 支援能力：
 
@@ -16,21 +16,20 @@ V1 不串接券商、不送出真實委託。系統只負責建立交易意圖�
 - 停利 + 停損 OCO 群組提醒。
 - 限價到價提醒（`limit_buy_order` / `limit_sell_order`，notify-only）。
 - 市價委託意圖提醒（`market_order` / `market_buy_order` / `market_sell_order`，notify-only）。
-- TWAP 時間加權切片意圖提醒（`twap_order`，notify-only）。
-- 移動停損提醒（`trailing_stop_alert`，原列 V1.5，已提前交付）。
+- TWAP 時間加權切片意圖提醒（`twap_order`，notify-only，已交付）。
+- 移動出場提醒（code：`trailing_stop_alert`，對使用者不拆移動停利 / 移動停損，已交付）。
 - 現金股利除息固定金額調整。
 - 使用者層級通知通道設定。
 - Admin 管理使用者、corporate actions、系統告警與 kill switch。
 
 不支援能力：
 
-- 券商串接。
+- 券商下單 / 帳務 / 持倉串接。
 - 自動下單。
-- 移動停利（trailing take-profit，移動停損已提前交付至 V1）。
 - 證交所自動匯入 symbol master / market calendar（屬 V2；V1 用 seed / 固定時段）。
 - 國定假日 / 颱風臨時休市 / 半日盤 / 補班自動處理（屬 V2）。
 - 漲跌停超出當日限制驗證與 `invalid_for_day` 生命週期（屬 V2）。
-- CSV 批次匯入。
+- 後端 CSV 專屬功能：CSV upload API、CSV preview API、batch draft、batch import、CSV row errors、CSV metadata 與 CSV retention。
 - 零股、金額模式。
 - 空單進場。
 - 通訊軟體文字或語音建立交易意圖。
@@ -40,19 +39,9 @@ V1 不串接券商、不送出真實委託。系統只負責建立交易意圖�
 - 編輯已建立交易意圖。
 - 使用者匯出資料。
 
-### V1.5：移動停利與移動停損通知
+### V1.5：保留給後續 notify-only 擴充
 
-> 移動停損（`trailing_stop_alert`）屬 V1；V1.5 剩餘範圍為移動停利（trailing take-profit）。
-
-V1.5 仍為 notify-only，不送單、不建立券商委託草稿。
-
-支援：
-
-- `trailing_take_profit_alert`
-- `trailing_stop_loss_alert`
-- 僅支援 `day`。
-- 當日一般盤內維護 high watermark / low watermark。
-- 收盤後未觸發即過期，不跨日延續。
+移動出場與 TWAP notify-only 均已在 V1 交付。V1.5 目前不承諾額外後端策略範圍；若未來需要拆分「移動停利啟動門檻」或其他進階 notify-only 策略，需另行定義 capability matrix 與審核規則。
 
 ### V2：券商串接與人工確認下單
 
@@ -63,7 +52,7 @@ V2 逐步開放券商串接。使用者必須人工確認才送單。
 - `execution_mode = notify_only | manual_confirm_order`
 - notify-only 模式永久保留。
 - 初期只支援限價單。
-- TWAP 下單能力移至 V2 逐步開放（V1 已支援 TWAP notify-only 切片意圖）。
+- TWAP 人工確認下單能力移至 V2 逐步開放（V1 已交付 TWAP notify-only 切片意圖）。
 - 停利、停損、TWAP 等下單能力依 capability matrix 逐步開放，不因 V1 可通知而自動可下單。
 
 參考資料與排程 production 化：
@@ -158,8 +147,7 @@ V1 所有外部入口只允許 `day`。`gtc_until` 僅預留，不對 UI、Teleg
 | `sell_price_alert` | 支援 | 支援 | 逐步開放限價單 | 需重新審核 |
 | `take_profit_alert` | 支援 | 支援 | 逐步開放 | 需重新審核 |
 | `stop_loss_alert` | 支援 | 支援 | 逐步開放 | 需重新審核 |
-| `trailing_take_profit_alert` | 不支援 | 支援 | 逐步開放 | 需重新審核 |
-| `trailing_stop_loss_alert`（code：`trailing_stop_alert`）| 支援 | 支援 | 逐步開放 | 需重新審核 |
+| 移動出場（code：`trailing_stop_alert`）| 支援 | 支援 | 逐步開放 | 需重新審核 |
 | `limit_buy_order` / `limit_sell_order` | 支援 | 支援 | 逐步開放 | 需重新審核 |
 | `TWAP`（code：`twap_order`）| 支援 | 支援 | 逐步開放 | 需重新審核 |
 | 市價單（code：`market_order` / `market_buy_order` / `market_sell_order`）| 支援 | 支援 | 初期不支援 | 需重新審核 |
@@ -176,6 +164,12 @@ V1 使用：
 - `sell_price_alert`
 
 不使用「進場賣出」這種命名，避免與做空進場混淆。
+
+欄位語意：
+
+- `buy` / `sell` 是交易方向或委託方向，用來決定行情參考價。
+- `long` / `short` 是持倉方向，只用於停利 / 停損等持倉型策略。
+- 進場型買賣提醒不使用 `position_side`，也不以 `long` / `short` 表示買賣。
 
 觸價欄位：
 
@@ -203,6 +197,19 @@ V1 使用：
 V1 允許使用者聲明空單持倉，但不驗證實際持倉。第二版接券商後才檢查是否確實有持倉。
 
 V1 不支援做空進場，只支援空單的停利 / 停損回補提醒。
+
+### 移動出場（notify-only）
+
+`trailing_stop_alert` 對使用者呈現為「移動出場」，不拆成移動停利 / 移動停損兩個策略。
+
+- 機制為 baseline + dynamic trigger。
+- V1 已交付，僅支援 `day`。
+- 當日一般盤內維護 high watermark。
+- 價格回落到動態觸發價時出場通知。
+- 參考價使用賣出方向：優先用 `bid`，缺則 fallback 到 `last_price` 並標 `fallback_used = true`。
+- 收盤後未觸發即過期，不跨日延續。
+
+> 「移動停利」與「移動停損」的差異需要使用者成本或啟動門檻才能精確判定；V1 後端不拆此語意，統一以「移動出場」管理。
 
 ### 市價單意圖（notify-only）
 
@@ -310,10 +317,20 @@ UI 支援：
 - 必須從候選標的選取。
 - 後端只接收標準 `symbol`。
 
+CSV 解析屬於前端功能，不屬於後端 domain/API 範圍：
+
+- 前端若提供 CSV 上傳、解析、預覽或欄位對應，均在 client 端完成。
+- 後端不提供 CSV upload / preview / confirm / batch draft API。
+- 後端不保存 CSV batch、source row、source filename、raw row hash 或 normalized CSV rows。
+- 前端確認後只能呼叫既有標準 API，例如單筆 `CreateTradeIntent` 或 TWAP preview / confirm；後端不提供 CSV all-or-nothing 批次語意。
+- 後端錯誤回應只針對標準 API payload，不提供 CSV row error envelope。
+
 UI 建立入口分為：
 
 - 買賣到價提醒。
 - 持倉停利 / 停損提醒。
+- 移動出場提醒。
+- TWAP 意圖提醒。
 
 UI 單筆建立的除息互動：
 
@@ -510,7 +527,9 @@ V2 day intent 的有效目標價若超出當日漲跌停：
 
 V1 使用近即時 quote，不使用逐筆即時，不使用延遲行情作為交易提醒基礎。
 
-Quote source 必須透過 provider adapter 抽象，不讓 quote evaluator 直接依賴特定資料商。V1 只實作一個 primary quote source；若 primary provider 故障，標示 quote unhealthy 並觸發 admin alert，不自動混用多資料源。
+Quote source 必須透過 provider adapter 抽象，不讓 quote evaluator 直接依賴特定資料商。V1 已接上 Shioaji quote provider 作為目前 primary quote source，且只使用行情能力；若 primary provider 故障，標示 quote unhealthy 並觸發 admin alert，不自動混用多資料源。
+
+正式行情 vendor 尚未決定。正式 vendor 決定後，需以新的 provider adapter 串接，並重新確認授權條款、支援市場、bid / ask / last / quote time 品質與 production SLO。
 
 Provider interface 建議：
 
@@ -1191,8 +1210,9 @@ V1 資料來源採以下決策。
 
 近即時 quote：
 
-- V1 使用內建 quote provider，提供近即時 bid / ask / last / quote time。
-- 不接外部 licensed 行情 vendor；如未來導入，須評估 vendor 選型（支援 TWSE + TPEx、授權允許用於到價通知服務、不得依賴未授權來源或臨時爬蟲）。
+- V1 目前使用 Shioaji quote provider，已接上並提供 bid / ask / last / quote time。
+- 正式 vendor 尚未決定；決定後再以 provider adapter 串接，需評估支援 TWSE + TPEx、授權允許用於到價通知服務、資料品質、SLO 與 fallback/切換策略。
+- 正式交易提醒不得依賴未授權資料來源或臨時爬蟲。
 
 Corporate action：
 
