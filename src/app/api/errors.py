@@ -19,6 +19,7 @@ from app.domain.auth import (
     LoginFailedError,
     LoginLockedError,
     MfaRequiredError,
+    PasswordResetInvalidError,
     RefreshInvalidError,
     RefreshReuseDetectedError,
     TermsNotAcceptedError,
@@ -80,6 +81,7 @@ class ErrorCode(StrEnum):
     INVITATION_CONSUMED = "INVITATION_CONSUMED"
     WEAK_PASSWORD = "WEAK_PASSWORD"
     TERMS_NOT_ACCEPTED = "TERMS_NOT_ACCEPTED"
+    PASSWORD_RESET_INVALID = "PASSWORD_RESET_INVALID"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -120,6 +122,7 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.INVITATION_CONSUMED: "邀請連結已被使用",
     ErrorCode.WEAK_PASSWORD: "密碼長度至少需 8 個字元",
     ErrorCode.TERMS_NOT_ACCEPTED: "必須接受服務條款",
+    ErrorCode.PASSWORD_RESET_INVALID: "重設連結無效或已過期",
 }
 
 
@@ -229,6 +232,8 @@ def register_exception_handlers(app: FastAPI) -> None:
             return build_error_response(request, status.HTTP_422_UNPROCESSABLE_CONTENT, ErrorCode.WEAK_PASSWORD)
         if isinstance(exc, TermsNotAcceptedError):
             return build_error_response(request, status.HTTP_422_UNPROCESSABLE_CONTENT, ErrorCode.TERMS_NOT_ACCEPTED)
+        if isinstance(exc, PasswordResetInvalidError):
+            return build_error_response(request, status.HTTP_400_BAD_REQUEST, ErrorCode.PASSWORD_RESET_INVALID)
         return build_error_response(request, status.HTTP_400_BAD_REQUEST, ErrorCode.VALIDATION_ERROR)
 
     @app.exception_handler(SymbolError)

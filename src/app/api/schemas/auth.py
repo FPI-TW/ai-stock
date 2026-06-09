@@ -21,6 +21,19 @@ class AcceptInvitationRequest(BaseModel):
     terms_version: str = Field(validation_alias="termsVersion")
 
 
+class PasswordResetRequestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str
+    new_password: str = Field(validation_alias="newPassword")
+
+
 class SessionTokenResponse(BaseModel):
     """Returned by both /auth/login and /auth/refresh. The refresh + CSRF tokens
     travel as cookies, not in this body."""

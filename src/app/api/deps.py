@@ -10,6 +10,7 @@ from app.commands.account import AcceptInvitationCommand, CreateUserCommand
 from app.commands.auth import LoginCommand, LogoutCommand, RefreshCommand
 from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.commands.notification import MarkNotificationReadCommand
+from app.commands.password_reset import PasswordResetConfirmCommand, PasswordResetRequestCommand
 from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand
 from app.commands.trigger_intent import TriggerIntentCommand
 from app.commands.twap import TwapConfirmCommand, TwapPlanCommand, TwapSliceWorkerCommand
@@ -24,6 +25,7 @@ from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.invitation_repository import InvitationRepository
 from app.repositories.notification_repository import NotificationRepository
+from app.repositories.password_reset_repository import PasswordResetRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.repositories.user_repository import UserRepository
@@ -410,3 +412,38 @@ def get_accept_invitation_command(
 
 
 AcceptInvitationCommandDep = Annotated[AcceptInvitationCommand, Depends(get_accept_invitation_command)]
+
+
+def get_password_reset_repository(db: DatabaseDep) -> PasswordResetRepository:
+    return PasswordResetRepository(db)
+
+
+PasswordResetRepoDep = Annotated[PasswordResetRepository, Depends(get_password_reset_repository)]
+
+
+def get_password_reset_request_command(
+    db: DatabaseDep,
+    users: UserRepoDep,
+    password_resets: PasswordResetRepoDep,
+    rate_limiter: RateLimiterDep,
+    audit: AuditWriterDep,
+    mailer: MailerDep,
+) -> PasswordResetRequestCommand:
+    return PasswordResetRequestCommand(db, users, password_resets, rate_limiter, audit, mailer)
+
+
+PasswordResetRequestCommandDep = Annotated[PasswordResetRequestCommand, Depends(get_password_reset_request_command)]
+
+
+def get_password_reset_confirm_command(
+    db: DatabaseDep,
+    users: UserRepoDep,
+    password_resets: PasswordResetRepoDep,
+    refresh_tokens: RefreshTokenRepoDep,
+    audit: AuditWriterDep,
+    hasher: PasswordHasherDep,
+) -> PasswordResetConfirmCommand:
+    return PasswordResetConfirmCommand(db, users, password_resets, refresh_tokens, audit, hasher)
+
+
+PasswordResetConfirmCommandDep = Annotated[PasswordResetConfirmCommand, Depends(get_password_reset_confirm_command)]

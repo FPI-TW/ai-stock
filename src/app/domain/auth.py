@@ -45,6 +45,15 @@ class InvitationData:
     revoked_at: datetime | None
 
 
+@dataclass(frozen=True, slots=True)
+class PasswordResetData:
+    id: UUID
+    user_id: UUID
+    token_hash: str
+    expires_at: datetime
+    consumed_at: datetime | None
+
+
 class AuthError(Exception):
     """Base class for L1 auth failures."""
 
@@ -111,3 +120,8 @@ class WeakPasswordError(AccountError):
 
 class TermsNotAcceptedError(AccountError):
     """Activation attempted without accepting the required terms version."""
+
+
+class PasswordResetInvalidError(AccountError):
+    """Reset token is unknown, already used, or expired. Deliberately undifferentiated
+    so the confirm step never reveals which."""

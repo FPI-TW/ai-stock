@@ -18,14 +18,24 @@ from app.api.deps import (
     CurrentUserDep,
     LoginCommandDep,
     LogoutCommandDep,
+    PasswordResetConfirmCommandDep,
+    PasswordResetRequestCommandDep,
     RefreshCommandDep,
     SettingsDep,
     UserRepoDep,
 )
 from app.api.errors import ApiError, ErrorCode, get_request_id
-from app.api.schemas.auth import AcceptInvitationRequest, LoginRequest, MeResponse, SessionTokenResponse
+from app.api.schemas.auth import (
+    AcceptInvitationRequest,
+    LoginRequest,
+    MeResponse,
+    PasswordResetConfirmRequest,
+    PasswordResetRequestRequest,
+    SessionTokenResponse,
+)
 from app.commands.account import AcceptInvitationInput
 from app.commands.auth import IssuedSession, LoginInput, LogoutInput, RefreshInput
+from app.commands.password_reset import PasswordResetConfirmInput, PasswordResetRequestInput
 from app.core.config import Settings
 
 router = APIRouter()
@@ -152,6 +162,39 @@ def refresh(
     )
     _set_session_cookies(response, issued, settings, now)
     return _session_response(issued, now)
+
+
+@router.post("/password-reset/request", status_code=status.HTTP_202_ACCEPTED)
+def password_reset_request(
+    request: Request,
+    body: PasswordResetRequestRequest,
+    command: PasswordResetRequestCommandDep,
+) -> None:
+    # Always 202: never reveals whether the email exists.
+    command.execute(
+        PasswordResetRequestInput(
+            email=body.email,
+            now=datetime.now(UTC),
+            ip=_client_ip(request),
+            request_id=get_request_id(request),
+        )
+    )
+
+
+@router.post("/password-reset/confirm", status_code=status.HTTP_204_NO_CONTENT)
+def password_reset_confirm(
+    request: Request,
+    body: PasswordResetConfirmRequest,
+    command: PasswordResetConfirmCommandDep,
+) -> None:
+    command.execute(
+        PasswordResetConfirmInput(
+            raw_token=body.token,
+            new_password=body.new_password,
+            now=datetime.now(UTC),
+            request_id=get_request_id(request),
+        )
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

@@ -45,6 +45,13 @@ class UserRepository:
         self._db.flush()
         return user_id
 
+    def set_password(self, user_id: UUID, *, password_hash: str, now: datetime) -> None:
+        """Replace the password hash (password-reset confirm)."""
+        self._db.execute(
+            update(User).where(User.id == user_id).values(password_hash=password_hash, updated_at=now),
+            execution_options={"synchronize_session": False},
+        )
+
     def activate(self, user_id: UUID, *, password_hash: str, terms_version: str, now: datetime) -> None:
         """Move an invited user to active, setting their first password + accepted terms."""
         self._db.execute(
