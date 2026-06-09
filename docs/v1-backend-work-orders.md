@@ -11,7 +11,7 @@
 
 1. **粗顆粒**：一張工單 = 一個內聚主題，不為單一欄位 / 單一 endpoint 開票。寧可票內用 P0/P1 分階段，也不跨票切碎。
 2. **以擁有權界定邊界**：每張明寫「擁有（範圍內）」與「不碰（邊界外，指向擁有者）」，避免兩票改同一塊。
-3. **依賴顯式**：跨票依賴一律在票頭寫清楚（硬依賴 vs 唯讀引用）；用「先 stub、後票補真實作並 refactor」解循環。
+3. **依賴顯式**：跨票依賴一律在票頭寫清楚（硬依賴 vs 唯讀引用）。單人順序開發，**不採「先 stub、後票補真實作並 refactor」解循環**；能提前的真實作就提前到上游票（例如 `audit_events` 真表提前到 L1，L2 起各票沿用同表）。
 4. **對齊上線目標**：以「身份驗證 + 防護完成即可上線」為分界，工單分**上線前 / 上線後**兩層；上線前路徑最小化。
 
 ---
@@ -38,8 +38,8 @@
 
 | # | 工單 | 擁有（範圍內） | 不碰（邊界外） | 依賴 | ROM |
 |---|---|---|---|---|---|
-| **L1** | **身分 / 帳號 / Session** | users 表 + role(user/admin)；帳號生命週期（admin 建帳號 → invitation 24h → 首登設密 → active → 停用 cascade）；password reset 30min；JWT 15min access + DB refresh rotation + reuse 偵測 + revoke（logout/reset/disable/2fa）；登入/reset 鎖定（RateLimiter token-bucket primitive）；admin TOTP 2FA；把 LOCAL_USER_ID 換成真 auth context（全 API 真 owner scoping） | 跨 endpoint 通用限流（L2）；admin 監控/覆寫/killswitch（P5）；通知通道設定（P3） | — | **L** |
-| **L2** | **平台守門 / 防護** | audit_events + AuditEventWriter（§17 最低事件，refactor 既有 callers）；idempotency_keys + manager（create/cancel，24h）；request/correlation id 貫穿；建立上限 enforcement（200/標的 20，env 預設）；全 mutating endpoint 套 RateLimiter（沿用 L1 primitive）+ `Retry-After`；**最小 Kill Switch**（`system_flags` 表 + 全域停止觸發旗標 + admin toggle endpoint(2FA+必填 reason+audit) + evaluator 每輪檢查；in-process cache 30s TTL+切換時失效；旗標 on 時照抓 quote 但不產 TriggerEvent / 不發通知；止血不回放） | RateLimiter primitive 本體（L1 建）；admin 可調 config endpoint（P5，L2 先用 env 預設不被擋）；Kill Switch 完整分層（P5 擴充）；retention（P6） | L1（audit actor=user/admin + admin 2FA；L1 先用 logging stub，L2 補真表並 refactor） | **M** |
+| **L1** | **身分 / 帳號 / Session** | users 表 + role(user/admin)；帳號生命週期（admin 建帳號 → invitation 24h → 首登設密 → active → 停用 cascade）；password reset 30min；JWT 15min access + DB refresh rotation + reuse 偵測 + revoke（logout/reset/disable/2fa）；登入/reset 鎖定（RateLimiter token-bucket primitive）；admin TOTP 2FA；`audit_events` 真表 + `AuditEventWriter`（寫 auth 事件，L2 起各票沿用）；把 LOCAL_USER_ID 換成真 auth context（全 API 真 owner scoping） | 跨 endpoint 通用限流（L2）；admin 監控/覆寫/killswitch（P5）；通知通道設定（P3） | — | **L** |
+| **L2** | **平台守門 / 防護** | 沿用 L1 `audit_events` + `AuditEventWriter` 寫自身事件（§17 最低事件，**不重建表、不 refactor**）；idempotency_keys + manager（create/cancel，24h）；request/correlation id 貫穿；建立上限 enforcement（200/標的 20，env 預設）；全 mutating endpoint 套 RateLimiter（沿用 L1 primitive）+ `Retry-After`；**最小 Kill Switch**（`system_flags` 表 + 全域停止觸發旗標 + admin toggle endpoint(2FA+必填 reason+audit) + evaluator 每輪檢查；in-process cache 30s TTL+切換時失效；旗標 on 時照抓 quote 但不產 TriggerEvent / 不發通知；止血不回放） | RateLimiter primitive 本體（L1 建）；`audit_events` 真表/writer（L1 建，L2 沿用）；admin 可調 config endpoint（P5，L2 先用 env 預設不被擋）；Kill Switch 完整分層（P5 擴充）；retention（P6） | L1（`audit_events` 真表 + `AuditEventWriter` + auth context + admin 2FA） | **M** |
 | **L3** | **安全與部署硬化** | CSRF token + Origin/Referer 檢查；cookie HttpOnly/Secure/SameSite；CORS 收斂；密碼規則 MVP(≥8)；secrets 全進 env（.env in .gitignore）；單機 EC2+RDS 部署 + PG-everywhere；process 邊界最小落地（web / evaluator / notification / jobs 不互相拖垮）；備份每日 + PITR + 一次還原演練；認證流程 E2E + 上線冒煙測試 | 業務功能測試（各 WO 自帶）；完整 SLO 量測（P6） | L1, L2 | **M** |
 
 ### 上線後（6 張）
@@ -64,7 +64,7 @@
         (地基，全體 owner scoping)│              ├> P5 Admin監控+覆寫
                                 │              └> P1 停利停損+OCO
         L2 守門/防護 ───────────┼> P2 Outbox ──> P3
-        (L1 先 stub→L2 補真表)  ├> P4 除息 ────> P5
+        (audit 表在 L1，L2 沿用)├> P4 除息 ────> P5
                                 ├> P5
                                 └> P6 保留/隱私
         L3 安全/部署硬化 (依 L1,L2)

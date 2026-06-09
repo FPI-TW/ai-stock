@@ -30,13 +30,12 @@ V0.5 已建立、必須延續的不變式：
 - Role 授權：`user` / `admin` 兩種；權限檢查**集中**在 `deps.py`（`require_role('admin')`），不散落 controller。
 - 真 owner scoping：取代 `LocalUserContext`，全 user-facing API 從 token 取 user id；cross-user access forbidden。
 - Admin TOTP 2FA：admin 首次啟用後必須設 2FA 才能進 admin 功能；2FA reset 需另一 admin 或離線流程。
-- Audit：login / logout / refresh / invitation / password reset / account 建停用 全寫 audit；**本票先用 logging stub 介面，L2 補真表並 refactor callers**（解 L1↔L2 循環）。
+- Audit：login / logout / refresh / invitation / password reset / account 建停用 全寫 audit；**本票直接建 `audit_events` 真表 + `AuditEventWriter`**，一開始就寫真稽核（後續票 L2/P1… 寫入同一張既有表，無 stub、無 refactor）。
 - Rate limit：登入失敗鎖定、password reset、invitation 重寄。**RateLimiter token-bucket primitive 在本票建立**（`rate_limit_buckets` 表 + `RateLimiter.consume(bucket_key, capacity, refill_per_second, cost)`），L2 繼承擴充到所有 mutating endpoint。
 
 ## 非目標
 
-- 不做 audit log 真表（L2）；本票僅 logging stub。
-- 不做跨 endpoint 通用限流（L2）；本票只接 auth 自己的 buckets（login / password_reset / invitation_resend）。
+- 不做跨 endpoint 通用限流（L2）；本票只接 auth 自己的 buckets（login / password_reset / invitation_resend）。`audit_events` 真表本票就建，L2 沿用同表寫自身事件。
 - 不做 admin 監控 dashboard / 資料覆寫 / kill switch（P5）；本票 admin 只做「帳號 CRUD + 停用 cascade」。
 - 不做 Telegram（P3）；invitation / reset 寄信走抽象 `Mailer` interface，V1 可注入 SMTP/log stub。
 - 不做 user 端 2FA（schema 預留 `mfa_enabled`）；不做 OAuth 第三方登入。
@@ -78,6 +77,12 @@ Indexes：`email unique`、`(status, role)`。
 - `bucket_key text pk`、`tokens numeric`、`updated_at timestamptz`
 - `RateLimiter.consume(bucket_key, capacity, refill_per_second, cost) -> bool`：PG row-lock token bucket（無固定窗跨界問題）。本票只接 auth buckets。
 
+### `audit_events`（稽核真表，本票建立）
+
+- `id uuid pk`、`event_type text not null`、`actor_type text check (in 'user','system','admin')`、`actor_id uuid null`、`occurred_at timestamptz not null`、`metadata jsonb`、`request_id text null`
+- Indexes：`(event_type, occurred_at)`、`(actor_id, occurred_at)`
+- 對齊 domain-spec §17 五欄位。本票寫入 auth 相關事件：`account_invited`/`account_activated`/`account_disabled`/`invitation_resent`/`login_success`/`login_failed`/`password_reset_completed`/`refresh_reuse_detected`/`admin_2fa_enabled`/`admin_2fa_reset`。其餘 §17 事件（intent_*、notification_*、kill_switch_* 等）由 L2/P1/P2 等票寫入**同一張既有表**，不重建、不 refactor。
+
 ### 既有表 owner FK
 
 - `trade_intents` / `trigger_events` / `notifications` schema 不改，`owner_user_id` 加 FK 指向 `users(id)`。
@@ -92,12 +97,12 @@ Indexes：`email unique`、`(status, role)`。
 ## API（介面契約）
 
 ### 使用者 auth
-- `POST /auth/invitations/accept` `{token, password, termsVersion}` → 驗 token、套密碼規則(≥8)、寫 hash(argon2id)+`status=active`+terms、建第一筆 refresh、回 access+CSRF。Audit stub `account_activated`。Errors：`INVITATION_INVALID`/`INVITATION_EXPIRED`/`INVITATION_CONSUMED`/`WEAK_PASSWORD`/`TERMS_NOT_ACCEPTED`。
-- `POST /auth/login` `{email, password}` → 同 email 連 5 失敗鎖 15min（token-bucket，回 `LOGIN_LOCKED`）；成功回 access + set refresh/CSRF cookie；非 active 或密碼錯一律 `LOGIN_FAILED`（不洩漏存在）。Audit stub `login_success`/`login_failed`。
+- `POST /auth/invitations/accept` `{token, password, termsVersion}` → 驗 token、套密碼規則(≥8)、寫 hash(argon2id)+`status=active`+terms、建第一筆 refresh、回 access+CSRF。Audit `account_activated`。Errors：`INVITATION_INVALID`/`INVITATION_EXPIRED`/`INVITATION_CONSUMED`/`WEAK_PASSWORD`/`TERMS_NOT_ACCEPTED`。
+- `POST /auth/login` `{email, password}` → 同 email 連 5 失敗鎖 15min（token-bucket，回 `LOGIN_LOCKED`）；成功回 access + set refresh/CSRF cookie；非 active 或密碼錯一律 `LOGIN_FAILED`（不洩漏存在）。Audit `login_success`/`login_failed`。
 - `POST /auth/refresh` → cookie 取 refresh、驗 CSRF、rotation、reuse 偵測。Errors `REFRESH_INVALID`/`REFRESH_REUSE_DETECTED`。
 - `POST /auth/logout` → revoke 當前 refresh（`logout`）、clear cookies、無 token 也回 204。
 - `POST /auth/password-reset/request` `{email}` → 一律回 202；rate limit（email 3/h、IP 10/h）；active 才產 token（30min）；寄信走 `Mailer`。
-- `POST /auth/password-reset/confirm` `{token, newPassword}` → 驗 token、套密碼規則、revoke 該 user 全 refresh（`password_reset`）。Audit stub `password_reset_completed`。
+- `POST /auth/password-reset/confirm` `{token, newPassword}` → 驗 token、套密碼規則、revoke 該 user 全 refresh（`password_reset`）。Audit `password_reset_completed`。
 - `GET /auth/me` → 回 `id/email/role/status/mfa_enabled`。
 
 ### Admin 帳號管理（本票最小 admin）
@@ -117,7 +122,8 @@ Indexes：`email unique`、`(status, role)`。
 
 ## 驗收條件
 
-- [ ] 4 張 table migration 可 upgrade/downgrade；citext extension 啟用。
+- [ ] 6 張 table（`users` / `refresh_tokens` / `invitations` / `password_resets` / `rate_limit_buckets` / `audit_events`）migration 可 upgrade/downgrade；citext extension 啟用。
+- [ ] auth 事件（login/invitation/account 建停用/reset/reuse/2fa）寫入 `audit_events`，五欄位齊全。
 - [ ] V0.5 `local-user` 資料 migration 為 `users` row，既有 integration tests 全綠。
 - [ ] login 正確密碼回 access + cookies；連 5 失敗回 `LOGIN_LOCKED`，成功後 counter 回補。
 - [ ] refresh rotation 後舊 token 再用 → 整條 chain revoke + warning。
@@ -133,7 +139,7 @@ Indexes：`email unique`、`(status, role)`。
 ## 測試要求
 
 - Unit：JWT encode/decode + claim；argon2id hash/verify；refresh rotation chain + reuse；RateLimiter token-bucket（不跨界）；TOTP 驗證。
-- Integration：invitation accept→login→refresh→logout 全鏈；password reset→舊 refresh 失效；login 5 失敗→鎖；reuse→chain revoke；admin 建/停用帳號 cascade；cross-user forbidden；CSRF 缺失→403；V0.5 既有 tests 全綠（migration 後）。
+- Integration：invitation accept→login→refresh→logout 全鏈；password reset→舊 refresh 失效；login 5 失敗→鎖；reuse→chain revoke；admin 建/停用帳號 cascade；cross-user forbidden；CSRF 缺失→403；auth 事件落 `audit_events`；V0.5 既有 tests 全綠（migration 後）。
 
 ## 工程注意事項
 
@@ -143,5 +149,5 @@ Indexes：`email unique`、`(status, role)`。
 - refresh cookie path `/auth/refresh`，避免其他 API 被瀏覽器自動帶。
 - 所有 state mutation 走 command handler，controller 只 transport validation。
 - 權限檢查集中 `deps.py`，為未來細分角色（system_admin/support_admin…）預留，不散落。
-- audit stub 介面：`AuditWriter.write(event_type, actor_type, actor_id, metadata, request_id)`，L1 印 structured log，L2 換真實作（callers 不改 signature）。
+- `AuditEventWriter.write(event_type, actor_type, actor_id, metadata, request_id)`：直接寫 `audit_events` 表；後續票（L2/P1…）沿用同 signature 寫入既有表，不重建、不 refactor callers。
 - `Mailer(Protocol).send(message)`：V1 stub 印 log，P3/R3 接 SES/SMTP。

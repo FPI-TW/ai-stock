@@ -5,9 +5,9 @@
 - 分層：**上線前（必要）**
 - 優先序：P0
 - ROM：**M**
-- 依賴：L1（auth context + RateLimiter primitive + audit stub 介面 + admin 2FA）
+- 依賴：L1（auth context + RateLimiter primitive + `audit_events` 真表/`AuditEventWriter` + admin 2FA）
 - 交付版本：V1
-- 併自舊工單：BE-V1-16-audit-rate-limit-retention（audit + rate-limit 部分）、+ idempotency、+ 建立上限、+ 最小 kill switch
+- 併自舊工單：BE-V1-16-audit-rate-limit-retention（rate-limit 部分；audit 真表已併入 L1）、+ idempotency、+ 建立上限、+ 最小 kill switch
 
 ## 背景
 
@@ -15,11 +15,11 @@ L1 把身分做好後，平台需要一層「防護與紀錄」才能安全上�
 
 本票把四件跨業務的守門能力收一起：**稽核紀錄、冪等、全域限流、建立上限**，外加上線初期最重要的營運安全閥——**最小緊急停止鈕（kill switch）**。這些都不屬於單一業務，集中一票避免散落。
 
-L1↔L2 循環解法：L1 用 audit **logging stub** 與只接 auth buckets 的 RateLimiter；本票補 `audit_events` 真表 + 把全 endpoint 接上限流，並 refactor L1 的 stub callers（callers signature 不變）。
+與 L1 的分工（線性、無接力佔位）：L1 已建 `audit_events` 真表 + `AuditEventWriter`、與只接 auth buckets 的 RateLimiter primitive。本票直接沿用：把全 endpoint 接上限流、把自身事件寫入 L1 既有 audit 表——**無 stub、無 refactor callers**。（單人順序開發，不採「先佔位後補真」解循環。）
 
 ## 目標
 
-- **Audit log**：`audit_events` 表 + `AuditEventWriter`（取代 L1 stub），覆蓋 §17 最低事件集；refactor 所有既有 stub callers。
+- **Audit log**：沿用 L1 的 `audit_events` 表 + `AuditEventWriter`，本票寫入自身事件（`kill_switch_enabled`/`kill_switch_disabled` 等），與其他票共同覆蓋 §17 最低事件集；不重建表、不 refactor。
 - **Idempotency**：`idempotency_keys` 表 + manager，套用 `CreateTradeIntent` / `CancelTradeIntent` / `CancelTradeIntentGroup`（後者待 P1，本票先建機制）；缺 key 拒絕、same key+same payload 回同結果、same key+diff payload 回 409、保存 24h。
 - **Request / correlation id 貫穿**：API `X-Request-Id`、command `request_id`、audit `request_id`、（outbox `correlation_id` 待 P2）。
 - **建立上限 enforcement**：單一 user active/scheduled ≤ 200、單一 user 單一 symbol ≤ 20；env 預設（admin 可調 endpoint 屬 P5，本票注入式預設不被 P5 阻塞）。
@@ -36,10 +36,9 @@ L1↔L2 循環解法：L1 用 audit **logging stub** 與只接 auth buckets 的 
 
 ## DB Schema
 
-### `audit_events`
-- `id uuid pk`、`event_type text not null`、`actor_type text check (in 'user','system','admin')`、`actor_id uuid null`、`occurred_at timestamptz not null`、`metadata jsonb`、`request_id text null`
-- Index：`(event_type, occurred_at)`、`(actor_id, occurred_at)`
-- 最低事件（§17）：`intent_created`/`intent_activated`/`intent_triggered`/`intent_expired`/`intent_cancelled`/`notification_sent`/`notification_failed`/`corporate_action_adjustment_applied`/`oco_sibling_cancelled`/`account_invited`/`account_activated`/`account_disabled`/`admin_override_applied`/`kill_switch_enabled`/`kill_switch_disabled`（部分事件來源在後續票，本票建表 + writer，事件由各票寫入）。
+### `audit_events`（表在 L1，本票沿用不重建）
+- 表結構（5 欄位）與 `AuditEventWriter` 由 **L1** 建立；本票只透過同一 writer 寫入自身事件（`kill_switch_enabled`/`kill_switch_disabled`）。
+- §17 最低事件集（由各票分別寫入既有表）：`intent_created`/`intent_activated`/`intent_triggered`/`intent_expired`/`intent_cancelled`/`notification_sent`/`notification_failed`/`corporate_action_adjustment_applied`/`oco_sibling_cancelled`/`account_invited`/`account_activated`/`account_disabled`/`admin_override_applied`/`kill_switch_enabled`/`kill_switch_disabled`。
 
 ### `idempotency_keys`
 - `id uuid pk`、`user_id fk`、`key text`、`endpoint text`、`request_hash text`、`response_snapshot jsonb`、`status text`、`created_at`、`expires_at`（24h）
@@ -74,8 +73,8 @@ L1↔L2 循環解法：L1 用 audit **logging stub** 與只接 auth buckets 的 
 
 ## 驗收條件
 
-- [ ] `audit_events` / `idempotency_keys` / `system_flags` migration 可 up/down。
-- [ ] L1 的 audit stub callers 全部 refactor 到 `AuditEventWriter`，signature 不變，既有 tests 全綠。
+- [ ] `idempotency_keys` / `system_flags` migration 可 up/down（`audit_events` 由 L1 建立，本票不重建）。
+- [ ] 本票事件（`kill_switch_enabled`/`kill_switch_disabled`）寫入 L1 既有 `audit_events`，五欄位齊全。
 - [ ] create/cancel 缺 idempotency key → 400；same key+same payload → 同結果不重複副作用；same key+diff payload → 409。
 - [ ] 第 201 筆 active/scheduled intent → `USER_INTENT_LIMIT_EXCEEDED`；單 symbol 第 21 筆 → `SYMBOL_INTENT_LIMIT_EXCEEDED`。
 - [ ] 超頻 mutating → `RATE_LIMITED` + `Retry-After`。
@@ -86,7 +85,7 @@ L1↔L2 循環解法：L1 用 audit **logging stub** 與只接 auth buckets 的 
 ## 測試要求
 
 - Unit：idempotency hash 判定（same/diff payload）；建立上限邊界（200/201、20/21）；kill switch 旗標讀取 + cache 失效。
-- Integration：audit writer 寫入 + 既有 callers refactor 後行為不變；create 重放冪等；kill switch on → evaluator 不觸發（注入 quote 達標也不發）→ off 恢復；rate limit 跨 endpoint。
+- Integration：本票事件透過 L1 `AuditEventWriter` 寫入既有 `audit_events`；create 重放冪等；kill switch on → evaluator 不觸發（注入 quote 達標也不發）→ off 恢復；rate limit 跨 endpoint。
 
 ## 工程注意事項
 
