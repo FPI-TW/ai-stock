@@ -9,14 +9,21 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.domain.auth import (
+    AccountError,
     AuthError,
     CsrfFailedError,
+    EmailAlreadyExistsError,
+    InvitationConsumedError,
+    InvitationExpiredError,
+    InvitationInvalidError,
     LoginFailedError,
     LoginLockedError,
     MfaRequiredError,
     RefreshInvalidError,
     RefreshReuseDetectedError,
+    TermsNotAcceptedError,
     UnauthenticatedError,
+    WeakPasswordError,
 )
 from app.domain.notification import NotificationNotFoundError
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
@@ -66,6 +73,13 @@ class ErrorCode(StrEnum):
     REFRESH_REUSE_DETECTED = "REFRESH_REUSE_DETECTED"
     CSRF_FAILED = "CSRF_FAILED"
     MFA_REQUIRED = "MFA_REQUIRED"
+    # L1 account lifecycle
+    EMAIL_ALREADY_EXISTS = "EMAIL_ALREADY_EXISTS"
+    INVITATION_INVALID = "INVITATION_INVALID"
+    INVITATION_EXPIRED = "INVITATION_EXPIRED"
+    INVITATION_CONSUMED = "INVITATION_CONSUMED"
+    WEAK_PASSWORD = "WEAK_PASSWORD"
+    TERMS_NOT_ACCEPTED = "TERMS_NOT_ACCEPTED"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -100,6 +114,12 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.REFRESH_REUSE_DETECTED: "偵測到憑證異常使用，已登出所有工作階段",
     ErrorCode.CSRF_FAILED: "CSRF 驗證失敗",
     ErrorCode.MFA_REQUIRED: "需要完成兩階段驗證",
+    ErrorCode.EMAIL_ALREADY_EXISTS: "此 email 已存在",
+    ErrorCode.INVITATION_INVALID: "邀請連結無效",
+    ErrorCode.INVITATION_EXPIRED: "邀請連結已過期",
+    ErrorCode.INVITATION_CONSUMED: "邀請連結已被使用",
+    ErrorCode.WEAK_PASSWORD: "密碼長度至少需 8 個字元",
+    ErrorCode.TERMS_NOT_ACCEPTED: "必須接受服務條款",
 }
 
 
@@ -194,6 +214,22 @@ def register_exception_handlers(app: FastAPI) -> None:
             return build_error_response(request, status.HTTP_403_FORBIDDEN, ErrorCode.MFA_REQUIRED)
         # Remaining ForbiddenError (and any unmapped AuthError) -> 403 FORBIDDEN.
         return build_error_response(request, status.HTTP_403_FORBIDDEN, ErrorCode.FORBIDDEN)
+
+    @app.exception_handler(AccountError)
+    async def account_error_handler(request: Request, exc: AccountError) -> JSONResponse:
+        if isinstance(exc, EmailAlreadyExistsError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.EMAIL_ALREADY_EXISTS)
+        if isinstance(exc, InvitationExpiredError):
+            return build_error_response(request, status.HTTP_410_GONE, ErrorCode.INVITATION_EXPIRED)
+        if isinstance(exc, InvitationConsumedError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.INVITATION_CONSUMED)
+        if isinstance(exc, InvitationInvalidError):
+            return build_error_response(request, status.HTTP_400_BAD_REQUEST, ErrorCode.INVITATION_INVALID)
+        if isinstance(exc, WeakPasswordError):
+            return build_error_response(request, status.HTTP_422_UNPROCESSABLE_CONTENT, ErrorCode.WEAK_PASSWORD)
+        if isinstance(exc, TermsNotAcceptedError):
+            return build_error_response(request, status.HTTP_422_UNPROCESSABLE_CONTENT, ErrorCode.TERMS_NOT_ACCEPTED)
+        return build_error_response(request, status.HTTP_400_BAD_REQUEST, ErrorCode.VALIDATION_ERROR)
 
     @app.exception_handler(SymbolError)
     async def symbol_error_handler(request: Request, exc: SymbolError) -> JSONResponse:

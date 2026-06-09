@@ -13,9 +13,18 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request, Response, status
 
-from app.api.deps import CurrentUserDep, LoginCommandDep, LogoutCommandDep, RefreshCommandDep, SettingsDep, UserRepoDep
+from app.api.deps import (
+    AcceptInvitationCommandDep,
+    CurrentUserDep,
+    LoginCommandDep,
+    LogoutCommandDep,
+    RefreshCommandDep,
+    SettingsDep,
+    UserRepoDep,
+)
 from app.api.errors import ApiError, ErrorCode, get_request_id
-from app.api.schemas.auth import LoginRequest, MeResponse, SessionTokenResponse
+from app.api.schemas.auth import AcceptInvitationRequest, LoginRequest, MeResponse, SessionTokenResponse
+from app.commands.account import AcceptInvitationInput
 from app.commands.auth import IssuedSession, LoginInput, LogoutInput, RefreshInput
 from app.core.config import Settings
 
@@ -88,6 +97,30 @@ def login(
         LoginInput(
             email=body.email,
             password=body.password,
+            now=now,
+            user_agent=request.headers.get("User-Agent"),
+            ip=_client_ip(request),
+            request_id=get_request_id(request),
+        )
+    )
+    _set_session_cookies(response, issued, settings, now)
+    return _session_response(issued, now)
+
+
+@router.post("/invitations/accept", response_model=SessionTokenResponse)
+def accept_invitation(
+    request: Request,
+    body: AcceptInvitationRequest,
+    command: AcceptInvitationCommandDep,
+    settings: SettingsDep,
+    response: Response,
+) -> SessionTokenResponse:
+    now = datetime.now(UTC)
+    issued = command.execute(
+        AcceptInvitationInput(
+            raw_token=body.token,
+            password=body.password,
+            terms_version=body.terms_version,
             now=now,
             user_agent=request.headers.get("User-Agent"),
             ip=_client_ip(request),

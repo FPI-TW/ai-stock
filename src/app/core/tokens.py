@@ -91,6 +91,17 @@ def hash_refresh_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def generate_url_token() -> str:
+    """Opaque token embedded in an invitation / password-reset link. Shown once;
+    only its hash is stored."""
+    return secrets.token_urlsafe(32)
+
+
+def hash_url_token(token: str) -> str:
+    """SHA-256 hex digest of an invitation / password-reset token, for storage."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def generate_csrf_token() -> str:
     """Random value for the double-submit CSRF cookie. Not stored server-side: the
     cookie copy and the X-CSRF-Token header copy are compared against each other."""

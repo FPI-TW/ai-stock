@@ -35,6 +35,16 @@ class RefreshTokenData:
     revoked_reason: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class InvitationData:
+    id: UUID
+    user_id: UUID
+    token_hash: str
+    expires_at: datetime
+    consumed_at: datetime | None
+    revoked_at: datetime | None
+
+
 class AuthError(Exception):
     """Base class for L1 auth failures."""
 
@@ -73,3 +83,31 @@ class CsrfFailedError(AuthError):
 
 class MfaRequiredError(ForbiddenError):
     """Admin endpoint reached without a verified second factor."""
+
+
+class AccountError(Exception):
+    """Base class for account-lifecycle failures (invitation / activation)."""
+
+
+class EmailAlreadyExistsError(AccountError):
+    """Admin tried to create a user whose email already exists."""
+
+
+class InvitationInvalidError(AccountError):
+    """Invitation token is unknown or revoked."""
+
+
+class InvitationExpiredError(AccountError):
+    """Invitation token is past its 24h expiry."""
+
+
+class InvitationConsumedError(AccountError):
+    """Invitation token was already used to activate the account."""
+
+
+class WeakPasswordError(AccountError):
+    """Password fails the MVP length rule (spec §13: >= 8 chars)."""
+
+
+class TermsNotAcceptedError(AccountError):
+    """Activation attempted without accepting the required terms version."""

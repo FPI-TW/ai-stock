@@ -97,7 +97,7 @@ def _refresh_ttl_seconds(settings: Settings, role: str) -> int:
     return settings.refresh_token_ttl_user_seconds
 
 
-def _issue_session(
+def issue_session(
     refresh_repo: RefreshTokenRepository,
     settings: Settings,
     *,
@@ -205,7 +205,7 @@ class LoginCommand:
 
             # Success: refund the lockout counter, mint a session, audit.
             self._rate_limiter.reset(bucket)
-            issued = _issue_session(
+            issued = issue_session(
                 self._refresh,
                 self._settings,
                 user=user,
@@ -289,7 +289,7 @@ class RefreshCommand:
 
             # Rotate: revoke the presented token and mint its successor.
             self._refresh.revoke(token.id, reason="rotated", now=inp.now)
-            issued = _issue_session(
+            issued = issue_session(
                 self._refresh,
                 self._settings,
                 user=user,

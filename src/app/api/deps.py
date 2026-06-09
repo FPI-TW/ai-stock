@@ -6,6 +6,7 @@ from fastapi import Depends, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.errors import ApiError, ErrorCode
+from app.commands.account import AcceptInvitationCommand, CreateUserCommand
 from app.commands.auth import LoginCommand, LogoutCommand, RefreshCommand
 from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.commands.notification import MarkNotificationReadCommand
@@ -21,11 +22,13 @@ from app.db.session import check_database_connectivity, get_session_factory
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
+from app.repositories.invitation_repository import InvitationRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.repositories.user_repository import UserRepository
 from app.services.audit import AuditEventWriter
+from app.services.mailer import LoggingMailer, Mailer
 from app.services.quote.base import QuoteProvider
 from app.services.quote.current_price import CurrentPriceProvider
 from app.services.symbol import SymbolService
@@ -89,6 +92,22 @@ def require_role(required_role: str) -> Callable[[RequestUser], RequestUser]:
         return user
 
     return _dependency
+
+
+def get_admin_user(user: CurrentUserDep) -> RequestUser:
+    """Admin gate: must hold the admin role AND a verified second factor.
+
+    Until the 2FA verify flow (Phase 4) sets mfa_verified, admin endpoints answer
+    403 MFA_REQUIRED — the deliberate "set up 2FA before using admin" gate (spec §13).
+    """
+    if user.role != "admin":
+        raise ApiError(code=ErrorCode.FORBIDDEN, status_code=status.HTTP_403_FORBIDDEN)
+    if not user.mfa_verified:
+        raise ApiError(code=ErrorCode.MFA_REQUIRED, status_code=status.HTTP_403_FORBIDDEN)
+    return user
+
+
+AdminUserDep = Annotated[RequestUser, Depends(get_admin_user)]
 
 
 def get_intent_repository(db: DatabaseDep) -> IntentRepository:
@@ -349,3 +368,45 @@ def get_logout_command(
 
 
 LogoutCommandDep = Annotated[LogoutCommand, Depends(get_logout_command)]
+
+
+def get_invitation_repository(db: DatabaseDep) -> InvitationRepository:
+    return InvitationRepository(db)
+
+
+InvitationRepoDep = Annotated[InvitationRepository, Depends(get_invitation_repository)]
+
+
+def get_mailer() -> Mailer:
+    return LoggingMailer()
+
+
+MailerDep = Annotated[Mailer, Depends(get_mailer)]
+
+
+def get_create_user_command(
+    db: DatabaseDep,
+    users: UserRepoDep,
+    invitations: InvitationRepoDep,
+    audit: AuditWriterDep,
+    mailer: MailerDep,
+) -> CreateUserCommand:
+    return CreateUserCommand(db, users, invitations, audit, mailer)
+
+
+CreateUserCommandDep = Annotated[CreateUserCommand, Depends(get_create_user_command)]
+
+
+def get_accept_invitation_command(
+    db: DatabaseDep,
+    settings: SettingsDep,
+    users: UserRepoDep,
+    invitations: InvitationRepoDep,
+    refresh_tokens: RefreshTokenRepoDep,
+    audit: AuditWriterDep,
+    hasher: PasswordHasherDep,
+) -> AcceptInvitationCommand:
+    return AcceptInvitationCommand(db, settings, users, invitations, refresh_tokens, audit, hasher)
+
+
+AcceptInvitationCommandDep = Annotated[AcceptInvitationCommand, Depends(get_accept_invitation_command)]

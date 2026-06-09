@@ -13,6 +13,14 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class AcceptInvitationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str
+    password: str
+    terms_version: str = Field(validation_alias="termsVersion")
+
+
 class SessionTokenResponse(BaseModel):
     """Returned by both /auth/login and /auth/refresh. The refresh + CSRF tokens
     travel as cookies, not in this body."""
