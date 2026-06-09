@@ -78,3 +78,8 @@ class RateLimiter:
         else:
             retry_after = float("inf")
         return RateLimitDecision(allowed=allowed, remaining=tokens, retry_after_seconds=retry_after)
+
+    def reset(self, bucket_key: str) -> None:
+        """Drop a bucket so it starts full again — used to refund the login counter
+        after a successful authentication."""
+        self._db.execute(text("DELETE FROM rate_limit_buckets WHERE bucket_key = :k").bindparams(k=bucket_key))

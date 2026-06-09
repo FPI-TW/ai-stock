@@ -9,7 +9,8 @@ import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_mark_notification_read_command, get_notification_repository
+from app.api.deps import get_current_user, get_mark_notification_read_command, get_notification_repository
+from app.core.security import RequestUser
 from app.domain.notification import NotificationData, NotificationNotFoundError
 from app.domain.trade_intent import InvalidCursorError
 from app.main import create_app
@@ -58,6 +59,7 @@ def api_client(mock_repo: MagicMock, mock_command: MagicMock) -> Generator[TestC
     app = create_app()
     app.dependency_overrides[get_notification_repository] = lambda: mock_repo
     app.dependency_overrides[get_mark_notification_read_command] = lambda: mock_command
+    app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()

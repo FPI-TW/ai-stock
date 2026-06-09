@@ -15,10 +15,12 @@ from app.core.tokens import (
 _SECRET = "unit-test-secret-0123456789-abcdefghijklmnop"
 
 
+_T0 = datetime(2026, 1, 1, tzinfo=UTC)
+
+
 def test_access_token_roundtrip_preserves_claims() -> None:
     sub = uuid4()
     session_id = uuid4()
-    now = datetime.now(UTC)
 
     token = encode_access_token(
         _SECRET,
@@ -26,10 +28,11 @@ def test_access_token_roundtrip_preserves_claims() -> None:
         role="admin",
         session_id=session_id,
         ttl_seconds=900,
-        now=now,
+        now=_T0,
         mfa_verified=True,
     )
-    claims = decode_access_token(_SECRET, token)
+    # Injected `now` makes expiry deterministic regardless of wall-clock.
+    claims = decode_access_token(_SECRET, token, now=_T0)
 
     assert claims.sub == sub
     assert claims.role == "admin"
@@ -39,19 +42,18 @@ def test_access_token_roundtrip_preserves_claims() -> None:
 
 
 def test_access_token_defaults_mfa_verified_false() -> None:
-    token = encode_access_token(
-        _SECRET, sub=uuid4(), role="user", session_id=uuid4(), ttl_seconds=900, now=datetime.now(UTC)
-    )
-    assert decode_access_token(_SECRET, token).mfa_verified is False
+    token = encode_access_token(_SECRET, sub=uuid4(), role="user", session_id=uuid4(), ttl_seconds=900, now=_T0)
+    assert decode_access_token(_SECRET, token, now=_T0).mfa_verified is False
 
 
-def test_expired_access_token_is_rejected() -> None:
-    expired_issue = datetime.now(UTC) - timedelta(hours=1)
-    token = encode_access_token(
-        _SECRET, sub=uuid4(), role="user", session_id=uuid4(), ttl_seconds=60, now=expired_issue
-    )
+def test_token_valid_just_before_expiry_and_rejected_after() -> None:
+    token = encode_access_token(_SECRET, sub=uuid4(), role="user", session_id=uuid4(), ttl_seconds=60, now=_T0)
+
+    # One second before expiry: still valid.
+    assert decode_access_token(_SECRET, token, now=_T0 + timedelta(seconds=59)) is not None
+    # One second after expiry: rejected, deterministically.
     with pytest.raises(InvalidAccessTokenError):
-        decode_access_token(_SECRET, token)
+        decode_access_token(_SECRET, token, now=_T0 + timedelta(seconds=61))
 
 
 def test_wrong_secret_is_rejected() -> None:

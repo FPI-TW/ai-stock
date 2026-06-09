@@ -14,8 +14,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, select, text
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_quote_provider, get_trading_session_service
+from app.api.deps import get_current_user, get_quote_provider, get_trading_session_service
 from app.core.config import get_settings
+from app.core.security import RequestUser
 from app.db.models.core import Notification, Symbol, TriggerEvent
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
@@ -106,6 +107,7 @@ def _build_client(quote_provider: InMemoryQuoteProvider, now_utc: datetime) -> G
     app = create_app()
     app.dependency_overrides[get_quote_provider] = lambda: quote_provider
     app.dependency_overrides[get_trading_session_service] = lambda: session_with_clock
+    app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=OWNER_USER_ID, role="user")
     yield TestClient(app)
     app.dependency_overrides.clear()
 

@@ -53,13 +53,20 @@ def encode_access_token(
     return jwt.encode(payload, secret, algorithm=_ALGORITHM)
 
 
-def decode_access_token(secret: str, token: str) -> AccessTokenClaims:
+def decode_access_token(secret: str, token: str, *, now: datetime | None = None) -> AccessTokenClaims:
+    """Verify signature and expiry, returning the claims.
+
+    Signature is always checked. Expiry is checked against `now` when provided
+    (deterministic — used by tests); otherwise PyJWT validates `exp` against the
+    real system clock (production default).
+    """
     try:
-        payload = jwt.decode(token, secret, algorithms=[_ALGORITHM])
+        # When `now` is supplied we own the expiry check, so disable PyJWT's.
+        payload = jwt.decode(token, secret, algorithms=[_ALGORITHM], options={"verify_exp": now is None})
     except jwt.PyJWTError as exc:
         raise InvalidAccessTokenError(str(exc)) from exc
     try:
-        return AccessTokenClaims(
+        claims = AccessTokenClaims(
             sub=UUID(payload["sub"]),
             role=payload["role"],
             session_id=UUID(payload["session_id"]),
@@ -69,6 +76,9 @@ def decode_access_token(secret: str, token: str) -> AccessTokenClaims:
         )
     except (KeyError, ValueError) as exc:
         raise InvalidAccessTokenError(f"malformed access token claims: {exc}") from exc
+    if now is not None and claims.expires_at <= now:
+        raise InvalidAccessTokenError("access token expired")
+    return claims
 
 
 def generate_refresh_token() -> str:
@@ -79,3 +89,16 @@ def generate_refresh_token() -> str:
 def hash_refresh_token(token: str) -> str:
     """SHA-256 hex digest of a refresh token, for storage and lookup."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def generate_csrf_token() -> str:
+    """Random value for the double-submit CSRF cookie. Not stored server-side: the
+    cookie copy and the X-CSRF-Token header copy are compared against each other."""
+    return secrets.token_urlsafe(32)
+
+
+def csrf_tokens_match(cookie_value: str | None, header_value: str | None) -> bool:
+    """Constant-time double-submit check. Both sides must be present and equal."""
+    if not cookie_value or not header_value:
+        return False
+    return secrets.compare_digest(cookie_value, header_value)

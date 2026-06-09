@@ -1,5 +1,6 @@
 import logging
 from enum import StrEnum
+from math import ceil
 from typing import Any
 
 from fastapi import FastAPI, Request, status
@@ -7,6 +8,16 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.domain.auth import (
+    AuthError,
+    CsrfFailedError,
+    LoginFailedError,
+    LoginLockedError,
+    MfaRequiredError,
+    RefreshInvalidError,
+    RefreshReuseDetectedError,
+    UnauthenticatedError,
+)
 from app.domain.notification import NotificationNotFoundError
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
 from app.domain.symbol_errors import SymbolError, SymbolNotTradableError, UnknownSymbolError
@@ -46,6 +57,15 @@ class ErrorCode(StrEnum):
     TWAP_INVALID_INTERVAL = "TWAP_INVALID_INTERVAL"
     TWAP_INVALID_QUANTITY = "TWAP_INVALID_QUANTITY"
     TWAP_DUPLICATE_ACTIVE_PLAN = "TWAP_DUPLICATE_ACTIVE_PLAN"
+    # L1 auth
+    UNAUTHENTICATED = "UNAUTHENTICATED"
+    FORBIDDEN = "FORBIDDEN"
+    LOGIN_FAILED = "LOGIN_FAILED"
+    LOGIN_LOCKED = "LOGIN_LOCKED"
+    REFRESH_INVALID = "REFRESH_INVALID"
+    REFRESH_REUSE_DETECTED = "REFRESH_REUSE_DETECTED"
+    CSRF_FAILED = "CSRF_FAILED"
+    MFA_REQUIRED = "MFA_REQUIRED"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -72,6 +92,14 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.TWAP_INVALID_INTERVAL: "TWAP 間隔秒數不合法",
     ErrorCode.TWAP_INVALID_QUANTITY: "TWAP 目標量不合法",
     ErrorCode.TWAP_DUPLICATE_ACTIVE_PLAN: "已存在相同的 TWAP 計畫",
+    ErrorCode.UNAUTHENTICATED: "請先登入",
+    ErrorCode.FORBIDDEN: "沒有權限執行此操作",
+    ErrorCode.LOGIN_FAILED: "帳號或密碼錯誤",
+    ErrorCode.LOGIN_LOCKED: "登入失敗次數過多，請稍後再試",
+    ErrorCode.REFRESH_INVALID: "登入憑證已失效，請重新登入",
+    ErrorCode.REFRESH_REUSE_DETECTED: "偵測到憑證異常使用，已登出所有工作階段",
+    ErrorCode.CSRF_FAILED: "CSRF 驗證失敗",
+    ErrorCode.MFA_REQUIRED: "需要完成兩階段驗證",
 }
 
 
@@ -138,6 +166,34 @@ def register_exception_handlers(app: FastAPI) -> None:
             message=exc.message,
             details=exc.details,
         )
+
+    @app.exception_handler(AuthError)
+    async def auth_error_handler(request: Request, exc: AuthError) -> JSONResponse:
+        # MfaRequiredError must be checked before its ForbiddenError base.
+        if isinstance(exc, UnauthenticatedError):
+            return build_error_response(request, status.HTTP_401_UNAUTHORIZED, ErrorCode.UNAUTHENTICATED)
+        if isinstance(exc, LoginFailedError):
+            return build_error_response(request, status.HTTP_401_UNAUTHORIZED, ErrorCode.LOGIN_FAILED)
+        if isinstance(exc, LoginLockedError):
+            retry_after = max(1, ceil(exc.retry_after_seconds))
+            response = build_error_response(
+                request,
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                ErrorCode.LOGIN_LOCKED,
+                details={"retryAfterSeconds": retry_after},
+            )
+            response.headers["Retry-After"] = str(retry_after)
+            return response
+        if isinstance(exc, RefreshReuseDetectedError):
+            return build_error_response(request, status.HTTP_401_UNAUTHORIZED, ErrorCode.REFRESH_REUSE_DETECTED)
+        if isinstance(exc, RefreshInvalidError):
+            return build_error_response(request, status.HTTP_401_UNAUTHORIZED, ErrorCode.REFRESH_INVALID)
+        if isinstance(exc, CsrfFailedError):
+            return build_error_response(request, status.HTTP_403_FORBIDDEN, ErrorCode.CSRF_FAILED)
+        if isinstance(exc, MfaRequiredError):
+            return build_error_response(request, status.HTTP_403_FORBIDDEN, ErrorCode.MFA_REQUIRED)
+        # Remaining ForbiddenError (and any unmapped AuthError) -> 403 FORBIDDEN.
+        return build_error_response(request, status.HTTP_403_FORBIDDEN, ErrorCode.FORBIDDEN)
 
     @app.exception_handler(SymbolError)
     async def symbol_error_handler(request: Request, exc: SymbolError) -> JSONResponse:

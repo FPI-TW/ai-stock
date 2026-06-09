@@ -1,23 +1,31 @@
 from collections.abc import Callable, Generator
 from typing import Annotated
 
+from argon2 import PasswordHasher
 from fastapi import Depends, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.errors import ApiError, ErrorCode
+from app.commands.auth import LoginCommand, LogoutCommand, RefreshCommand
 from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.commands.notification import MarkNotificationReadCommand
 from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand
 from app.commands.trigger_intent import TriggerIntentCommand
 from app.commands.twap import TwapConfirmCommand, TwapPlanCommand, TwapSliceWorkerCommand
 from app.core.config import REQUIRED_CURRENT_PRICE_PROVIDER, Settings, get_settings
-from app.core.security import RequestUser, build_local_user
+from app.core.passwords import build_password_hasher
+from app.core.rate_limiter import RateLimiter
+from app.core.security import RequestUser
+from app.core.tokens import InvalidAccessTokenError, decode_access_token
 from app.db.session import check_database_connectivity, get_session_factory
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.notification_repository import NotificationRepository
+from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.symbol_repository import SymbolRepository
+from app.repositories.user_repository import UserRepository
+from app.services.audit import AuditEventWriter
 from app.services.quote.base import QuoteProvider
 from app.services.quote.current_price import CurrentPriceProvider
 from app.services.symbol import SymbolService
@@ -47,11 +55,40 @@ def get_symbol_service(db: DatabaseDep) -> SymbolService:
 SymbolServiceDep = Annotated[SymbolService, Depends(get_symbol_service)]
 
 
-def get_current_user(settings: SettingsDep) -> RequestUser:
-    return build_local_user(settings)
+def get_current_user(request: Request, settings: SettingsDep) -> RequestUser:
+    """Resolve the caller from the `Authorization: Bearer <access-jwt>` header.
+
+    Missing / malformed / expired token -> 401 UNAUTHENTICATED. Production verifies
+    expiry against the real clock (decode_access_token default).
+    """
+    header = request.headers.get("Authorization")
+    if header is None or not header.startswith("Bearer "):
+        raise ApiError(code=ErrorCode.UNAUTHENTICATED, status_code=status.HTTP_401_UNAUTHORIZED)
+    token = header.removeprefix("Bearer ").strip()
+    try:
+        claims = decode_access_token(settings.resolved_jwt_access_secret, token)
+    except InvalidAccessTokenError as exc:
+        raise ApiError(code=ErrorCode.UNAUTHENTICATED, status_code=status.HTTP_401_UNAUTHORIZED) from exc
+    return RequestUser(
+        user_id=claims.sub,
+        role=claims.role,
+        session_id=claims.session_id,
+        mfa_verified=claims.mfa_verified,
+    )
 
 
 CurrentUserDep = Annotated[RequestUser, Depends(get_current_user)]
+
+
+def require_role(required_role: str) -> Callable[[RequestUser], RequestUser]:
+    """Dependency factory: 403 FORBIDDEN unless the caller holds `required_role`."""
+
+    def _dependency(user: CurrentUserDep) -> RequestUser:
+        if user.role != required_role:
+            raise ApiError(code=ErrorCode.FORBIDDEN, status_code=status.HTTP_403_FORBIDDEN)
+        return user
+
+    return _dependency
 
 
 def get_intent_repository(db: DatabaseDep) -> IntentRepository:
@@ -233,3 +270,82 @@ def get_twap_slice_worker_command(
 
 
 TwapSliceWorkerCommandDep = Annotated[TwapSliceWorkerCommand, Depends(get_twap_slice_worker_command)]
+
+
+# --- L1 auth wiring ---
+# All of these wrap the same request-scoped DB session (DatabaseDep is cached per
+# request), so a command and its repos share one transaction.
+
+
+def get_user_repository(db: DatabaseDep) -> UserRepository:
+    return UserRepository(db)
+
+
+UserRepoDep = Annotated[UserRepository, Depends(get_user_repository)]
+
+
+def get_refresh_token_repository(db: DatabaseDep) -> RefreshTokenRepository:
+    return RefreshTokenRepository(db)
+
+
+RefreshTokenRepoDep = Annotated[RefreshTokenRepository, Depends(get_refresh_token_repository)]
+
+
+def get_audit_writer(db: DatabaseDep) -> AuditEventWriter:
+    return AuditEventWriter(db)
+
+
+AuditWriterDep = Annotated[AuditEventWriter, Depends(get_audit_writer)]
+
+
+def get_rate_limiter(db: DatabaseDep) -> RateLimiter:
+    return RateLimiter(db)
+
+
+RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter)]
+
+
+def get_password_hasher(settings: SettingsDep) -> PasswordHasher:
+    return build_password_hasher(settings)
+
+
+PasswordHasherDep = Annotated[PasswordHasher, Depends(get_password_hasher)]
+
+
+def get_login_command(
+    db: DatabaseDep,
+    settings: SettingsDep,
+    users: UserRepoDep,
+    refresh_tokens: RefreshTokenRepoDep,
+    rate_limiter: RateLimiterDep,
+    audit: AuditWriterDep,
+    hasher: PasswordHasherDep,
+) -> LoginCommand:
+    return LoginCommand(db, settings, users, refresh_tokens, rate_limiter, audit, hasher)
+
+
+LoginCommandDep = Annotated[LoginCommand, Depends(get_login_command)]
+
+
+def get_refresh_command(
+    db: DatabaseDep,
+    settings: SettingsDep,
+    users: UserRepoDep,
+    refresh_tokens: RefreshTokenRepoDep,
+    audit: AuditWriterDep,
+) -> RefreshCommand:
+    return RefreshCommand(db, settings, users, refresh_tokens, audit)
+
+
+RefreshCommandDep = Annotated[RefreshCommand, Depends(get_refresh_command)]
+
+
+def get_logout_command(
+    db: DatabaseDep,
+    refresh_tokens: RefreshTokenRepoDep,
+    audit: AuditWriterDep,
+) -> LogoutCommand:
+    return LogoutCommand(db, refresh_tokens, audit)
+
+
+LogoutCommandDep = Annotated[LogoutCommand, Depends(get_logout_command)]
