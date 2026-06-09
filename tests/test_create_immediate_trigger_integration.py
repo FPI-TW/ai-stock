@@ -63,6 +63,10 @@ def create_engine_module() -> Generator[Engine]:
     try:
         yield engine
     finally:
+        # Clear intents (incl. market_*) before downgrade so the 202605280004
+        # status guard doesn't block `downgrade base`.
+        with engine.begin() as conn:
+            conn.execute(text("TRUNCATE notifications, trigger_events, trade_intents CASCADE"))
         engine.dispose()
         command.downgrade(config, "base")
 
@@ -312,8 +316,11 @@ def test_market_order_create_uses_current_price_snapshot_when_stream_cache_is_co
     body = response.json()["data"]
     intent_id = UUID(body["id"])
     assert body["status"] == "triggered"
-    assert body["targetPriceEffective"] == "600.0000"
+    # Market orders carry no target price (the target_price_presence CHECK forbids it);
+    # the execution price lives on the TriggerEvent, asserted below.
+    assert body["targetPriceEffective"] is None
     assert body["filledQuantityLots"] == 2
     assert quote_provider.current_price_symbols == ["2330"]
     trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
     assert trigger_row.trigger_price == Decimal("600.0000")
+    assert trigger_row.target_price_effective == Decimal("600.0000")

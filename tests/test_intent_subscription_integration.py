@@ -27,8 +27,16 @@ from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.core.security import RequestUser
 from app.db.models.core import Symbol, TradeIntent
+from app.domain.trading_session import TradingSessionService
 from app.main import create_app
 from app.services.quote.in_memory import InMemoryQuoteProvider
+
+
+def _current_trading_date() -> date:
+    """The trading_date a freshly created day-intent would carry right now, so the
+    startup lifecycle (real clock) never expires the seeded intent."""
+    service = TradingSessionService()
+    return service.get_day_intent_trading_date(service.now_taipei())
 
 
 def _alembic_config() -> Config:
@@ -89,7 +97,7 @@ def _seed_intent(session: Session, *, owner_id: UUID, status: str = "active") ->
             target_price_original=Decimal("600.0000"),
             target_price_effective=Decimal("600.0000"),
             trigger_reference_price_type="ask",
-            trading_date=date(2026, 5, 11),
+            trading_date=_current_trading_date(),
             time_in_force="day",
             status=status,
         )
