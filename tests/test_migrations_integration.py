@@ -43,9 +43,17 @@ def test_migration_upgrade_creates_v0_5_schema(migrated_engine: Engine) -> None:
     inspector = sa.inspect(migrated_engine)
 
     assert {"symbols", "trade_intents", "trigger_events", "notifications"}.issubset(inspector.get_table_names())
-    assert not {"audit_events", "outbox_events", "notification_deliveries", "import_reports", "users"}.intersection(
-        inspector.get_table_names()
-    )
+    # L1 identity tables now ship at head (audit_events lives in L1 per the de-stub decision).
+    assert {
+        "users",
+        "invitations",
+        "password_resets",
+        "refresh_tokens",
+        "rate_limit_buckets",
+        "audit_events",
+    }.issubset(inspector.get_table_names())
+    # P2 / P4 tables remain future work and must not exist yet.
+    assert not {"outbox_events", "notification_deliveries", "import_reports"}.intersection(inspector.get_table_names())
     for table_name in ("symbols", "trade_intents", "trigger_events", "notifications"):
         assert "created_at" in {column["name"] for column in inspector.get_columns(table_name)}
     for table_name in ("symbols", "trade_intents", "notifications"):

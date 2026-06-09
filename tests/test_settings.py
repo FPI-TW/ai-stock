@@ -30,11 +30,35 @@ def test_missing_local_user_id_with_local_mode_true_raises(monkeypatch: pytest.M
 def test_missing_local_user_id_with_local_mode_false_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LOCAL_USER_ID", raising=False)
     monkeypatch.setenv("LOCAL_MODE", "false")
+    monkeypatch.setenv("JWT_ACCESS_SECRET", "prod-secret")  # production requires its own secret
 
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.local_mode is False
     assert settings.local_user_id is None
+
+
+def test_missing_jwt_secret_with_local_mode_false_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    monkeypatch.delenv("JWT_ACCESS_SECRET", raising=False)
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert "JWT_ACCESS_SECRET is required when LOCAL_MODE is false" in str(exc_info.value)
+
+
+def test_jwt_secret_falls_back_to_dev_in_local_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.delenv("JWT_ACCESS_SECRET", raising=False)
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.jwt_access_secret is None
+    assert settings.resolved_jwt_access_secret  # dev fallback is non-empty
+    assert settings.cookie_secure is False  # LOCAL_MODE relaxes the Secure flag
 
 
 def test_malformed_local_user_id_raises(monkeypatch: pytest.MonkeyPatch) -> None:
