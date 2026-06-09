@@ -31,6 +31,7 @@ def test_missing_local_user_id_with_local_mode_false_allowed(monkeypatch: pytest
     monkeypatch.delenv("LOCAL_USER_ID", raising=False)
     monkeypatch.setenv("LOCAL_MODE", "false")
     monkeypatch.setenv("JWT_ACCESS_SECRET", "prod-secret")  # production requires its own secret
+    monkeypatch.setenv("MFA_ENCRYPTION_KEY", "prod-mfa-key")  # ...and an MFA key
 
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 

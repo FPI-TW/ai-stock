@@ -18,6 +18,9 @@ from app.domain.auth import (
     InvitationInvalidError,
     LoginFailedError,
     LoginLockedError,
+    MfaAlreadyEnabledError,
+    MfaInvalidCodeError,
+    MfaNotSetupError,
     MfaRequiredError,
     PasswordResetInvalidError,
     RateLimitedError,
@@ -85,6 +88,9 @@ class ErrorCode(StrEnum):
     WEAK_PASSWORD = "WEAK_PASSWORD"
     TERMS_NOT_ACCEPTED = "TERMS_NOT_ACCEPTED"
     PASSWORD_RESET_INVALID = "PASSWORD_RESET_INVALID"
+    MFA_INVALID_CODE = "MFA_INVALID_CODE"
+    MFA_ALREADY_ENABLED = "MFA_ALREADY_ENABLED"
+    MFA_NOT_SETUP = "MFA_NOT_SETUP"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -127,6 +133,9 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.WEAK_PASSWORD: "密碼長度至少需 8 個字元",
     ErrorCode.TERMS_NOT_ACCEPTED: "必須接受服務條款",
     ErrorCode.PASSWORD_RESET_INVALID: "重設連結無效或已過期",
+    ErrorCode.MFA_INVALID_CODE: "驗證碼錯誤",
+    ErrorCode.MFA_ALREADY_ENABLED: "已啟用兩階段驗證",
+    ErrorCode.MFA_NOT_SETUP: "尚未設定兩階段驗證",
 }
 
 
@@ -217,6 +226,8 @@ def register_exception_handlers(app: FastAPI) -> None:
             return build_error_response(request, status.HTTP_401_UNAUTHORIZED, ErrorCode.REFRESH_INVALID)
         if isinstance(exc, CsrfFailedError):
             return build_error_response(request, status.HTTP_403_FORBIDDEN, ErrorCode.CSRF_FAILED)
+        if isinstance(exc, MfaInvalidCodeError):
+            return build_error_response(request, status.HTTP_422_UNPROCESSABLE_CONTENT, ErrorCode.MFA_INVALID_CODE)
         if isinstance(exc, RateLimitedError):
             retry_after = max(1, ceil(exc.retry_after_seconds))
             response = build_error_response(
@@ -250,6 +261,10 @@ def register_exception_handlers(app: FastAPI) -> None:
             return build_error_response(request, status.HTTP_422_UNPROCESSABLE_CONTENT, ErrorCode.TERMS_NOT_ACCEPTED)
         if isinstance(exc, PasswordResetInvalidError):
             return build_error_response(request, status.HTTP_400_BAD_REQUEST, ErrorCode.PASSWORD_RESET_INVALID)
+        if isinstance(exc, MfaAlreadyEnabledError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.MFA_ALREADY_ENABLED)
+        if isinstance(exc, MfaNotSetupError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.MFA_NOT_SETUP)
         return build_error_response(request, status.HTTP_400_BAD_REQUEST, ErrorCode.VALIDATION_ERROR)
 
     @app.exception_handler(SymbolError)

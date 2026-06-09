@@ -106,11 +106,12 @@ def issue_session(
     parent_token_id: UUID | None,
     user_agent: str | None,
     ip: str | None,
+    mfa_verified: bool = False,
 ) -> IssuedSession:
     """Mint a refresh token (stored as hash) + a stateless access JWT + a CSRF token.
 
-    mfa_verified is always False at issuance in V1: admins gain a verified factor
-    only through the dedicated 2FA verify flow (Phase 4); refresh never elevates it.
+    `mfa_verified` is False at login/accept; it is carried forward by RefreshCommand
+    so an admin's 2FA step-up survives access-token rotation.
     """
     refresh_ttl = _refresh_ttl_seconds(settings, user.role)
     refresh_expires_at = now + timedelta(seconds=refresh_ttl)
@@ -122,6 +123,7 @@ def issue_session(
         parent_token_id=parent_token_id,
         user_agent=user_agent,
         ip=ip,
+        mfa_verified=mfa_verified,
     )
 
     access_ttl = _access_ttl_seconds(settings, user.role)
@@ -132,7 +134,7 @@ def issue_session(
         session_id=token_id,
         ttl_seconds=access_ttl,
         now=now,
-        mfa_verified=False,
+        mfa_verified=mfa_verified,
     )
     return IssuedSession(
         access_token=access_token,
@@ -287,7 +289,8 @@ class RefreshCommand:
             if user is None or user.status != "active":
                 raise RefreshInvalidError()
 
-            # Rotate: revoke the presented token and mint its successor.
+            # Rotate: revoke the presented token and mint its successor, carrying the
+            # session's 2FA-verified state forward so admins don't re-verify each cycle.
             self._refresh.revoke(token.id, reason="rotated", now=inp.now)
             issued = issue_session(
                 self._refresh,
@@ -297,6 +300,7 @@ class RefreshCommand:
                 parent_token_id=token.id,
                 user_agent=inp.user_agent,
                 ip=inp.ip,
+                mfa_verified=token.mfa_verified,
             )
             self._audit.write(
                 event_type="session_refreshed",

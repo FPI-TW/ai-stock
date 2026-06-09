@@ -19,6 +19,7 @@ from app.commands.password_reset import PasswordResetConfirmCommand, PasswordRes
 from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand
 from app.commands.trigger_intent import TriggerIntentCommand
 from app.commands.twap import TwapConfirmCommand, TwapPlanCommand, TwapSliceWorkerCommand
+from app.commands.two_factor import SetupTwoFactorCommand, VerifyTwoFactorCommand
 from app.core.config import REQUIRED_CURRENT_PRICE_PROVIDER, Settings, get_settings
 from app.core.passwords import build_password_hasher
 from app.core.rate_limiter import RateLimiter
@@ -115,6 +116,11 @@ def get_admin_user(user: CurrentUserDep) -> RequestUser:
 
 
 AdminUserDep = Annotated[RequestUser, Depends(get_admin_user)]
+
+# Admin role WITHOUT the 2FA requirement — for the 2FA enrolment/verify endpoints,
+# which must be reachable before a factor is verified (chicken-and-egg otherwise).
+_require_admin_role = require_role("admin")
+AdminRoleDep = Annotated[RequestUser, Depends(_require_admin_role)]
 
 
 def get_intent_repository(db: DatabaseDep) -> IntentRepository:
@@ -429,6 +435,31 @@ def get_resend_invitation_command(
 
 
 ResendInvitationCommandDep = Annotated[ResendInvitationCommand, Depends(get_resend_invitation_command)]
+
+
+def get_setup_two_factor_command(
+    db: DatabaseDep,
+    settings: SettingsDep,
+    users: UserRepoDep,
+    audit: AuditWriterDep,
+) -> SetupTwoFactorCommand:
+    return SetupTwoFactorCommand(db, settings, users, audit)
+
+
+SetupTwoFactorCommandDep = Annotated[SetupTwoFactorCommand, Depends(get_setup_two_factor_command)]
+
+
+def get_verify_two_factor_command(
+    db: DatabaseDep,
+    settings: SettingsDep,
+    users: UserRepoDep,
+    refresh_tokens: RefreshTokenRepoDep,
+    audit: AuditWriterDep,
+) -> VerifyTwoFactorCommand:
+    return VerifyTwoFactorCommand(db, settings, users, refresh_tokens, audit)
+
+
+VerifyTwoFactorCommandDep = Annotated[VerifyTwoFactorCommand, Depends(get_verify_two_factor_command)]
 
 
 def get_accept_invitation_command(

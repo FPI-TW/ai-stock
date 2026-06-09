@@ -8,15 +8,27 @@ from uuid import UUID
 from fastapi import APIRouter, Request, status
 
 from app.api.deps import (
+    AdminRoleDep,
     AdminUserDep,
     CreateUserCommandDep,
     DisableUserCommandDep,
     ResendInvitationCommandDep,
+    SetupTwoFactorCommandDep,
     UserRepoDep,
+    VerifyTwoFactorCommandDep,
 )
 from app.api.errors import get_request_id
-from app.api.schemas.admin import CreateUserRequest, CreateUserResponse, UserListResponse, UserSummary
+from app.api.schemas.admin import (
+    CreateUserRequest,
+    CreateUserResponse,
+    TwoFactorSetupResponse,
+    TwoFactorVerifyRequest,
+    TwoFactorVerifyResponse,
+    UserListResponse,
+    UserSummary,
+)
 from app.commands.account import CreateUserInput, DisableUserInput, ResendInvitationInput
+from app.commands.two_factor import SetupTwoFactorInput, VerifyTwoFactorInput
 
 router = APIRouter()
 
@@ -89,3 +101,36 @@ def resend_invitation(
             request_id=get_request_id(request),
         )
     )
+
+
+# 2FA enrolment/verify: gated by admin role only (NOT AdminUserDep) so an admin
+# without a verified factor can still enrol.
+@router.post("/2fa/setup", response_model=TwoFactorSetupResponse)
+def setup_two_factor(
+    request: Request,
+    admin: AdminRoleDep,
+    command: SetupTwoFactorCommandDep,
+) -> TwoFactorSetupResponse:
+    result = command.execute(
+        SetupTwoFactorInput(admin_user_id=admin.user_id, now=datetime.now(UTC), request_id=get_request_id(request))
+    )
+    return TwoFactorSetupResponse(provisioning_uri=result.provisioning_uri, secret=result.secret)
+
+
+@router.post("/2fa/verify", response_model=TwoFactorVerifyResponse)
+def verify_two_factor(
+    request: Request,
+    body: TwoFactorVerifyRequest,
+    admin: AdminRoleDep,
+    command: VerifyTwoFactorCommandDep,
+) -> TwoFactorVerifyResponse:
+    result = command.execute(
+        VerifyTwoFactorInput(
+            admin_user_id=admin.user_id,
+            session_id=admin.session_id,
+            code=body.code,
+            now=datetime.now(UTC),
+            request_id=get_request_id(request),
+        )
+    )
+    return TwoFactorVerifyResponse(access_token=result.access_token, expires_in=result.expires_in, role=result.role)

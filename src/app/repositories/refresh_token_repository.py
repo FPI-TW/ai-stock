@@ -23,6 +23,7 @@ def _to_domain(row: RefreshToken) -> RefreshTokenData:
         expires_at=row.expires_at,
         revoked_at=row.revoked_at,
         revoked_reason=row.revoked_reason,
+        mfa_verified=row.mfa_verified,
     )
 
 
@@ -39,6 +40,7 @@ class RefreshTokenRepository:
         parent_token_id: UUID | None = None,
         user_agent: str | None = None,
         ip: str | None = None,
+        mfa_verified: bool = False,
     ) -> UUID:
         token_id = uuid4()
         self._db.add(
@@ -50,10 +52,18 @@ class RefreshTokenRepository:
                 expires_at=expires_at,
                 user_agent=user_agent,
                 ip=ip,
+                mfa_verified=mfa_verified,
             )
         )
         self._db.flush()
         return token_id
+
+    def mark_mfa_verified(self, token_id: UUID) -> None:
+        """Flag a session's refresh token as 2FA-cleared (admin verify step-up)."""
+        self._db.execute(
+            update(RefreshToken).where(RefreshToken.id == token_id).values(mfa_verified=True),
+            execution_options={"synchronize_session": False},
+        )
 
     def find_by_hash(self, token_hash: str) -> RefreshTokenData | None:
         row = self._db.execute(select(RefreshToken).where(RefreshToken.token_hash == token_hash)).scalar_one_or_none()

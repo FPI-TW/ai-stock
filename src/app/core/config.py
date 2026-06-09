@@ -1,3 +1,4 @@
+import base64
 from functools import lru_cache
 from typing import Literal
 from uuid import UUID
@@ -13,6 +14,9 @@ CURRENT_PRICE_SOURCE_NAME = "shioaji"
 # so local runs / tests exercise the full auth flow without env wiring. Production
 # (LOCAL_MODE=false) fails fast when the env secret is missing — never this value.
 _DEV_JWT_ACCESS_SECRET = "dev-only-insecure-jwt-access-secret-do-not-use-in-prod"
+# Fixed dev Fernet key (32 bytes, base64url) for encrypting admin TOTP secrets in
+# LOCAL_MODE only. Production must supply MFA_ENCRYPTION_KEY.
+_DEV_MFA_ENCRYPTION_KEY = base64.urlsafe_b64encode(b"dev-mfa-key-do-not-use-in-prod!!").decode()
 
 
 class Settings(BaseSettings):
@@ -66,6 +70,9 @@ class Settings(BaseSettings):
     argon2_time_cost: int = Field(default=3, alias="ARGON2_TIME_COST")
     argon2_memory_cost: int = Field(default=65_536, alias="ARGON2_MEMORY_COST")
     argon2_parallelism: int = Field(default=4, alias="ARGON2_PARALLELISM")
+    # Fernet key (base64url, 32 bytes) for encrypting admin TOTP secrets at rest.
+    # Required in production; LOCAL_MODE falls back to a fixed dev key.
+    mfa_encryption_key: str | None = Field(default=None, alias="MFA_ENCRYPTION_KEY")
 
     @model_validator(mode="after")
     def _enforce_local_user_id(self) -> "Settings":
@@ -79,6 +86,19 @@ class Settings(BaseSettings):
         if not self.local_mode and not self.jwt_access_secret:
             raise ValueError("JWT_ACCESS_SECRET is required when LOCAL_MODE is false")
         return self
+
+    @model_validator(mode="after")
+    def _enforce_mfa_encryption_key(self) -> "Settings":
+        if not self.local_mode and not self.mfa_encryption_key:
+            raise ValueError("MFA_ENCRYPTION_KEY is required when LOCAL_MODE is false")
+        return self
+
+    @property
+    def resolved_mfa_encryption_key(self) -> str:
+        """The active TOTP-secret encryption key; dev fallback only in LOCAL_MODE."""
+        if self.mfa_encryption_key:
+            return self.mfa_encryption_key
+        return _DEV_MFA_ENCRYPTION_KEY
 
     @property
     def resolved_jwt_access_secret(self) -> str:

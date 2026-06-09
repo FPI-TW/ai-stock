@@ -30,3 +30,21 @@ class UserSummary(BaseModel):
 
 class UserListResponse(BaseModel):
     data: list[UserSummary]
+
+
+class TwoFactorSetupResponse(BaseModel):
+    provisioning_uri: str = Field(serialization_alias="provisioningUri")
+    secret: str
+
+
+class TwoFactorVerifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+
+
+class TwoFactorVerifyResponse(BaseModel):
+    access_token: str = Field(serialization_alias="accessToken")
+    token_type: str = Field(default="Bearer", serialization_alias="tokenType")
+    expires_in: int = Field(serialization_alias="expiresIn")
+    role: str

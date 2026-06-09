@@ -124,6 +124,8 @@ class RefreshToken(Base):
     revoked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
     ip: Mapped[str | None] = mapped_column(INET, nullable=True)
+    # Whether this session has cleared admin 2FA; carried forward across rotation.
+    mfa_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
 
 class RateLimitBucket(Base):

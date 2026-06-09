@@ -48,6 +48,23 @@ class UserRepository:
             execution_options={"synchronize_session": False},
         )
 
+    def get_mfa_secret_encrypted(self, user_id: UUID) -> bytes | None:
+        return self._db.execute(select(User.mfa_secret_encrypted).where(User.id == user_id)).scalar_one_or_none()
+
+    def set_mfa_secret(self, user_id: UUID, *, encrypted_secret: bytes, now: datetime) -> None:
+        """Store a (re)generated TOTP secret. Does not enable MFA — that happens on
+        the first successful verify."""
+        self._db.execute(
+            update(User).where(User.id == user_id).values(mfa_secret_encrypted=encrypted_secret, updated_at=now),
+            execution_options={"synchronize_session": False},
+        )
+
+    def enable_mfa(self, user_id: UUID, *, now: datetime) -> None:
+        self._db.execute(
+            update(User).where(User.id == user_id).values(mfa_enabled=True, updated_at=now),
+            execution_options={"synchronize_session": False},
+        )
+
     def create_invited(self, *, email: str, role: str) -> UUID:
         """Create an invited (no-password) user. Caller must pre-check email uniqueness
         for a clean error; the DB unique index is the final guard."""

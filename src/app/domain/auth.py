@@ -33,6 +33,7 @@ class RefreshTokenData:
     expires_at: datetime
     revoked_at: datetime | None
     revoked_reason: str | None
+    mfa_verified: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +103,10 @@ class RateLimitedError(AuthError):
         self.retry_after_seconds = retry_after_seconds
 
 
+class MfaInvalidCodeError(AuthError):
+    """The supplied TOTP code did not validate."""
+
+
 class AccountError(Exception):
     """Base class for account-lifecycle failures (invitation / activation)."""
 
@@ -137,3 +142,11 @@ class TermsNotAcceptedError(AccountError):
 class PasswordResetInvalidError(AccountError):
     """Reset token is unknown, already used, or expired. Deliberately undifferentiated
     so the confirm step never reveals which."""
+
+
+class MfaAlreadyEnabledError(AccountError):
+    """2FA setup attempted on an account that already has it enabled (use reset)."""
+
+
+class MfaNotSetupError(AccountError):
+    """2FA verify attempted before any secret was provisioned."""

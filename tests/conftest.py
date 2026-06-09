@@ -46,6 +46,7 @@ def clear_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
         "TWAP_WORKER_ENABLED",
         "TWAP_WORKER_INTERVAL_SECONDS",
         "JWT_ACCESS_SECRET",
+        "MFA_ENCRYPTION_KEY",
     ):
         monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setenv("LOCAL_USER_ID", "00000000-0000-0000-0000-000000000001")
