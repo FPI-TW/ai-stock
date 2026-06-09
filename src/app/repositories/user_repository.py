@@ -37,6 +37,17 @@ class UserRepository:
         row = self._db.execute(select(User).where(User.email == email)).scalar_one_or_none()
         return _to_domain(row) if row is not None else None
 
+    def list_all(self) -> list[UserData]:
+        """Aggregate user list for the admin dashboard (newest first)."""
+        rows = self._db.execute(select(User).order_by(User.created_at.desc())).scalars().all()
+        return [_to_domain(row) for row in rows]
+
+    def disable(self, user_id: UUID, *, now: datetime) -> None:
+        self._db.execute(
+            update(User).where(User.id == user_id).values(status="disabled", disabled_at=now, updated_at=now),
+            execution_options={"synchronize_session": False},
+        )
+
     def create_invited(self, *, email: str, role: str) -> UUID:
         """Create an invited (no-password) user. Caller must pre-check email uniqueness
         for a clean error; the DB unique index is the final guard."""

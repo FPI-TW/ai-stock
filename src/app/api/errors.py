@@ -20,10 +20,12 @@ from app.domain.auth import (
     LoginLockedError,
     MfaRequiredError,
     PasswordResetInvalidError,
+    RateLimitedError,
     RefreshInvalidError,
     RefreshReuseDetectedError,
     TermsNotAcceptedError,
     UnauthenticatedError,
+    UserNotFoundError,
     WeakPasswordError,
 )
 from app.domain.notification import NotificationNotFoundError
@@ -74,6 +76,7 @@ class ErrorCode(StrEnum):
     REFRESH_REUSE_DETECTED = "REFRESH_REUSE_DETECTED"
     CSRF_FAILED = "CSRF_FAILED"
     MFA_REQUIRED = "MFA_REQUIRED"
+    RATE_LIMITED = "RATE_LIMITED"
     # L1 account lifecycle
     EMAIL_ALREADY_EXISTS = "EMAIL_ALREADY_EXISTS"
     INVITATION_INVALID = "INVITATION_INVALID"
@@ -116,6 +119,7 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.REFRESH_REUSE_DETECTED: "偵測到憑證異常使用，已登出所有工作階段",
     ErrorCode.CSRF_FAILED: "CSRF 驗證失敗",
     ErrorCode.MFA_REQUIRED: "需要完成兩階段驗證",
+    ErrorCode.RATE_LIMITED: "請求過於頻繁，請稍後再試",
     ErrorCode.EMAIL_ALREADY_EXISTS: "此 email 已存在",
     ErrorCode.INVITATION_INVALID: "邀請連結無效",
     ErrorCode.INVITATION_EXPIRED: "邀請連結已過期",
@@ -213,6 +217,16 @@ def register_exception_handlers(app: FastAPI) -> None:
             return build_error_response(request, status.HTTP_401_UNAUTHORIZED, ErrorCode.REFRESH_INVALID)
         if isinstance(exc, CsrfFailedError):
             return build_error_response(request, status.HTTP_403_FORBIDDEN, ErrorCode.CSRF_FAILED)
+        if isinstance(exc, RateLimitedError):
+            retry_after = max(1, ceil(exc.retry_after_seconds))
+            response = build_error_response(
+                request,
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                ErrorCode.RATE_LIMITED,
+                details={"retryAfterSeconds": retry_after},
+            )
+            response.headers["Retry-After"] = str(retry_after)
+            return response
         if isinstance(exc, MfaRequiredError):
             return build_error_response(request, status.HTTP_403_FORBIDDEN, ErrorCode.MFA_REQUIRED)
         # Remaining ForbiddenError (and any unmapped AuthError) -> 403 FORBIDDEN.
@@ -220,6 +234,8 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(AccountError)
     async def account_error_handler(request: Request, exc: AccountError) -> JSONResponse:
+        if isinstance(exc, UserNotFoundError):
+            return build_error_response(request, status.HTTP_404_NOT_FOUND, ErrorCode.NOT_FOUND)
         if isinstance(exc, EmailAlreadyExistsError):
             return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.EMAIL_ALREADY_EXISTS)
         if isinstance(exc, InvitationExpiredError):

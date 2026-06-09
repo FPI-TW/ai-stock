@@ -541,3 +541,18 @@ class IntentRepository:
             )
         )
         return int(self._db.execute(stmt).scalar_one())
+
+    def cancel_active_for_owner(self, owner_user_id: UUID, *, status: str, now: datetime) -> int:
+        """Bulk-cancel every active/scheduled intent for an owner (account-disable
+        cascade). Returns the number of intents transitioned. No commit."""
+        result = self._db.execute(
+            update(TradeIntent)
+            .where(
+                TradeIntent.owner_user_id == owner_user_id,
+                TradeIntent.status.in_(CANCELLABLE_STATUSES),
+            )
+            .values(status=status, cancelled_at=now, updated_at=now)
+            .returning(TradeIntent.id),
+            execution_options={"synchronize_session": False},
+        )
+        return len(result.all())

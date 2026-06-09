@@ -70,7 +70,7 @@ class TradeIntent(TimestampMixin, Base):
         CheckConstraint("execution_mode = 'notify_only'", name="execution_mode"),
         CheckConstraint("time_in_force = 'day'", name="time_in_force"),
         CheckConstraint(
-            "status IN ('scheduled', 'active', 'triggered', 'expired', 'cancelled')",
+            "status IN ('scheduled', 'active', 'triggered', 'expired', 'cancelled', 'cancelled_by_account_disabled')",
             name="status",
         ),
         CheckConstraint(

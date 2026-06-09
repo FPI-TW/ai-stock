@@ -94,12 +94,24 @@ class MfaRequiredError(ForbiddenError):
     """Admin endpoint reached without a verified second factor."""
 
 
+class RateLimitedError(AuthError):
+    """A throttled action (e.g. invitation resend) exceeded its bucket."""
+
+    def __init__(self, retry_after_seconds: float) -> None:
+        super().__init__("rate limited")
+        self.retry_after_seconds = retry_after_seconds
+
+
 class AccountError(Exception):
     """Base class for account-lifecycle failures (invitation / activation)."""
 
 
 class EmailAlreadyExistsError(AccountError):
     """Admin tried to create a user whose email already exists."""
+
+
+class UserNotFoundError(AccountError):
+    """Admin referenced a user id that does not exist."""
 
 
 class InvitationInvalidError(AccountError):

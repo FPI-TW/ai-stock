@@ -6,7 +6,12 @@ from fastapi import Depends, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.errors import ApiError, ErrorCode
-from app.commands.account import AcceptInvitationCommand, CreateUserCommand
+from app.commands.account import (
+    AcceptInvitationCommand,
+    CreateUserCommand,
+    DisableUserCommand,
+    ResendInvitationCommand,
+)
 from app.commands.auth import LoginCommand, LogoutCommand, RefreshCommand
 from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.commands.notification import MarkNotificationReadCommand
@@ -397,6 +402,33 @@ def get_create_user_command(
 
 
 CreateUserCommandDep = Annotated[CreateUserCommand, Depends(get_create_user_command)]
+
+
+def get_disable_user_command(
+    db: DatabaseDep,
+    users: UserRepoDep,
+    intents: IntentRepoDep,
+    refresh_tokens: RefreshTokenRepoDep,
+    audit: AuditWriterDep,
+) -> DisableUserCommand:
+    return DisableUserCommand(db, users, intents, refresh_tokens, audit)
+
+
+DisableUserCommandDep = Annotated[DisableUserCommand, Depends(get_disable_user_command)]
+
+
+def get_resend_invitation_command(
+    db: DatabaseDep,
+    users: UserRepoDep,
+    invitations: InvitationRepoDep,
+    rate_limiter: RateLimiterDep,
+    audit: AuditWriterDep,
+    mailer: MailerDep,
+) -> ResendInvitationCommand:
+    return ResendInvitationCommand(db, users, invitations, rate_limiter, audit, mailer)
+
+
+ResendInvitationCommandDep = Annotated[ResendInvitationCommand, Depends(get_resend_invitation_command)]
 
 
 def get_accept_invitation_command(
