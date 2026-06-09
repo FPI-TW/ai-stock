@@ -133,7 +133,7 @@ Indexes：`email unique`、`(status, role)`。
 - [ ] CSRF 缺失/不符 → `CSRF_FAILED`。
 - [ ] admin 建帳號 → 受邀者 accept → login 全鏈路通。
 - [ ] admin 停用帳號 → 該 user intents 轉 `cancelled_by_account_disabled`、refresh 全失效、無法登入。
-- [ ] cross-user：A 不能讀/改 B 的 intent（403 `FORBIDDEN`）。
+- [ ] cross-user：A 不能讀/改 B 的 intent。**實作回 `404 NOT_FOUND`（刻意偏離 spec 字面 403）**：邀請制、各人資料完全隔離、intent id 為不可猜 UUID，「不洩漏存在」比 403 更安全且與既有 `/notifications` 一致；安全屬性「A 無法存取 B」仍成立。
 - [ ] admin 未設 2FA 不能進 admin endpoint（`MFA_REQUIRED`）。
 
 ## 測試要求

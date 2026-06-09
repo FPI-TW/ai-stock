@@ -22,6 +22,7 @@ from app.main import create_app
 from app.repositories.intent_repository import IntentRepository
 from app.services.quote.base import QuoteSnapshot
 from app.services.quote.in_memory import InMemoryQuoteProvider
+from tests.db_helpers import ensure_user
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 # Monday inside the regular session — used for both `now` (via injected clock)
@@ -130,6 +131,7 @@ def _create_active_intent(
 ) -> UUID:
     # PR #12 made IntentRepository.create flush-only and return UUID;
     # the test must commit so the HTTP endpoint (separate session) can see it.
+    ensure_user(db, owner_user_id)
     intent_id = repo.create(
         owner_user_id=owner_user_id,
         symbol=symbol,

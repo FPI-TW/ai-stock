@@ -23,6 +23,7 @@ from app.domain.trade_intent import (
     TradeIntentData,
 )
 from app.repositories.intent_repository import IntentRepository
+from tests.db_helpers import ensure_user
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
@@ -100,6 +101,7 @@ def _create(
     trading_date: date | None = None,
     status: str = "active",
 ) -> TradeIntentData:
+    ensure_user(repo._db, owner_user_id)
     intent_id = repo.create(
         owner_user_id=owner_user_id,
         symbol=symbol,

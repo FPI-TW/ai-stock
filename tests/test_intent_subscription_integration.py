@@ -30,6 +30,7 @@ from app.db.models.core import Symbol, TradeIntent
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
 from app.services.quote.in_memory import InMemoryQuoteProvider
+from tests.db_helpers import ensure_user
 
 
 def _current_trading_date() -> date:
@@ -85,6 +86,7 @@ def db_session(int_engine: Engine) -> Generator[Session]:
 
 
 def _seed_intent(session: Session, *, owner_id: UUID, status: str = "active") -> UUID:
+    ensure_user(session, owner_id)
     intent_id = uuid4()
     session.add(
         TradeIntent(
