@@ -88,7 +88,15 @@ def _seed_active_user(engine: Engine, email: str, *, role: str = "user") -> UUID
     return user_id
 
 
-def _login(engine: Engine, settings: Settings, email: str, password: str, *, now: datetime = _NOW) -> IssuedSession:
+def _login(
+    engine: Engine,
+    settings: Settings,
+    email: str,
+    password: str,
+    *,
+    now: datetime = _NOW,
+    ip: str | None = None,
+) -> IssuedSession:
     with Session(engine) as session:
         cmd = LoginCommand(
             session,
@@ -99,7 +107,7 @@ def _login(engine: Engine, settings: Settings, email: str, password: str, *, now
             AuditEventWriter(session),
             _HASHER,
         )
-        return cmd.execute(LoginInput(email=email, password=password, now=now))
+        return cmd.execute(LoginInput(email=email, password=password, now=now, ip=ip))
 
 
 def _refresh(engine: Engine, settings: Settings, inp: RefreshInput) -> IssuedSession:
@@ -168,6 +176,40 @@ def test_successful_login_refunds_lockout_counter(auth_engine: Engine, settings:
     # not an immediate lockout.
     with pytest.raises(LoginFailedError):
         _login(auth_engine, settings, email, "wrong-password")
+
+
+@pytest.mark.integration
+def test_login_ip_throttle_caps_cross_email_stuffing(auth_engine: Engine, settings: Settings) -> None:
+    # Credential stuffing: many distinct emails from one IP. The per-email bucket never
+    # trips (each email is fresh), so the cap must come from the global per-IP bucket.
+    ip = "203.0.113.7"
+    for _ in range(20):  # LOGIN_IP_BUCKET_CAPACITY
+        with pytest.raises(LoginFailedError):
+            _login(auth_engine, settings, f"stuff-{uuid4()}@example.com", "x", ip=ip)
+    # The 21st attempt from the same IP is throttled regardless of (a fresh) email.
+    with pytest.raises(LoginLockedError):
+        _login(auth_engine, settings, f"stuff-{uuid4()}@example.com", "x", ip=ip)
+    # A different IP is unaffected — the throttle is per-source, not global-global.
+    with pytest.raises(LoginFailedError):
+        _login(auth_engine, settings, f"stuff-{uuid4()}@example.com", "x", ip="198.51.100.9")
+
+
+@pytest.mark.integration
+def test_login_ip_throttle_is_not_refunded_by_success(auth_engine: Engine, settings: Settings) -> None:
+    # Unlike the email bucket, a successful login must NOT reset the IP budget —
+    # otherwise an attacker could interleave one known-good login to keep stuffing.
+    ip = "203.0.113.8"
+    email = f"ip-refund-{uuid4()}@example.com"
+    _seed_active_user(auth_engine, email)
+
+    for _ in range(19):  # burn 19 of 20 IP tokens with fresh unknown emails
+        with pytest.raises(LoginFailedError):
+            _login(auth_engine, settings, f"stuff-{uuid4()}@example.com", "x", ip=ip)
+    # A genuine success consumes the 20th token and refunds only the *email* bucket.
+    assert _login(auth_engine, settings, email, _PASSWORD, ip=ip).access_token
+    # IP bucket is now empty: the next attempt from this IP is locked, not merely failed.
+    with pytest.raises(LoginLockedError):
+        _login(auth_engine, settings, f"stuff-{uuid4()}@example.com", "x", ip=ip)
 
 
 @pytest.mark.integration

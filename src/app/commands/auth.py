@@ -43,6 +43,15 @@ logger = logging.getLogger(__name__)
 LOGIN_BUCKET_CAPACITY = 5.0
 LOGIN_BUCKET_REFILL_PER_SECOND = 1.0 / 900.0
 
+# Global per-IP login throttle (spec §13: "同一 IP 套用全域 rate limit"). Deliberately
+# coarser than the per-email lockout so a shared/NAT IP isn't locked by normal use,
+# while credential stuffing that sprays many emails from one source is still capped.
+# 20 burst, refill 20 per 15 min. Unlike the email bucket this is NEVER reset on a
+# successful login — otherwise an attacker could use one known-good credential to
+# refill the IP budget and keep stuffing from the same source.
+LOGIN_IP_BUCKET_CAPACITY = 20.0
+LOGIN_IP_BUCKET_REFILL_PER_SECOND = 20.0 / 900.0
+
 
 @dataclass(frozen=True, slots=True)
 class IssuedSession:
@@ -167,10 +176,30 @@ class LoginCommand:
         self._hasher = hasher
 
     def execute(self, inp: LoginInput) -> IssuedSession:
-        bucket = f"login:{inp.email.strip().lower()}"
+        email_bucket = f"login:{inp.email.strip().lower()}"
         try:
+            # Global per-IP gate first (spec §13): caps credential stuffing that sprays
+            # many emails from one source, independent of the per-email lockout below.
+            if inp.ip is not None:
+                ip_decision = self._rate_limiter.consume(
+                    f"login:ip:{inp.ip}",
+                    capacity=LOGIN_IP_BUCKET_CAPACITY,
+                    refill_per_second=LOGIN_IP_BUCKET_REFILL_PER_SECOND,
+                    now=inp.now,
+                )
+                if not ip_decision.allowed:
+                    self._audit.write(
+                        event_type="login_failed",
+                        actor_type="user",
+                        metadata={"reason": "ip_rate_limited"},
+                        request_id=inp.request_id,
+                        now=inp.now,
+                    )
+                    self._db.commit()
+                    raise LoginLockedError(ip_decision.retry_after_seconds)
+
             decision = self._rate_limiter.consume(
-                bucket,
+                email_bucket,
                 capacity=LOGIN_BUCKET_CAPACITY,
                 refill_per_second=LOGIN_BUCKET_REFILL_PER_SECOND,
                 now=inp.now,
@@ -205,8 +234,9 @@ class LoginCommand:
                 self._db.commit()
                 raise LoginFailedError()
 
-            # Success: refund the lockout counter, mint a session, audit.
-            self._rate_limiter.reset(bucket)
+            # Success: refund the per-email lockout counter, mint a session, audit.
+            # The per-IP bucket is intentionally NOT reset (see LOGIN_IP_BUCKET_* docs).
+            self._rate_limiter.reset(email_bucket)
             issued = issue_session(
                 self._refresh,
                 self._settings,
