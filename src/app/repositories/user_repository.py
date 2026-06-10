@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.db.models.auth import User
-from app.domain.auth import UserData
+from app.domain.auth import UserData, normalize_email
 
 
 def _to_domain(row: User) -> UserData:
@@ -33,8 +33,9 @@ class UserRepository:
         return _to_domain(row) if row is not None else None
 
     def get_by_email(self, email: str) -> UserData | None:
-        # email is citext, so the comparison is case-insensitive.
-        row = self._db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+        # email is citext (case-insensitive), but does not strip whitespace; normalize
+        # so the lookup key matches what create_invited stored and the bucket keys use.
+        row = self._db.execute(select(User).where(User.email == normalize_email(email))).scalar_one_or_none()
         return _to_domain(row) if row is not None else None
 
     def list_all(self) -> list[UserData]:
@@ -69,7 +70,7 @@ class UserRepository:
         """Create an invited (no-password) user. Caller must pre-check email uniqueness
         for a clean error; the DB unique index is the final guard."""
         user_id = uuid4()
-        self._db.add(User(id=user_id, email=email, role=role, status="invited"))
+        self._db.add(User(id=user_id, email=normalize_email(email), role=role, status="invited"))
         self._db.flush()
         return user_id
 

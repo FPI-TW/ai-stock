@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.passwords import hash_password, is_password_strong_enough
 from app.core.rate_limiter import RateLimiter
 from app.core.tokens import generate_url_token, hash_url_token
-from app.domain.auth import AccountError, AuthError, PasswordResetInvalidError, WeakPasswordError
+from app.domain.auth import AccountError, AuthError, PasswordResetInvalidError, WeakPasswordError, normalize_email
 from app.repositories.password_reset_repository import PasswordResetRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.user_repository import UserRepository
@@ -70,7 +70,7 @@ class PasswordResetRequestCommand:
         """Always succeeds from the caller's view. Side effects (token + mail) happen
         only for an active account within rate limits."""
         try:
-            email = inp.email.strip().lower()
+            email = normalize_email(inp.email)
             email_ok = self._rate_limiter.consume(
                 f"pwreset:email:{email}",
                 capacity=_EMAIL_CAPACITY,

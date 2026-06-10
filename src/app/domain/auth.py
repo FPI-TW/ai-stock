@@ -10,6 +10,14 @@ from datetime import datetime
 from uuid import UUID
 
 
+def normalize_email(email: str) -> str:
+    """Canonical email key: strip surrounding whitespace + lowercase. Used on every
+    read/write of users.email AND for the per-email rate-limit bucket keys, so the
+    bucket key and the DB lookup can never diverge (the column is citext, i.e.
+    case-insensitive, but it does NOT strip whitespace)."""
+    return email.strip().lower()
+
+
 @dataclass(frozen=True, slots=True)
 class UserData:
     id: UUID

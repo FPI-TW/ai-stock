@@ -32,6 +32,7 @@ from app.domain.auth import (
     RefreshInvalidError,
     RefreshReuseDetectedError,
     UserData,
+    normalize_email,
 )
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.user_repository import UserRepository
@@ -176,7 +177,7 @@ class LoginCommand:
         self._hasher = hasher
 
     def execute(self, inp: LoginInput) -> IssuedSession:
-        email_bucket = f"login:{inp.email.strip().lower()}"
+        email_bucket = f"login:{normalize_email(inp.email)}"
         try:
             # Global per-IP gate first (spec §13): caps credential stuffing that sprays
             # many emails from one source, independent of the per-email lockout below.

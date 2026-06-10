@@ -179,6 +179,20 @@ def test_successful_login_refunds_lockout_counter(auth_engine: Engine, settings:
 
 
 @pytest.mark.integration
+def test_login_normalizes_email_whitespace_and_case(auth_engine: Engine, settings: Settings) -> None:
+    # Seeded clean+lowercase; login with surrounding whitespace + mixed case must still
+    # resolve the same user — proving get_by_email and the login bucket share one
+    # normalization (citext covers case; normalize_email adds the strip).
+    email = f"normalize-{uuid4()}@example.com"
+    user_id = _seed_active_user(auth_engine, email)
+
+    issued = _login(auth_engine, settings, f"  {email.upper()}  ", _PASSWORD)
+
+    claims = decode_access_token(settings.resolved_jwt_access_secret, issued.access_token, now=_NOW)
+    assert claims.sub == user_id
+
+
+@pytest.mark.integration
 def test_login_ip_throttle_caps_cross_email_stuffing(auth_engine: Engine, settings: Settings) -> None:
     # Credential stuffing: many distinct emails from one IP. The per-email bucket never
     # trips (each email is fresh), so the cap must come from the global per-IP bucket.
