@@ -454,9 +454,10 @@ def get_verify_two_factor_command(
     settings: SettingsDep,
     users: UserRepoDep,
     refresh_tokens: RefreshTokenRepoDep,
+    rate_limiter: RateLimiterDep,
     audit: AuditWriterDep,
 ) -> VerifyTwoFactorCommand:
-    return VerifyTwoFactorCommand(db, settings, users, refresh_tokens, audit)
+    return VerifyTwoFactorCommand(db, settings, users, refresh_tokens, rate_limiter, audit)
 
 
 VerifyTwoFactorCommandDep = Annotated[VerifyTwoFactorCommand, Depends(get_verify_two_factor_command)]

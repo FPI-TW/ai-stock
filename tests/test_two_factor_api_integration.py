@@ -142,6 +142,44 @@ def test_setup_when_already_enabled_is_409(mfa_engine: Engine) -> None:
 
 
 @pytest.mark.integration
+def test_verify_locks_out_after_five_wrong_codes(mfa_engine: Engine) -> None:
+    client, access = _logged_in_admin(mfa_engine, f"admin-2fa-rl-{uuid4()}@example.com")
+    client.post("/admin/2fa/setup", headers=_bearer(access))
+
+    # The first five wrong codes are rejected as invalid (within the attempt budget).
+    for _ in range(5):
+        wrong = client.post("/admin/2fa/verify", json={"code": "000000"}, headers=_bearer(access))
+        assert wrong.status_code == 422
+        assert wrong.json()["error"]["code"] == "MFA_INVALID_CODE"
+
+    # The sixth attempt is throttled before the code is even checked.
+    locked = client.post("/admin/2fa/verify", json={"code": "000000"}, headers=_bearer(access))
+    assert locked.status_code == 429
+    assert locked.json()["error"]["code"] == "RATE_LIMITED"
+    assert int(locked.headers["Retry-After"]) >= 1
+
+
+@pytest.mark.integration
+def test_successful_verify_refunds_the_lockout_counter(mfa_engine: Engine) -> None:
+    client, access = _logged_in_admin(mfa_engine, f"admin-2fa-refund-{uuid4()}@example.com")
+    secret = client.post("/admin/2fa/setup", headers=_bearer(access)).json()["secret"]
+
+    # Burn three attempts, then succeed — success resets the bucket.
+    for _ in range(3):
+        assert client.post("/admin/2fa/verify", json={"code": "000000"}, headers=_bearer(access)).status_code == 422
+    ok = client.post("/admin/2fa/verify", json={"code": pyotp.TOTP(secret).now()}, headers=_bearer(access))
+    assert ok.status_code == 200
+
+    # Because the counter was refunded, a fresh five wrong codes are needed to lock again
+    # (verify still re-checks the code even after 2FA is enabled).
+    for _ in range(5):
+        assert client.post("/admin/2fa/verify", json={"code": "000000"}, headers=_bearer(access)).status_code == 422
+    locked = client.post("/admin/2fa/verify", json={"code": "000000"}, headers=_bearer(access))
+    assert locked.status_code == 429
+    assert locked.json()["error"]["code"] == "RATE_LIMITED"
+
+
+@pytest.mark.integration
 def test_non_admin_cannot_reach_2fa_setup(mfa_engine: Engine) -> None:
     email = f"user-{uuid4()}@example.com"
     with Session(mfa_engine) as session:
