@@ -91,6 +91,23 @@ def get_current_user(request: Request, settings: SettingsDep) -> RequestUser:
 CurrentUserDep = Annotated[RequestUser, Depends(get_current_user)]
 
 
+def get_active_user(user: CurrentUserDep, db: DatabaseDep) -> RequestUser:
+    """Like `get_current_user`, but additionally re-checks the account status in the
+    DB. Access tokens are stateless JWTs valid until TTL, so logout/disable cannot
+    invalidate an already-issued token — a disabled user would otherwise keep write
+    access for up to the token lifetime (≤15 min). Use this on state-changing
+    endpoints (order creation etc.) to close that window; read endpoints rely on the
+    short TTL. 403 ACCOUNT_DISABLED for any non-active (disabled/invited) account.
+    """
+    record = UserRepository(db).get_by_id(user.user_id)
+    if record is None or record.status != "active":
+        raise ApiError(code=ErrorCode.ACCOUNT_DISABLED, status_code=status.HTTP_403_FORBIDDEN)
+    return user
+
+
+ActiveUserDep = Annotated[RequestUser, Depends(get_active_user)]
+
+
 def require_role(required_role: str) -> Callable[[RequestUser], RequestUser]:
     """Dependency factory: 403 FORBIDDEN unless the caller holds `required_role`."""
 

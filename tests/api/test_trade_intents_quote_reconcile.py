@@ -17,7 +17,14 @@ from fastapi import status
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.api.deps import get_current_user, get_db, get_intent_repository, get_quote_provider, get_symbol_service
+from app.api.deps import (
+    get_active_user,
+    get_current_user,
+    get_db,
+    get_intent_repository,
+    get_quote_provider,
+    get_symbol_service,
+)
 from app.core.security import RequestUser
 from app.domain.trade_intent import TradeIntentData
 from app.main import create_app
@@ -94,6 +101,7 @@ def client(
     app.dependency_overrides[get_intent_repository] = lambda: mock_intent_repo
     app.dependency_overrides[get_db] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")
+    app.dependency_overrides[get_active_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")
     yield TestClient(app)
     app.dependency_overrides.clear()
 

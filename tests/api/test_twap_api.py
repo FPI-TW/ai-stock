@@ -8,7 +8,13 @@ import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_current_user, get_intent_repository, get_twap_confirm_command, get_twap_plan_command
+from app.api.deps import (
+    get_active_user,
+    get_current_user,
+    get_intent_repository,
+    get_twap_confirm_command,
+    get_twap_plan_command,
+)
 from app.commands.twap import TwapConfirmOutput
 from app.core.security import RequestUser
 from app.domain.trade_intent import TradeIntentData, TwapSliceData
@@ -121,6 +127,7 @@ def client(plan_command: MagicMock, confirm_command: MagicMock, repo: MagicMock)
     app.dependency_overrides[get_twap_confirm_command] = lambda: confirm_command
     app.dependency_overrides[get_intent_repository] = lambda: repo
     app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=OWNER_ID, role="user")
+    app.dependency_overrides[get_active_user] = lambda: RequestUser(user_id=OWNER_ID, role="user")
     yield TestClient(app)
     app.dependency_overrides.clear()
 

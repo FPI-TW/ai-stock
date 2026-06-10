@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, status
 
 from app.api.deps import (
+    ActiveUserDep,
     CancelTradeIntentCommandDep,
     CreateTradeIntentCommandDep,
     CurrentUserDep,
@@ -59,7 +60,7 @@ def _validate_statuses(statuses: list[str] | None) -> None:
 @router.post("", response_model=IntentCreateResponse, status_code=status.HTTP_201_CREATED)
 def create_intent(
     request: IntentCreateRequest,
-    user: CurrentUserDep,
+    user: ActiveUserDep,
     command: CreateTradeIntentCommandDep,
 ) -> IntentCreateResponse:
     intent = command.execute(
@@ -130,7 +131,7 @@ def preview_twap(
 @router.post("/twap/confirm", response_model=TwapConfirmResponse, status_code=status.HTTP_201_CREATED)
 def confirm_twap(
     request: TwapPlanRequest,
-    user: CurrentUserDep,
+    user: ActiveUserDep,
     command: TwapConfirmCommandDep,
     intent_repo: IntentRepoDep,
 ) -> TwapConfirmResponse:
@@ -165,7 +166,7 @@ def get_intent(
 @router.post("/{intent_id}/cancel", response_model=IntentDetailResponse)
 def cancel_intent(
     intent_id: UUID,
-    user: CurrentUserDep,
+    user: ActiveUserDep,
     command: CancelTradeIntentCommandDep,
     intent_repo: IntentRepoDep,
     lifecycle: IntentLifecycleCommandDep,

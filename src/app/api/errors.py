@@ -73,6 +73,7 @@ class ErrorCode(StrEnum):
     # L1 auth
     UNAUTHENTICATED = "UNAUTHENTICATED"
     FORBIDDEN = "FORBIDDEN"
+    ACCOUNT_DISABLED = "ACCOUNT_DISABLED"
     LOGIN_FAILED = "LOGIN_FAILED"
     LOGIN_LOCKED = "LOGIN_LOCKED"
     REFRESH_INVALID = "REFRESH_INVALID"
@@ -119,6 +120,7 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.TWAP_DUPLICATE_ACTIVE_PLAN: "已存在相同的 TWAP 計畫",
     ErrorCode.UNAUTHENTICATED: "請先登入",
     ErrorCode.FORBIDDEN: "沒有權限執行此操作",
+    ErrorCode.ACCOUNT_DISABLED: "帳號已停用，請重新登入或聯絡管理員",
     ErrorCode.LOGIN_FAILED: "帳號或密碼錯誤",
     ErrorCode.LOGIN_LOCKED: "登入失敗次數過多，請稍後再試",
     ErrorCode.REFRESH_INVALID: "登入憑證已失效，請重新登入",

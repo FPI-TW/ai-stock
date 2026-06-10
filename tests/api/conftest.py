@@ -5,7 +5,14 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_current_user, get_db, get_intent_repository, get_quote_provider, get_symbol_service
+from app.api.deps import (
+    get_active_user,
+    get_current_user,
+    get_db,
+    get_intent_repository,
+    get_quote_provider,
+    get_symbol_service,
+)
 from app.core.security import RequestUser
 from app.main import create_app
 from app.services.quote.in_memory import InMemoryQuoteProvider
@@ -48,5 +55,8 @@ def client(
     app.dependency_overrides[get_quote_provider] = lambda: in_memory_quote_provider
     app.dependency_overrides[get_db] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=TEST_USER_ID, role="user")
+    # get_active_user does a real DB status lookup; mirror the current-user override so
+    # the MagicMock session above isn't queried (write endpoints use ActiveUserDep).
+    app.dependency_overrides[get_active_user] = lambda: RequestUser(user_id=TEST_USER_ID, role="user")
     yield TestClient(app)
     app.dependency_overrides.clear()
