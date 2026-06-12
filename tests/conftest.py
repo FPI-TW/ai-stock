@@ -9,48 +9,15 @@ os.environ.setdefault("LOCAL_MODE", "true")
 os.environ.setdefault("QUOTE_PROVIDER", "in_memory")
 
 from collections.abc import Generator  # noqa: E402
-from typing import (
-    Protocol,  # noqa: E402
-)
+from typing import Protocol  # noqa: E402
 
 import pytest  # noqa: E402
-from alembic import command as _alembic_command  # noqa: E402
-from alembic.config import Config as _AlembicConfig  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy import create_engine as _sa_create_engine  # noqa: E402
-from sqlalchemy import text as _sa_text  # noqa: E402
 
 from app.api.deps import get_database_health_checker  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.db.session import get_engine, get_session_factory  # noqa: E402
 from app.main import create_app  # noqa: E402
-
-# --- Integration-test DB reset hardening ---------------------------------------
-# Integration modules reset via `command.downgrade(config, "base")`. The production
-# migrations carry downgrade guards (refuse to drop while expired / market / account-
-# disabled status rows exist), so a prior module's leftover rows make the next
-# module's reset blow up. Wrap downgrade-to-base to TRUNCATE the data tables first;
-# this is test-only and never touches the real migration behaviour. Downgrades to a
-# specific revision (e.g. the migration tests asserting a guard fires) are untouched.
-_real_alembic_downgrade = _alembic_command.downgrade
-
-
-def _truncate_then_downgrade(config: _AlembicConfig, revision: str, sql: bool = False, tag: str | None = None) -> None:
-    if revision == "base":
-        url = config.get_main_option("sqlalchemy.url")
-        if url:
-            engine = _sa_create_engine(url)
-            try:
-                with engine.begin() as conn:
-                    conn.execute(_sa_text("TRUNCATE trade_intents, twap_slices, trigger_events, notifications CASCADE"))
-            except Exception:
-                pass  # tables may not exist yet (DB already at base)
-            finally:
-                engine.dispose()
-    _real_alembic_downgrade(config, revision, sql=sql, tag=tag)
-
-
-_alembic_command.downgrade = _truncate_then_downgrade
 
 
 class ClientFactory(Protocol):

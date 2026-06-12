@@ -65,6 +65,9 @@ def int_engine() -> Generator[Engine]:
     try:
         yield engine
     finally:
+        with Session(engine) as session:
+            session.execute(delete(TradeIntent).where(TradeIntent.status == "expired"))
+            session.commit()
         engine.dispose()
         command.downgrade(config, "base")
 
