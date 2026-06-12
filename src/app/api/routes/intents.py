@@ -2,7 +2,7 @@ from datetime import date
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Depends, Query, status
 
 from app.api.deps import (
     ActiveUserDep,
@@ -12,6 +12,7 @@ from app.api.deps import (
     IntentRepoDep,
     TwapConfirmCommandDep,
     TwapPlanCommandDep,
+    enforce_mutation_rate_limit,
 )
 from app.api.errors import ApiError, ErrorCode
 from app.api.routes._pagination import validate_cursor
@@ -56,7 +57,12 @@ def _validate_statuses(statuses: list[str] | None) -> None:
         )
 
 
-@router.post("", response_model=IntentCreateResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=IntentCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_mutation_rate_limit)],
+)
 def create_intent(
     request: IntentCreateRequest,
     user: ActiveUserDep,
@@ -162,7 +168,11 @@ def get_intent(
     return IntentDetailResponse(data=map_to_detail_response_data(intent, slices))
 
 
-@router.post("/{intent_id}/cancel", response_model=IntentDetailResponse)
+@router.post(
+    "/{intent_id}/cancel",
+    response_model=IntentDetailResponse,
+    dependencies=[Depends(enforce_mutation_rate_limit)],
+)
 def cancel_intent(
     intent_id: UUID,
     user: ActiveUserDep,

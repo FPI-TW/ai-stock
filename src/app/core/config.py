@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     intent_limit_per_user: int = Field(default=200, alias="INTENT_LIMIT_PER_USER")
     intent_limit_per_symbol: int = Field(default=20, alias="INTENT_LIMIT_PER_SYMBOL")
 
+    # --- L2 §13 global mutating-endpoint rate limit ---
+    # One token bucket per user, shared across every mutating endpoint (create /
+    # cancel / future webhook). capacity = burst, refill = sustained tokens/sec.
+    mutation_rate_limit_capacity: float = Field(default=60.0, alias="MUTATION_RATE_LIMIT_CAPACITY")
+    mutation_rate_limit_refill_per_second: float = Field(default=1.0, alias="MUTATION_RATE_LIMIT_REFILL_PER_SECOND")
+
     # --- L1 auth / session ---
     # HS256 signing secret for short-lived access JWTs. Required in production
     # (LOCAL_MODE=false); LOCAL_MODE falls back to a fixed dev secret. Never log it.

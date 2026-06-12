@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.deps import (
+    enforce_mutation_rate_limit,
     get_active_user,
     get_current_user,
     get_db,
@@ -64,6 +65,9 @@ def client(
     # limit enforcement so `count >= limit` doesn't blow up. Limits are covered by
     # dedicated unit + integration tests.
     app.dependency_overrides[get_intent_limits] = lambda: None
+    # The §13 mutation rate limit runs real bucket SQL; with get_db mocked it has no
+    # real session, so disable it here. Rate limiting is covered by an integration test.
+    app.dependency_overrides[enforce_mutation_rate_limit] = lambda: None
     app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=TEST_USER_ID, role="user")
     # get_active_user does a real DB status lookup; mirror the current-user override so
     # the MagicMock session above isn't queried (write endpoints use ActiveUserDep).

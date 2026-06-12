@@ -27,6 +27,7 @@ from app.core.rate_limiter import RateLimiter
 from app.core.security import RequestUser
 from app.core.tokens import InvalidAccessTokenError, decode_access_token
 from app.db.session import check_database_connectivity, get_session_factory
+from app.domain.auth import RateLimitedError
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
@@ -396,6 +397,32 @@ def get_rate_limiter(db: DatabaseDep) -> RateLimiter:
 
 
 RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter)]
+
+
+def enforce_mutation_rate_limit(
+    user: ActiveUserDep,
+    db: DatabaseDep,
+    rate_limiter: RateLimiterDep,
+    settings: SettingsDep,
+) -> None:
+    """Per-user token bucket shared across every mutating endpoint (§13).
+
+    Consumes one token, then commits immediately to persist the bucket and release
+    the `SELECT ... FOR UPDATE` lock before the endpoint's own work runs (otherwise
+    a slow create would hold the bucket lock and serialise the user's requests).
+    The consume counts whether or not the downstream command later succeeds.
+    """
+    decision = rate_limiter.consume(
+        f"mutation:{user.user_id}",
+        capacity=settings.mutation_rate_limit_capacity,
+        refill_per_second=settings.mutation_rate_limit_refill_per_second,
+    )
+    db.commit()
+    if not decision.allowed:
+        raise RateLimitedError(decision.retry_after_seconds)
+
+
+MutationRateLimitDep = Annotated[None, Depends(enforce_mutation_rate_limit)]
 
 
 def get_system_flag_repository(db: DatabaseDep) -> SystemFlagRepository:
