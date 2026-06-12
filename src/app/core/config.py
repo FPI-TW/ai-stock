@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     mutation_rate_limit_capacity: float = Field(default=60.0, alias="MUTATION_RATE_LIMIT_CAPACITY")
     mutation_rate_limit_refill_per_second: float = Field(default=1.0, alias="MUTATION_RATE_LIMIT_REFILL_PER_SECOND")
 
+    # --- L2 §16 idempotency record GC ---
+    # Background sweep that deletes idempotency_keys past their 24h expiry, so the
+    # table (written once per create/cancel) does not grow without bound.
+    idempotency_cleanup_enabled: bool = Field(default=True, alias="IDEMPOTENCY_CLEANUP_ENABLED")
+    idempotency_cleanup_interval_seconds: float = Field(default=3600.0, alias="IDEMPOTENCY_CLEANUP_INTERVAL_SECONDS")
+
     # --- L1 auth / session ---
     # HS256 signing secret for short-lived access JWTs. Required in production
     # (LOCAL_MODE=false); LOCAL_MODE falls back to a fixed dev secret. Never log it.

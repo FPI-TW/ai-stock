@@ -6,7 +6,7 @@ original result without a second side effect, a reused key with a different body
 """
 
 from collections.abc import Generator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -24,6 +24,8 @@ from app.core.security import RequestUser
 from app.db.models.core import Symbol, TradeIntent
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
+from app.repositories.idempotency_repository import IdempotencyRepository
+from app.services.idempotency_cleanup import IdempotencyCleanupScheduler
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 SESSION_NOW_UTC = datetime(2026, 5, 11, 10, 0, tzinfo=TAIPEI).astimezone(UTC)  # Monday in-session
@@ -123,3 +125,39 @@ def test_missing_idempotency_key_is_rejected(db_session: Session, client: TestCl
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "IDEMPOTENCY_KEY_REQUIRED"
     assert _intent_count(db_session) == 0
+
+
+@pytest.mark.integration
+def test_cleanup_deletes_expired_records_only(engine: Engine, db_session: Session) -> None:
+    now = datetime(2026, 6, 12, tzinfo=UTC)
+    repo = IdempotencyRepository(db_session)
+    repo.create(
+        user_id=OWNER_USER_ID,
+        key="expired",
+        endpoint="create_intent",
+        request_hash="h1",
+        response_snapshot={"x": 1},
+        now=now - timedelta(hours=48),
+        expires_at=now - timedelta(hours=24),  # already expired
+    )
+    repo.create(
+        user_id=OWNER_USER_ID,
+        key="live",
+        endpoint="create_intent",
+        request_hash="h2",
+        response_snapshot={"x": 2},
+        now=now,
+        expires_at=now + timedelta(hours=24),  # still live
+    )
+    db_session.commit()
+
+    scheduler = IdempotencyCleanupScheduler(
+        session_factory=lambda: Session(engine),
+        interval_seconds=3600.0,
+        clock=lambda: now,
+    )
+    deleted = scheduler.run_once()
+
+    assert deleted == 1
+    assert repo.get(OWNER_USER_ID, "expired") is None
+    assert repo.get(OWNER_USER_ID, "live") is not None

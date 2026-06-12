@@ -21,6 +21,7 @@ from app.core.ids import RequestIdMiddleware
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
+from app.services.idempotency_cleanup import IdempotencyCleanupScheduler
 from app.services.kill_switch import KillSwitchProvider
 from app.services.quote import build_quote_provider
 from app.services.quote_dispatcher import QuoteEvaluationDispatcher
@@ -49,6 +50,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     provider.startup()
 
     twap_scheduler_task: Task[None] | None = None
+    idempotency_cleanup_task: Task[None] | None = None
     if settings.database_url:
         from app.db.session import get_session_factory
 
@@ -90,15 +92,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 extra={"interval_seconds": settings.twap_worker_interval_seconds},
             )
 
+        if settings.idempotency_cleanup_enabled:
+            cleanup = IdempotencyCleanupScheduler(
+                session_factory=session_factory,
+                interval_seconds=settings.idempotency_cleanup_interval_seconds,
+            )
+            idempotency_cleanup_task = create_task(cleanup.run_forever())
+            logger.info(
+                "idempotency cleanup scheduler started",
+                extra={"interval_seconds": settings.idempotency_cleanup_interval_seconds},
+            )
+
     try:
         yield
     finally:
-        if twap_scheduler_task is not None:
-            twap_scheduler_task.cancel()
-            try:
-                await twap_scheduler_task
-            except CancelledError:
-                pass
+        for task in (twap_scheduler_task, idempotency_cleanup_task):
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except CancelledError:
+                    pass
         provider.shutdown()
 
 

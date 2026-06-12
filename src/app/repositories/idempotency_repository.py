@@ -4,10 +4,10 @@ right after, the side effect it memoises."""
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.orm import Session
 
 from app.db.models.core import IdempotencyKey
@@ -66,3 +66,11 @@ class IdempotencyRepository:
 
     def delete(self, user_id: UUID, key: str) -> None:
         self._db.execute(delete(IdempotencyKey).where(IdempotencyKey.user_id == user_id, IdempotencyKey.key == key))
+
+    def delete_expired(self, now: datetime) -> int:
+        """Delete every record past its expires_at. Returns the row count. No commit —
+        the caller (cleanup scheduler) owns the transaction. Backed by the
+        ix_idempotency_keys_expires_at index."""
+        stmt = delete(IdempotencyKey).where(IdempotencyKey.expires_at < now)
+        result = cast(CursorResult[Any], self._db.execute(stmt))
+        return int(result.rowcount or 0)

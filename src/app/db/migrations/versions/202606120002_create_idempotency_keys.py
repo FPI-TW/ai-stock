@@ -33,7 +33,10 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_idempotency_keys")),
         sa.UniqueConstraint("user_id", "key", name=op.f("uq_idempotency_keys_user_id_key")),
     )
+    # Supports the periodic expired-row cleanup (DELETE WHERE expires_at < now()).
+    op.create_index("ix_idempotency_keys_expires_at", "idempotency_keys", ["expires_at"], unique=False)
 
 
 def downgrade() -> None:
+    op.drop_index("ix_idempotency_keys_expires_at", table_name="idempotency_keys")
     op.drop_table("idempotency_keys")
