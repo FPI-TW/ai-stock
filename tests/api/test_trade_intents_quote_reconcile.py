@@ -21,6 +21,7 @@ from app.api.deps import (
     get_active_user,
     get_current_user,
     get_db,
+    get_intent_limits,
     get_intent_repository,
     get_quote_provider,
     get_symbol_service,
@@ -100,6 +101,9 @@ def client(
     app.dependency_overrides[get_symbol_service] = lambda: mock_symbol_service
     app.dependency_overrides[get_intent_repository] = lambda: mock_intent_repo
     app.dependency_overrides[get_db] = lambda: MagicMock()
+    # mock_intent_repo returns MagicMocks from the §15 count queries → disable limit
+    # enforcement here (this suite exercises quote reconcile, not creation caps).
+    app.dependency_overrides[get_intent_limits] = lambda: None
     app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")
     app.dependency_overrides[get_active_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")
     yield TestClient(app)

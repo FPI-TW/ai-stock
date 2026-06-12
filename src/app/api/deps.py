@@ -17,7 +17,7 @@ from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.commands.kill_switch import SetKillSwitchCommand
 from app.commands.notification import MarkNotificationReadCommand
 from app.commands.password_reset import PasswordResetConfirmCommand, PasswordResetRequestCommand
-from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand
+from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand, IntentLimits
 from app.commands.trigger_intent import TriggerIntentCommand
 from app.commands.twap import TwapConfirmCommand, TwapPlanCommand, TwapSliceWorkerCommand
 from app.commands.two_factor import SetupTwoFactorCommand, VerifyTwoFactorCommand
@@ -269,6 +269,15 @@ def get_quote_evaluator(session_service: TradingSessionServiceDep) -> QuoteEvalu
 QuoteEvaluatorDep = Annotated[QuoteEvaluator, Depends(get_quote_evaluator)]
 
 
+def get_intent_limits(settings: SettingsDep) -> IntentLimits:
+    """§15 creation caps from env defaults. P5 overrides this dependency to source
+    admin-tunable limits without touching the command."""
+    return IntentLimits(per_user=settings.intent_limit_per_user, per_symbol=settings.intent_limit_per_symbol)
+
+
+IntentLimitsDep = Annotated[IntentLimits, Depends(get_intent_limits)]
+
+
 def get_create_trade_intent_command(
     symbol_service: SymbolServiceDep,
     session_service: TradingSessionServiceDep,
@@ -277,6 +286,7 @@ def get_create_trade_intent_command(
     evaluator: QuoteEvaluatorDep,
     db: DatabaseDep,
     kill_switch: KillSwitchProviderDep,
+    limits: IntentLimitsDep,
 ) -> CreateTradeIntentCommand:
     return CreateTradeIntentCommand(
         symbol_service,
@@ -286,6 +296,7 @@ def get_create_trade_intent_command(
         evaluator,
         db,
         kill_switch,
+        limits,
     )
 
 

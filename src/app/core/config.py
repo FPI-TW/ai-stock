@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     twap_worker_enabled: bool = Field(default=True, alias="TWAP_WORKER_ENABLED")
     twap_worker_interval_seconds: float = Field(default=1.0, alias="TWAP_WORKER_INTERVAL_SECONDS")
 
+    # --- L2 §15 creation caps ---
+    # Per-owner active/scheduled intent caps. env defaults here; an admin-tunable
+    # override is P5 (injected over the get_intent_limits dependency).
+    intent_limit_per_user: int = Field(default=200, alias="INTENT_LIMIT_PER_USER")
+    intent_limit_per_symbol: int = Field(default=20, alias="INTENT_LIMIT_PER_SYMBOL")
+
     # --- L1 auth / session ---
     # HS256 signing secret for short-lived access JWTs. Required in production
     # (LOCAL_MODE=false); LOCAL_MODE falls back to a fixed dev secret. Never log it.

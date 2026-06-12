@@ -11,7 +11,12 @@ from app.commands.trigger_intent import TriggerIntentInput, persist_trigger
 from app.db.models.core import TradeIntent as TradeIntentRow
 from app.domain.price import InvalidTypeError, PriceRequest, PriceService, SecurityType
 from app.domain.quote_evaluation import QuoteEvaluator
-from app.domain.trade_intent import MARKET_ORDER_STRATEGIES, TradeIntentData
+from app.domain.trade_intent import (
+    MARKET_ORDER_STRATEGIES,
+    SymbolIntentLimitExceededError,
+    TradeIntentData,
+    UserIntentLimitExceededError,
+)
 from app.domain.trading_session import TradingSessionService
 from app.domain.trigger_event import quote_snapshot_to_jsonb
 from app.repositories.intent_repository import IntentRepository
@@ -38,6 +43,15 @@ _TRIGGER_REF: dict[str, str] = {
     "market_sell_order": "bid",
     "trailing_stop_alert": "bid",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class IntentLimits:
+    """§15 per-owner creation caps. Injected into CreateTradeIntentCommand from env
+    defaults; P5 will swap the providing dependency for an admin-tunable source."""
+
+    per_user: int
+    per_symbol: int
 
 
 @dataclass(frozen=True)
@@ -92,6 +106,7 @@ class CreateTradeIntentCommand:
         evaluator: QuoteEvaluator,
         db: Session,
         kill_switch: KillSwitchProvider | None = None,
+        limits: IntentLimits | None = None,
     ) -> None:
         self._symbol_service = symbol_service
         self._session_service = session_service
@@ -100,6 +115,7 @@ class CreateTradeIntentCommand:
         self._evaluator = evaluator
         self._db = db
         self._kill_switch = kill_switch
+        self._limits = limits
 
     def execute(self, inp: CreateTradeIntentInput) -> TradeIntentData:
         try:
@@ -142,6 +158,21 @@ class CreateTradeIntentCommand:
             trigger_ref = _TRIGGER_REF.get(inp.strategy)
             if trigger_ref is None:
                 raise ValueError(f"Unsupported strategy: {inp.strategy}")
+
+            # §15 creation caps — checked before insert so an over-limit create is
+            # rejected without writing. User cap first (broader), then per-symbol.
+            # limits is None in fake-repo / DB-less test wiring → enforcement skipped.
+            if self._limits is not None:
+                user_count = self._intent_repo.count_active_or_scheduled_for_user(inp.owner_user_id)
+                if user_count >= self._limits.per_user:
+                    raise UserIntentLimitExceededError(limit=self._limits.per_user, current=user_count)
+                symbol_count = self._intent_repo.count_active_or_scheduled_for_user_symbol(
+                    inp.owner_user_id, inp.symbol
+                )
+                if symbol_count >= self._limits.per_symbol:
+                    raise SymbolIntentLimitExceededError(
+                        symbol=inp.symbol, limit=self._limits.per_symbol, current=symbol_count
+                    )
 
             intent_id = self._intent_repo.create(
                 owner_user_id=inp.owner_user_id,
