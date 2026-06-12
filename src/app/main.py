@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import register_exception_handlers
+from app.api.routes.admin import router as admin_router
+from app.api.routes.auth import router as auth_router
 from app.api.routes.dev import router as dev_router
 from app.api.routes.health import router as health_router
 from app.api.routes.intents import router as intents_router
@@ -114,6 +116,8 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestIdMiddleware, header_name=settings.request_id_header)
     register_exception_handlers(app)
     app.include_router(health_router)
+    app.include_router(auth_router, prefix="/auth", tags=["auth"])
+    app.include_router(admin_router, prefix="/admin", tags=["admin"])
     app.include_router(symbols_router, prefix="/symbols", tags=["symbols"])
     app.include_router(quotes_router, prefix="/quotes", tags=["quotes"])
     app.include_router(intents_router, prefix="/trade-intents", tags=["trade-intents"])

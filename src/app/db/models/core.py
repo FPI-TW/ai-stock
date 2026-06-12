@@ -70,7 +70,7 @@ class TradeIntent(TimestampMixin, Base):
         CheckConstraint("execution_mode = 'notify_only'", name="execution_mode"),
         CheckConstraint("time_in_force = 'day'", name="time_in_force"),
         CheckConstraint(
-            "status IN ('scheduled', 'active', 'triggered', 'expired', 'cancelled')",
+            "status IN ('scheduled', 'active', 'triggered', 'expired', 'cancelled', 'cancelled_by_account_disabled')",
             name="status",
         ),
         CheckConstraint(
@@ -173,7 +173,7 @@ class TradeIntent(TimestampMixin, Base):
     )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
-    owner_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    owner_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     symbol: Mapped[str] = mapped_column(Text, ForeignKey("symbols.symbol"), nullable=False)
     strategy: Mapped[str] = mapped_column(Text, nullable=False)
     execution_mode: Mapped[str] = mapped_column(Text, nullable=False)
@@ -236,7 +236,7 @@ class TwapSlice(TimestampMixin, Base):
         ForeignKey("trade_intents.id"),
         nullable=False,
     )
-    owner_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    owner_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     symbol: Mapped[str] = mapped_column(Text, ForeignKey("symbols.symbol"), nullable=False)
     sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -287,7 +287,7 @@ class TriggerEvent(Base):
         nullable=False,
         unique=True,
     )
-    owner_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    owner_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     symbol: Mapped[str] = mapped_column(Text, ForeignKey("symbols.symbol"), nullable=False)
     quote_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     target_price_effective: Mapped[Decimal] = mapped_column(Numeric(9, 4), nullable=False)
@@ -324,7 +324,7 @@ class Notification(Base):
     )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
-    owner_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    owner_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     trade_intent_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("trade_intents.id"))
     type: Mapped[str] = mapped_column(Text, nullable=False)
     rendered_title: Mapped[str] = mapped_column(Text, nullable=False)

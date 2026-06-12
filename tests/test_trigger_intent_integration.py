@@ -25,6 +25,7 @@ from app.db.models.core import Notification, Symbol, TradeIntent, TriggerEvent
 from app.domain.trade_intent import IntentNotFoundError
 from app.domain.trigger_event import DuplicateTriggerError
 from app.repositories.intent_repository import IntentRepository
+from tests.db_helpers import ensure_user
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 QUOTE_TIME = datetime(2026, 5, 11, 10, 0, 5, tzinfo=TAIPEI)
@@ -90,6 +91,7 @@ def _create_active_intent(
 ) -> UUID:
     # PR #12 made IntentRepository.create flush-only and return UUID; commit
     # explicitly so the trigger command's SELECT FOR UPDATE finds a row.
+    ensure_user(db, owner_user_id)
     intent_id = repo.create(
         owner_user_id=owner_user_id,
         symbol="2330",
@@ -325,6 +327,7 @@ def test_persist_trigger_rowcount_guard_raises_when_status_changed_underneath(
     intent_id: UUID
 
     with Session(trigger_engine) as setup_session:
+        ensure_user(setup_session, owner)
         repo = IntentRepository(setup_session)
         intent_id = repo.create(
             owner_user_id=owner,

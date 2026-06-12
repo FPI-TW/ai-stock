@@ -12,6 +12,16 @@ from sqlalchemy import Engine, MetaData, Table, create_engine
 from sqlalchemy.exc import IntegrityError
 
 from app.core.config import get_settings
+from tests.db_helpers import ensure_user
+
+# A single seeded owner satisfies the owner_user_id -> users(id) FK; these tests
+# exercise constraints/migrations, not owner scoping, so one owner suffices.
+_OWNER = UUID("000000aa-0000-0000-0000-000000000001")
+
+
+def _seed_owner(engine: Engine) -> None:
+    with engine.begin() as conn:
+        ensure_user(conn, _OWNER)
 
 
 def alembic_config() -> Config:
@@ -26,6 +36,7 @@ def migrated_engine() -> Generator[Engine]:
     command.downgrade(config, "base")
     command.upgrade(config, "head")
     engine = create_engine(get_settings().database_url or "")
+    _seed_owner(engine)
     try:
         yield engine
     finally:
@@ -43,9 +54,17 @@ def test_migration_upgrade_creates_v0_5_schema(migrated_engine: Engine) -> None:
     inspector = sa.inspect(migrated_engine)
 
     assert {"symbols", "trade_intents", "trigger_events", "notifications"}.issubset(inspector.get_table_names())
-    assert not {"audit_events", "outbox_events", "notification_deliveries", "import_reports", "users"}.intersection(
-        inspector.get_table_names()
-    )
+    # L1 identity tables now ship at head (audit_events lives in L1 per the de-stub decision).
+    assert {
+        "users",
+        "invitations",
+        "password_resets",
+        "refresh_tokens",
+        "rate_limit_buckets",
+        "audit_events",
+    }.issubset(inspector.get_table_names())
+    # P2 / P4 tables remain future work and must not exist yet.
+    assert not {"outbox_events", "notification_deliveries", "import_reports"}.intersection(inspector.get_table_names())
     for table_name in ("symbols", "trade_intents", "trigger_events", "notifications"):
         assert "created_at" in {column["name"] for column in inspector.get_columns(table_name)}
     for table_name in ("symbols", "trade_intents", "notifications"):
@@ -92,6 +111,7 @@ def test_limit_trailing_migration_downgrade_refuses_to_delete_new_strategy_rows(
     command.downgrade(config, "base")
     command.upgrade(config, "head")
     engine = create_engine(get_settings().database_url or "")
+    _seed_owner(engine)
     try:
         with engine.begin() as connection:
             insert_symbol(connection, uuid4(), "2454")
@@ -265,7 +285,7 @@ def test_price_triggered_notification_requires_trade_intent(migrated_engine: Eng
                 .insert()
                 .values(
                     id=uuid4(),
-                    owner_user_id=uuid4(),
+                    owner_user_id=_OWNER,
                     trade_intent_id=None,
                     type="price_triggered",
                     rendered_title="已觸發",
@@ -291,7 +311,7 @@ def test_price_triggered_notification_accepts_trade_intent(migrated_engine: Engi
             .insert()
             .values(
                 id=uuid4(),
-                owner_user_id=uuid4(),
+                owner_user_id=_OWNER,
                 trade_intent_id=trade_intent_id,
                 type="price_triggered",
                 rendered_title="已觸發",
@@ -303,7 +323,7 @@ def test_price_triggered_notification_accepts_trade_intent(migrated_engine: Engi
 @pytest.mark.integration
 def test_trade_intent_rejects_duplicate_active_intent(migrated_engine: Engine) -> None:
     symbol_id = uuid4()
-    owner_user_id = uuid4()
+    owner_user_id = _OWNER
 
     with migrated_engine.begin() as connection:
         insert_symbol(connection, symbol_id, "2454")
@@ -323,7 +343,7 @@ def test_trade_intent_rejects_duplicate_active_intent(migrated_engine: Engine) -
 @pytest.mark.integration
 def test_trade_intent_allows_duplicate_after_terminal_status(migrated_engine: Engine) -> None:
     symbol_id = uuid4()
-    owner_user_id = uuid4()
+    owner_user_id = _OWNER
 
     with migrated_engine.begin() as connection:
         insert_symbol(connection, symbol_id, "2412")
@@ -343,7 +363,7 @@ def test_trade_intent_allows_duplicate_after_terminal_status(migrated_engine: En
 @pytest.mark.integration
 def test_trade_intent_accepts_expired_status(migrated_engine: Engine) -> None:
     symbol_id = uuid4()
-    owner_user_id = uuid4()
+    owner_user_id = _OWNER
 
     with migrated_engine.begin() as connection:
         insert_symbol(connection, symbol_id, "2882")
@@ -383,7 +403,7 @@ def build_trade_intent(
 ) -> dict[str, object]:
     return {
         "id": id or uuid4(),
-        "owner_user_id": owner_user_id or uuid4(),
+        "owner_user_id": owner_user_id or _OWNER,
         "symbol": symbol,
         "strategy": strategy,
         "execution_mode": "notify_only",
@@ -406,7 +426,7 @@ def build_trigger_event(
     return {
         "id": uuid4(),
         "trade_intent_id": trade_intent_id,
-        "owner_user_id": uuid4(),
+        "owner_user_id": _OWNER,
         "symbol": symbol,
         "quote_snapshot": {"symbol": symbol, "ask_price": "100.0000"},
         "target_price_effective": Decimal("100.0000"),

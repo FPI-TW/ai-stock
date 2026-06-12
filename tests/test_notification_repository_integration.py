@@ -20,6 +20,7 @@ from app.domain.notification import NotificationData, NotificationNotFoundError
 from app.domain.trade_intent import InvalidCursorError
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.notification_repository import NotificationRepository
+from tests.db_helpers import ensure_user
 
 
 def _alembic_config() -> Config:
@@ -75,6 +76,7 @@ def repo(db_session: Session) -> NotificationRepository:
 
 
 def _seed_intent(db: Session, *, owner_user_id: UUID) -> UUID:
+    ensure_user(db, owner_user_id)
     intent_repo = IntentRepository(db)
     intent_id = intent_repo.create(
         owner_user_id=owner_user_id,
@@ -101,6 +103,7 @@ def _seed_notification(
     rendered_title: str = "2330 到價提醒已觸發",
     rendered_body: str = "買進到價提醒",
 ) -> UUID:
+    ensure_user(db, owner_user_id)
     notification_id = uuid4()
     db.add(
         Notification(

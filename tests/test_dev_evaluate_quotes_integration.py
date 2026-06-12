@@ -22,6 +22,7 @@ from app.main import create_app
 from app.repositories.intent_repository import IntentRepository
 from app.services.quote.base import QuoteSnapshot
 from app.services.quote.in_memory import InMemoryQuoteProvider
+from tests.db_helpers import ensure_user
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 # Monday inside the regular session — used for both `now` (via injected clock)
@@ -126,9 +127,11 @@ def _create_active_intent(
     strategy: str = "buy_price_alert",
     trail_mode: str | None = None,
     trail_value: str | None = None,
+    trading_date: date = date(2026, 5, 11),
 ) -> UUID:
     # PR #12 made IntentRepository.create flush-only and return UUID;
     # the test must commit so the HTTP endpoint (separate session) can see it.
+    ensure_user(db, owner_user_id)
     intent_id = repo.create(
         owner_user_id=owner_user_id,
         symbol=symbol,
@@ -137,7 +140,7 @@ def _create_active_intent(
         target_price_original=Decimal(target_price) if target_price is not None else None,
         target_price_effective=Decimal(target_price) if target_price is not None else None,
         trigger_reference_price_type="ask" if "buy" in strategy else "bid",
-        trading_date=date(2026, 5, 11),
+        trading_date=trading_date,
         time_in_force="day",
         execution_mode="notify_only",
         status="active",
@@ -445,7 +448,11 @@ def test_evaluate_outside_session_skips_all(
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     owner = uuid4()
-    intent_id = _create_active_intent(repo, db_session, owner_user_id=owner, symbol="2330", target_price="100.0000")
+    # The weekend clock is Sat 2026-05-16; date the intent for the next trading day
+    # (Mon 05-18) so the lifecycle's expiry cutoff doesn't expire it before we assert.
+    intent_id = _create_active_intent(
+        repo, db_session, owner_user_id=owner, symbol="2330", target_price="100.0000", trading_date=date(2026, 5, 18)
+    )
     quote_provider.push_quote(_snapshot("2330", ask="99.0000"))
 
     response = weekend_client.post("/dev/evaluate-quotes", json={"symbols": ["2330"]})

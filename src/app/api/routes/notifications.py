@@ -2,7 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query
 
-from app.api.deps import CurrentUserDep, MarkNotificationReadCommandDep, NotificationRepoDep
+from app.api.deps import ActiveUserDep, MarkNotificationReadCommandDep, NotificationRepoDep
 from app.api.routes._pagination import validate_cursor
 from app.commands.notification import MarkNotificationReadInput
 from app.schemas.notification import (
@@ -17,7 +17,7 @@ router = APIRouter()
 
 @router.get("", response_model=NotificationListResponse)
 def list_notifications(
-    user: CurrentUserDep,
+    user: ActiveUserDep,
     notification_repo: NotificationRepoDep,
     unread_only: bool = Query(default=False, alias="unreadOnly"),
     cursor: str | None = None,
@@ -41,7 +41,7 @@ def list_notifications(
 @router.post("/{notification_id}/read", response_model=NotificationReadResponse)
 def mark_notification_read(
     notification_id: UUID,
-    user: CurrentUserDep,
+    user: ActiveUserDep,
     command: MarkNotificationReadCommandDep,
 ) -> NotificationReadResponse:
     notification = command.execute(

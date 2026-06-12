@@ -29,7 +29,7 @@ V0.5 已建立、必須延續的不變式：
 - Password reset：request（不洩漏 email 存在）/ confirm（套密碼規則、revoke 既有 session）。
 - Role 授權：`user` / `admin` 兩種；權限檢查**集中**在 `deps.py`（`require_role('admin')`），不散落 controller。
 - 真 owner scoping：取代 `LocalUserContext`，全 user-facing API 從 token 取 user id；cross-user access forbidden。
-- Admin TOTP 2FA：admin 首次啟用後必須設 2FA 才能進 admin 功能；2FA reset 需另一 admin 或離線流程。
+- Admin TOTP 2FA：admin 首次啟用後必須設 2FA 才能進 admin 功能。本票只實作 setup / verify；2FA reset 功能目前不存在，僅在 schema / revoked reason 預留，完整 reset（需另一 admin 或離線流程）留待後補。
 - Audit：login / logout / refresh / invitation / password reset / account 建停用 全寫 audit；**本票直接建 `audit_events` 真表 + `AuditEventWriter`**，一開始就寫真稽核（後續票 L2/P1… 寫入同一張既有表，無 stub、無 refactor）。
 - Rate limit：登入失敗鎖定、password reset、invitation 重寄。**RateLimiter token-bucket primitive 在本票建立**（`rate_limit_buckets` 表 + `RateLimiter.consume(bucket_key, capacity, refill_per_second, cost)`），L2 繼承擴充到所有 mutating endpoint。
 
@@ -81,7 +81,7 @@ Indexes：`email unique`、`(status, role)`。
 
 - `id uuid pk`、`event_type text not null`、`actor_type text check (in 'user','system','admin')`、`actor_id uuid null`、`occurred_at timestamptz not null`、`metadata jsonb`、`request_id text null`
 - Indexes：`(event_type, occurred_at)`、`(actor_id, occurred_at)`
-- 對齊 domain-spec §17 五欄位。本票寫入 auth 相關事件：`account_invited`/`account_activated`/`account_disabled`/`invitation_resent`/`login_success`/`login_failed`/`password_reset_completed`/`refresh_reuse_detected`/`admin_2fa_enabled`/`admin_2fa_reset`。其餘 §17 事件（intent_*、notification_*、kill_switch_* 等）由 L2/P1/P2 等票寫入**同一張既有表**，不重建、不 refactor。
+- 對齊 domain-spec §17 五欄位。本票寫入 auth 相關事件：`account_invited`/`account_activated`/`account_disabled`/`invitation_resent`/`login_success`/`login_failed`/`password_reset_completed`/`refresh_reuse_detected`/`admin_2fa_enabled`/`admin_2fa_verified`。`admin_2fa_reset` 屬後補 reset 流程，本票不實作。其餘 §17 事件（intent_*、notification_*、kill_switch_* 等）由 L2/P1/P2 等票寫入**同一張既有表**，不重建、不 refactor。
 
 ### 既有表 owner FK
 
@@ -112,7 +112,8 @@ Indexes：`email unique`、`(status, role)`。
 - `GET /admin/users` → aggregate 列表（不含他人 intent 內容；查內容屬 P5 support 操作）。
 
 ### Admin 2FA
-- `POST /admin/2fa/setup` / `POST /admin/2fa/verify`（TOTP）→ admin 首次啟用後強制；未設 2FA 不得進 admin 功能（`MFA_REQUIRED`）。2FA reset 需另一 admin 或離線流程，enable/disable/reset 全寫 audit。
+- `POST /admin/2fa/setup` / `POST /admin/2fa/verify`（TOTP）→ admin 首次啟用後強制；未設 2FA 不得進 admin 功能（`MFA_REQUIRED`）。
+- 2FA reset 功能目前不存在：沒有 reset endpoint / command / repository method / tests；本票只預留 `2fa_reset` revoked reason 與文件脈絡。完整 reset（需另一 admin 或離線流程，且寫 audit）留待後補。
 
 ## 取代 V0.5 Placeholder
 

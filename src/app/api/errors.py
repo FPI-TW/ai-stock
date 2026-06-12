@@ -1,5 +1,6 @@
 import logging
 from enum import StrEnum
+from math import ceil
 from typing import Any
 
 from fastapi import FastAPI, Request, status
@@ -7,6 +8,29 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.domain.auth import (
+    AccountError,
+    AuthError,
+    CsrfFailedError,
+    EmailAlreadyExistsError,
+    InvitationConsumedError,
+    InvitationExpiredError,
+    InvitationInvalidError,
+    LoginFailedError,
+    LoginLockedError,
+    MfaAlreadyEnabledError,
+    MfaInvalidCodeError,
+    MfaNotSetupError,
+    MfaRequiredError,
+    PasswordResetInvalidError,
+    RateLimitedError,
+    RefreshInvalidError,
+    RefreshReuseDetectedError,
+    TermsNotAcceptedError,
+    UnauthenticatedError,
+    UserNotFoundError,
+    WeakPasswordError,
+)
 from app.domain.notification import NotificationNotFoundError
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
 from app.domain.symbol_errors import SymbolError, SymbolNotTradableError, UnknownSymbolError
@@ -46,6 +70,29 @@ class ErrorCode(StrEnum):
     TWAP_INVALID_INTERVAL = "TWAP_INVALID_INTERVAL"
     TWAP_INVALID_QUANTITY = "TWAP_INVALID_QUANTITY"
     TWAP_DUPLICATE_ACTIVE_PLAN = "TWAP_DUPLICATE_ACTIVE_PLAN"
+    # L1 auth
+    UNAUTHENTICATED = "UNAUTHENTICATED"
+    FORBIDDEN = "FORBIDDEN"
+    ACCOUNT_DISABLED = "ACCOUNT_DISABLED"
+    SESSION_REVOKED = "SESSION_REVOKED"
+    LOGIN_FAILED = "LOGIN_FAILED"
+    LOGIN_LOCKED = "LOGIN_LOCKED"
+    REFRESH_INVALID = "REFRESH_INVALID"
+    REFRESH_REUSE_DETECTED = "REFRESH_REUSE_DETECTED"
+    CSRF_FAILED = "CSRF_FAILED"
+    MFA_REQUIRED = "MFA_REQUIRED"
+    RATE_LIMITED = "RATE_LIMITED"
+    # L1 account lifecycle
+    EMAIL_ALREADY_EXISTS = "EMAIL_ALREADY_EXISTS"
+    INVITATION_INVALID = "INVITATION_INVALID"
+    INVITATION_EXPIRED = "INVITATION_EXPIRED"
+    INVITATION_CONSUMED = "INVITATION_CONSUMED"
+    WEAK_PASSWORD = "WEAK_PASSWORD"
+    TERMS_NOT_ACCEPTED = "TERMS_NOT_ACCEPTED"
+    PASSWORD_RESET_INVALID = "PASSWORD_RESET_INVALID"
+    MFA_INVALID_CODE = "MFA_INVALID_CODE"
+    MFA_ALREADY_ENABLED = "MFA_ALREADY_ENABLED"
+    MFA_NOT_SETUP = "MFA_NOT_SETUP"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -72,6 +119,27 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.TWAP_INVALID_INTERVAL: "TWAP 間隔秒數不合法",
     ErrorCode.TWAP_INVALID_QUANTITY: "TWAP 目標量不合法",
     ErrorCode.TWAP_DUPLICATE_ACTIVE_PLAN: "已存在相同的 TWAP 計畫",
+    ErrorCode.UNAUTHENTICATED: "請先登入",
+    ErrorCode.FORBIDDEN: "沒有權限執行此操作",
+    ErrorCode.ACCOUNT_DISABLED: "帳號已停用，請重新登入或聯絡管理員",
+    ErrorCode.SESSION_REVOKED: "工作階段已失效，請重新登入",
+    ErrorCode.LOGIN_FAILED: "帳號或密碼錯誤",
+    ErrorCode.LOGIN_LOCKED: "登入失敗次數過多，請稍後再試",
+    ErrorCode.REFRESH_INVALID: "登入憑證已失效，請重新登入",
+    ErrorCode.REFRESH_REUSE_DETECTED: "偵測到憑證異常使用，已登出所有工作階段",
+    ErrorCode.CSRF_FAILED: "CSRF 驗證失敗",
+    ErrorCode.MFA_REQUIRED: "需要完成兩階段驗證",
+    ErrorCode.RATE_LIMITED: "請求過於頻繁，請稍後再試",
+    ErrorCode.EMAIL_ALREADY_EXISTS: "此 email 已存在",
+    ErrorCode.INVITATION_INVALID: "邀請連結無效",
+    ErrorCode.INVITATION_EXPIRED: "邀請連結已過期",
+    ErrorCode.INVITATION_CONSUMED: "邀請連結已被使用",
+    ErrorCode.WEAK_PASSWORD: "密碼長度至少需 8 個字元",
+    ErrorCode.TERMS_NOT_ACCEPTED: "必須接受服務條款",
+    ErrorCode.PASSWORD_RESET_INVALID: "重設連結無效或已過期",
+    ErrorCode.MFA_INVALID_CODE: "驗證碼錯誤",
+    ErrorCode.MFA_ALREADY_ENABLED: "已啟用兩階段驗證",
+    ErrorCode.MFA_NOT_SETUP: "尚未設定兩階段驗證",
 }
 
 
@@ -138,6 +206,70 @@ def register_exception_handlers(app: FastAPI) -> None:
             message=exc.message,
             details=exc.details,
         )
+
+    @app.exception_handler(AuthError)
+    async def auth_error_handler(request: Request, exc: AuthError) -> JSONResponse:
+        # MfaRequiredError must be checked before its ForbiddenError base.
+        if isinstance(exc, UnauthenticatedError):
+            return build_error_response(request, status.HTTP_401_UNAUTHORIZED, ErrorCode.UNAUTHENTICATED)
+        if isinstance(exc, LoginFailedError):
+            return build_error_response(request, status.HTTP_401_UNAUTHORIZED, ErrorCode.LOGIN_FAILED)
+        if isinstance(exc, LoginLockedError):
+            retry_after = max(1, ceil(exc.retry_after_seconds))
+            response = build_error_response(
+                request,
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                ErrorCode.LOGIN_LOCKED,
+                details={"retryAfterSeconds": retry_after},
+            )
+            response.headers["Retry-After"] = str(retry_after)
+            return response
+        if isinstance(exc, RefreshReuseDetectedError):
+            return build_error_response(request, status.HTTP_401_UNAUTHORIZED, ErrorCode.REFRESH_REUSE_DETECTED)
+        if isinstance(exc, RefreshInvalidError):
+            return build_error_response(request, status.HTTP_401_UNAUTHORIZED, ErrorCode.REFRESH_INVALID)
+        if isinstance(exc, CsrfFailedError):
+            return build_error_response(request, status.HTTP_403_FORBIDDEN, ErrorCode.CSRF_FAILED)
+        if isinstance(exc, MfaInvalidCodeError):
+            return build_error_response(request, status.HTTP_422_UNPROCESSABLE_CONTENT, ErrorCode.MFA_INVALID_CODE)
+        if isinstance(exc, RateLimitedError):
+            retry_after = max(1, ceil(exc.retry_after_seconds))
+            response = build_error_response(
+                request,
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                ErrorCode.RATE_LIMITED,
+                details={"retryAfterSeconds": retry_after},
+            )
+            response.headers["Retry-After"] = str(retry_after)
+            return response
+        if isinstance(exc, MfaRequiredError):
+            return build_error_response(request, status.HTTP_403_FORBIDDEN, ErrorCode.MFA_REQUIRED)
+        # Remaining ForbiddenError (and any unmapped AuthError) -> 403 FORBIDDEN.
+        return build_error_response(request, status.HTTP_403_FORBIDDEN, ErrorCode.FORBIDDEN)
+
+    @app.exception_handler(AccountError)
+    async def account_error_handler(request: Request, exc: AccountError) -> JSONResponse:
+        if isinstance(exc, UserNotFoundError):
+            return build_error_response(request, status.HTTP_404_NOT_FOUND, ErrorCode.NOT_FOUND)
+        if isinstance(exc, EmailAlreadyExistsError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.EMAIL_ALREADY_EXISTS)
+        if isinstance(exc, InvitationExpiredError):
+            return build_error_response(request, status.HTTP_410_GONE, ErrorCode.INVITATION_EXPIRED)
+        if isinstance(exc, InvitationConsumedError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.INVITATION_CONSUMED)
+        if isinstance(exc, InvitationInvalidError):
+            return build_error_response(request, status.HTTP_400_BAD_REQUEST, ErrorCode.INVITATION_INVALID)
+        if isinstance(exc, WeakPasswordError):
+            return build_error_response(request, status.HTTP_422_UNPROCESSABLE_CONTENT, ErrorCode.WEAK_PASSWORD)
+        if isinstance(exc, TermsNotAcceptedError):
+            return build_error_response(request, status.HTTP_422_UNPROCESSABLE_CONTENT, ErrorCode.TERMS_NOT_ACCEPTED)
+        if isinstance(exc, PasswordResetInvalidError):
+            return build_error_response(request, status.HTTP_400_BAD_REQUEST, ErrorCode.PASSWORD_RESET_INVALID)
+        if isinstance(exc, MfaAlreadyEnabledError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.MFA_ALREADY_ENABLED)
+        if isinstance(exc, MfaNotSetupError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.MFA_NOT_SETUP)
+        return build_error_response(request, status.HTTP_400_BAD_REQUEST, ErrorCode.VALIDATION_ERROR)
 
     @app.exception_handler(SymbolError)
     async def symbol_error_handler(request: Request, exc: SymbolError) -> JSONResponse:

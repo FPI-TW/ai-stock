@@ -5,9 +5,9 @@ from uuid import UUID
 from fastapi import APIRouter, Query, status
 
 from app.api.deps import (
+    ActiveUserDep,
     CancelTradeIntentCommandDep,
     CreateTradeIntentCommandDep,
-    CurrentUserDep,
     IntentLifecycleCommandDep,
     IntentRepoDep,
     TwapConfirmCommandDep,
@@ -59,7 +59,7 @@ def _validate_statuses(statuses: list[str] | None) -> None:
 @router.post("", response_model=IntentCreateResponse, status_code=status.HTTP_201_CREATED)
 def create_intent(
     request: IntentCreateRequest,
-    user: CurrentUserDep,
+    user: ActiveUserDep,
     command: CreateTradeIntentCommandDep,
 ) -> IntentCreateResponse:
     intent = command.execute(
@@ -80,7 +80,7 @@ def create_intent(
 
 @router.get("", response_model=IntentListResponse)
 def list_intents(
-    user: CurrentUserDep,
+    user: ActiveUserDep,
     intent_repo: IntentRepoDep,
     lifecycle: IntentLifecycleCommandDep,
     status_filter: Annotated[list[str] | None, Query(alias="status")] = None,
@@ -110,7 +110,7 @@ def list_intents(
 @router.post("/twap/preview", response_model=TwapPreviewResponse)
 def preview_twap(
     request: TwapPlanRequest,
-    user: CurrentUserDep,
+    user: ActiveUserDep,
     command: TwapPlanCommandDep,
 ) -> TwapPreviewResponse:
     plan = command.preview(
@@ -130,7 +130,7 @@ def preview_twap(
 @router.post("/twap/confirm", response_model=TwapConfirmResponse, status_code=status.HTTP_201_CREATED)
 def confirm_twap(
     request: TwapPlanRequest,
-    user: CurrentUserDep,
+    user: ActiveUserDep,
     command: TwapConfirmCommandDep,
     intent_repo: IntentRepoDep,
 ) -> TwapConfirmResponse:
@@ -152,7 +152,7 @@ def confirm_twap(
 @router.get("/{intent_id}", response_model=IntentDetailResponse)
 def get_intent(
     intent_id: UUID,
-    user: CurrentUserDep,
+    user: ActiveUserDep,
     intent_repo: IntentRepoDep,
     lifecycle: IntentLifecycleCommandDep,
 ) -> IntentDetailResponse:
@@ -165,7 +165,7 @@ def get_intent(
 @router.post("/{intent_id}/cancel", response_model=IntentDetailResponse)
 def cancel_intent(
     intent_id: UUID,
-    user: CurrentUserDep,
+    user: ActiveUserDep,
     command: CancelTradeIntentCommandDep,
     intent_repo: IntentRepoDep,
     lifecycle: IntentLifecycleCommandDep,

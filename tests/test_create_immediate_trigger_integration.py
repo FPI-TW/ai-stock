@@ -14,8 +14,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, select, text
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_quote_provider, get_trading_session_service
+from app.api.deps import get_active_user, get_current_user, get_quote_provider, get_trading_session_service
 from app.core.config import get_settings
+from app.core.security import RequestUser
 from app.db.models.core import Notification, Symbol, TriggerEvent
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
@@ -62,6 +63,10 @@ def create_engine_module() -> Generator[Engine]:
     try:
         yield engine
     finally:
+        # Clear intents (incl. market_*) before downgrade so the 202605280004
+        # status guard doesn't block `downgrade base`.
+        with engine.begin() as conn:
+            conn.execute(text("TRUNCATE notifications, trigger_events, trade_intents CASCADE"))
         engine.dispose()
         command.downgrade(config, "base")
 
@@ -106,6 +111,9 @@ def _build_client(quote_provider: InMemoryQuoteProvider, now_utc: datetime) -> G
     app = create_app()
     app.dependency_overrides[get_quote_provider] = lambda: quote_provider
     app.dependency_overrides[get_trading_session_service] = lambda: session_with_clock
+    principal = RequestUser(user_id=OWNER_USER_ID, role="user")
+    app.dependency_overrides[get_current_user] = lambda: principal
+    app.dependency_overrides[get_active_user] = lambda: principal
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -310,8 +318,11 @@ def test_market_order_create_uses_current_price_snapshot_when_stream_cache_is_co
     body = response.json()["data"]
     intent_id = UUID(body["id"])
     assert body["status"] == "triggered"
-    assert body["targetPriceEffective"] == "600.0000"
+    # Market orders carry no target price (the target_price_presence CHECK forbids it);
+    # the execution price lives on the TriggerEvent, asserted below.
+    assert body["targetPriceEffective"] is None
     assert body["filledQuantityLots"] == 2
     assert quote_provider.current_price_symbols == ["2330"]
     trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
     assert trigger_row.trigger_price == Decimal("600.0000")
+    assert trigger_row.target_price_effective == Decimal("600.0000")
