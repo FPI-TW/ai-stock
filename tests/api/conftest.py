@@ -10,6 +10,8 @@ from app.api.deps import (
     get_active_user,
     get_current_user,
     get_db,
+    get_idempotency_key,
+    get_idempotency_manager,
     get_intent_limits,
     get_intent_repository,
     get_kill_switch_provider,
@@ -22,6 +24,14 @@ from app.services.quote.in_memory import InMemoryQuoteProvider
 
 # Matches LOCAL_USER_ID seeded by conftest; owner-scoped api tests authenticate as this user.
 TEST_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
+
+
+class PassthroughIdempotency:
+    """Test double for api tests (get_db is mocked, so the real DB-backed manager
+    can't run): just executes the wrapped action with no dedup."""
+
+    def run(self, *, execute: object, **_: object) -> object:
+        return execute()  # type: ignore[operator]
 
 
 @pytest.fixture
@@ -68,6 +78,10 @@ def client(
     # The §13 mutation rate limit runs real bucket SQL; with get_db mocked it has no
     # real session, so disable it here. Rate limiting is covered by an integration test.
     app.dependency_overrides[enforce_mutation_rate_limit] = lambda: None
+    # create/cancel now require an Idempotency-Key + DB-backed manager (§16). These
+    # tests don't exercise idempotency, so supply a fixed key and a passthrough manager.
+    app.dependency_overrides[get_idempotency_key] = lambda: "test-idempotency-key"
+    app.dependency_overrides[get_idempotency_manager] = lambda: PassthroughIdempotency()
     app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=TEST_USER_ID, role="user")
     # get_active_user does a real DB status lookup; mirror the current-user override so
     # the MagicMock session above isn't queried (write endpoints use ActiveUserDep).

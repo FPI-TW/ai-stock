@@ -22,6 +22,8 @@ from app.api.deps import (
     get_active_user,
     get_current_user,
     get_db,
+    get_idempotency_key,
+    get_idempotency_manager,
     get_intent_limits,
     get_intent_repository,
     get_quote_provider,
@@ -31,6 +33,12 @@ from app.core.security import RequestUser
 from app.domain.trade_intent import TradeIntentData
 from app.main import create_app
 from app.services.quote.shioaji_demo.provider import ShioajiQuoteProvider
+
+
+class _PassthroughIdempotency:
+    def run(self, *, execute: object, **_: object) -> object:
+        return execute()  # type: ignore[operator]
+
 
 _OWNER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
@@ -106,6 +114,8 @@ def client(
     # enforcement here (this suite exercises quote reconcile, not creation caps).
     app.dependency_overrides[get_intent_limits] = lambda: None
     app.dependency_overrides[enforce_mutation_rate_limit] = lambda: None
+    app.dependency_overrides[get_idempotency_key] = lambda: "test-idempotency-key"
+    app.dependency_overrides[get_idempotency_manager] = lambda: _PassthroughIdempotency()
     app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")
     app.dependency_overrides[get_active_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")
     yield TestClient(app)

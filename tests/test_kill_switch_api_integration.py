@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import (
     get_active_user,
     get_current_user,
+    get_idempotency_key,
     get_quote_provider,
     get_trading_session_service,
 )
@@ -102,6 +103,8 @@ def _client(quote_provider: InMemoryQuoteProvider, principal: RequestUser) -> Te
     app.dependency_overrides[get_trading_session_service] = lambda: session_with_clock
     app.dependency_overrides[get_current_user] = lambda: principal
     app.dependency_overrides[get_active_user] = lambda: principal
+    # Unique key per request → the real manager runs transparently (no replay/conflict).
+    app.dependency_overrides[get_idempotency_key] = lambda: str(uuid4())
     return TestClient(app)
 
 

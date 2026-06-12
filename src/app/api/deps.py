@@ -30,6 +30,7 @@ from app.db.session import check_database_connectivity, get_session_factory
 from app.domain.auth import RateLimitedError
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
+from app.repositories.idempotency_repository import IdempotencyRepository
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.invitation_repository import InvitationRepository
 from app.repositories.notification_repository import NotificationRepository
@@ -39,6 +40,7 @@ from app.repositories.symbol_repository import SymbolRepository
 from app.repositories.system_flag_repository import SystemFlagRepository
 from app.repositories.user_repository import UserRepository
 from app.services.audit import AuditEventWriter
+from app.services.idempotency import IdempotencyManager
 from app.services.kill_switch import KillSwitchProvider
 from app.services.mailer import LoggingMailer, Mailer
 from app.services.quote.base import QuoteProvider
@@ -423,6 +425,27 @@ def enforce_mutation_rate_limit(
 
 
 MutationRateLimitDep = Annotated[None, Depends(enforce_mutation_rate_limit)]
+
+
+def get_idempotency_key(request: Request) -> str:
+    """The required `Idempotency-Key` header on mutating endpoints (§16).
+
+    Missing / blank -> 400 IDEMPOTENCY_KEY_REQUIRED. Tests that don't exercise
+    idempotency override this dependency."""
+    key = (request.headers.get("Idempotency-Key") or "").strip()
+    if not key:
+        raise ApiError(code=ErrorCode.IDEMPOTENCY_KEY_REQUIRED, status_code=status.HTTP_400_BAD_REQUEST)
+    return key
+
+
+IdempotencyKeyDep = Annotated[str, Depends(get_idempotency_key)]
+
+
+def get_idempotency_manager(db: DatabaseDep) -> IdempotencyManager:
+    return IdempotencyManager(db, IdempotencyRepository(db))
+
+
+IdempotencyManagerDep = Annotated[IdempotencyManager, Depends(get_idempotency_manager)]
 
 
 def get_system_flag_repository(db: DatabaseDep) -> SystemFlagRepository:

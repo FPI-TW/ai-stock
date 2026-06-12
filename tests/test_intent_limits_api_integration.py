@@ -18,7 +18,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_active_user, get_current_user, get_intent_limits, get_trading_session_service
+from app.api.deps import (
+    get_active_user,
+    get_current_user,
+    get_idempotency_key,
+    get_intent_limits,
+    get_trading_session_service,
+)
 from app.commands.trade_intent import IntentLimits
 from app.core.config import get_settings
 from app.core.security import RequestUser
@@ -81,6 +87,7 @@ def _client(limits: IntentLimits) -> TestClient:
     app = create_app()
     app.dependency_overrides[get_trading_session_service] = lambda: TradingSessionService(clock=lambda: SESSION_NOW_UTC)
     app.dependency_overrides[get_intent_limits] = lambda: limits
+    app.dependency_overrides[get_idempotency_key] = lambda: str(uuid4())
     principal = RequestUser(user_id=OWNER_USER_ID, role="user")
     app.dependency_overrides[get_current_user] = lambda: principal
     app.dependency_overrides[get_active_user] = lambda: principal

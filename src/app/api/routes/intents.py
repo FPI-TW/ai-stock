@@ -1,5 +1,5 @@
-from datetime import date
-from typing import Annotated
+from datetime import UTC, date, datetime
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
@@ -8,6 +8,8 @@ from app.api.deps import (
     ActiveUserDep,
     CancelTradeIntentCommandDep,
     CreateTradeIntentCommandDep,
+    IdempotencyKeyDep,
+    IdempotencyManagerDep,
     IntentLifecycleCommandDep,
     IntentRepoDep,
     TwapConfirmCommandDep,
@@ -67,21 +69,33 @@ def create_intent(
     request: IntentCreateRequest,
     user: ActiveUserDep,
     command: CreateTradeIntentCommandDep,
-) -> IntentCreateResponse:
-    intent = command.execute(
-        CreateTradeIntentInput(
-            symbol=request.symbol,
-            strategy=request.strategy,
-            quantity_lots=request.quantity_lots,
-            target_price=getattr(request, "target_price", None),
-            transaction_mode=getattr(request, "transaction_mode", "single_notification"),
-            notification_mode=getattr(request, "notification_mode", "single"),
-            trail_mode=getattr(request, "trail_mode", None),
-            trail_value=getattr(request, "trail_value", None),
-            owner_user_id=user.user_id,
+    idempotency_key: IdempotencyKeyDep,
+    idempotency: IdempotencyManagerDep,
+) -> dict[str, Any]:
+    def execute() -> dict[str, Any]:
+        intent = command.execute(
+            CreateTradeIntentInput(
+                symbol=request.symbol,
+                strategy=request.strategy,
+                quantity_lots=request.quantity_lots,
+                target_price=getattr(request, "target_price", None),
+                transaction_mode=getattr(request, "transaction_mode", "single_notification"),
+                notification_mode=getattr(request, "notification_mode", "single"),
+                trail_mode=getattr(request, "trail_mode", None),
+                trail_value=getattr(request, "trail_value", None),
+                owner_user_id=user.user_id,
+            )
         )
+        return IntentCreateResponse(data=map_to_response_data(intent)).model_dump(mode="json")
+
+    return idempotency.run(
+        user_id=user.user_id,
+        key=idempotency_key,
+        endpoint="create_intent",
+        payload=request.model_dump(mode="json"),
+        now=datetime.now(UTC),
+        execute=execute,
     )
-    return IntentCreateResponse(data=map_to_response_data(intent))
 
 
 @router.get("", response_model=IntentListResponse)
@@ -179,8 +193,20 @@ def cancel_intent(
     command: CancelTradeIntentCommandDep,
     intent_repo: IntentRepoDep,
     lifecycle: IntentLifecycleCommandDep,
-) -> IntentDetailResponse:
-    lifecycle.run()
-    intent = command.execute(CancelTradeIntentInput(intent_id=intent_id, owner_user_id=user.user_id))
-    slices = intent_repo.list_twap_slices(intent_id, user.user_id) if intent.strategy == "twap_order" else None
-    return IntentDetailResponse(data=map_to_detail_response_data(intent, slices))
+    idempotency_key: IdempotencyKeyDep,
+    idempotency: IdempotencyManagerDep,
+) -> dict[str, Any]:
+    def execute() -> dict[str, Any]:
+        lifecycle.run()
+        intent = command.execute(CancelTradeIntentInput(intent_id=intent_id, owner_user_id=user.user_id))
+        slices = intent_repo.list_twap_slices(intent_id, user.user_id) if intent.strategy == "twap_order" else None
+        return IntentDetailResponse(data=map_to_detail_response_data(intent, slices)).model_dump(mode="json")
+
+    return idempotency.run(
+        user_id=user.user_id,
+        key=idempotency_key,
+        endpoint="cancel_intent",
+        payload={"intent_id": str(intent_id)},
+        now=datetime.now(UTC),
+        execute=execute,
+    )

@@ -43,6 +43,7 @@ from app.domain.trade_intent import (
     SymbolIntentLimitExceededError,
 )
 from app.domain.twap import TwapDuplicateActivePlanError, TwapError
+from app.services.idempotency import IdempotencyConflictError
 from app.services.quote.base import QuoteProviderError
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,8 @@ class ErrorCode(StrEnum):
     DUPLICATE_INTENT = "DUPLICATE_INTENT"
     USER_INTENT_LIMIT_EXCEEDED = "USER_INTENT_LIMIT_EXCEEDED"
     SYMBOL_INTENT_LIMIT_EXCEEDED = "SYMBOL_INTENT_LIMIT_EXCEEDED"
+    IDEMPOTENCY_KEY_REQUIRED = "IDEMPOTENCY_KEY_REQUIRED"
+    IDEMPOTENCY_KEY_CONFLICT = "IDEMPOTENCY_KEY_CONFLICT"
     NOT_FOUND = "NOT_FOUND"
     CANCEL_NOT_ALLOWED = "CANCEL_NOT_ALLOWED"
     INVALID_CURSOR = "INVALID_CURSOR"
@@ -112,6 +115,8 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.DUPLICATE_INTENT: "已存在相同的委託",
     ErrorCode.USER_INTENT_LIMIT_EXCEEDED: "您的有效委託數已達上限",
     ErrorCode.SYMBOL_INTENT_LIMIT_EXCEEDED: "此標的的有效委託數已達上限",
+    ErrorCode.IDEMPOTENCY_KEY_REQUIRED: "此操作需要提供 Idempotency-Key",
+    ErrorCode.IDEMPOTENCY_KEY_CONFLICT: "Idempotency-Key 已用於不同的請求",
     ErrorCode.NOT_FOUND: "找不到此資源",
     ErrorCode.CANCEL_NOT_ALLOWED: "此委託狀態不允許取消",
     ErrorCode.INVALID_CURSOR: "Cursor 已失效或不存在",
@@ -370,6 +375,14 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=status.HTTP_409_CONFLICT,
             code=ErrorCode.USER_INTENT_LIMIT_EXCEEDED,
             details={"limit": exc.limit, "current": exc.current},
+        )
+
+    @app.exception_handler(IdempotencyConflictError)
+    async def idempotency_conflict_handler(request: Request, exc: IdempotencyConflictError) -> JSONResponse:
+        return build_error_response(
+            request=request,
+            status_code=status.HTTP_409_CONFLICT,
+            code=ErrorCode.IDEMPOTENCY_KEY_CONFLICT,
         )
 
     @app.exception_handler(IntentNotFoundError)
