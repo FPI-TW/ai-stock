@@ -8,6 +8,7 @@ Each helper opens its own Session so command-owned commits behave like real requ
 from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -17,6 +18,7 @@ from argon2 import PasswordHasher
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session
 
+from app.commands import auth as auth_commands
 from app.commands.auth import (
     IssuedSession,
     LoginCommand,
@@ -27,7 +29,7 @@ from app.commands.auth import (
     RefreshInput,
 )
 from app.core.config import Settings
-from app.core.passwords import hash_password
+from app.core.passwords import hash_password, verify_password
 from app.core.rate_limiter import RateLimiter
 from app.core.tokens import decode_access_token
 from app.db.models.auth import User
@@ -82,6 +84,22 @@ def _seed_active_user(engine: Engine, email: str, *, role: str = "user") -> UUID
                 role=role,
                 status="active",
                 password_hash=hash_password(_HASHER, _PASSWORD),
+            )
+        )
+        session.commit()
+    return user_id
+
+
+def _seed_user(engine: Engine, email: str, *, status: str, with_password: bool) -> UUID:
+    user_id = uuid4()
+    with Session(engine) as session:
+        session.add(
+            User(
+                id=user_id,
+                email=email,
+                role="user",
+                status=status,
+                password_hash=hash_password(_HASHER, _PASSWORD) if with_password else None,
             )
         )
         session.commit()
@@ -158,6 +176,33 @@ def test_wrong_password_is_undifferentiated_then_locks(auth_engine: Engine, sett
     # An unknown email also raises LoginFailedError (existence not leaked).
     with pytest.raises(LoginFailedError):
         _login(auth_engine, settings, f"ghost-{uuid4()}@example.com", "whatever")
+
+
+@pytest.mark.integration
+def test_login_runs_one_argon2_verify_on_every_path(auth_engine: Engine, settings: Settings) -> None:
+    """Timing-based user-enumeration guard: a missing / disabled / not-yet-activated
+    account must still trigger exactly one argon2 verify, so its response time matches a
+    real failed login and can't be used to enumerate which emails are real accounts."""
+    active = f"timing-active-{uuid4()}@example.com"
+    _seed_active_user(auth_engine, active)
+    disabled = f"timing-disabled-{uuid4()}@example.com"
+    _seed_user(auth_engine, disabled, status="disabled", with_password=True)
+    invited = f"timing-invited-{uuid4()}@example.com"
+    _seed_user(auth_engine, invited, status="invited", with_password=False)
+    ghost = f"timing-ghost-{uuid4()}@example.com"  # never seeded
+
+    # Active-wrong-password runs verify against the real hash; the other three short-circuit
+    # to False on existence/status/password checks but must STILL run one verify (dummy hash).
+    for email, password in [
+        (active, "wrong-password"),
+        (disabled, _PASSWORD),
+        (invited, _PASSWORD),
+        (ghost, "whatever"),
+    ]:
+        with patch.object(auth_commands, "verify_password", side_effect=verify_password) as spy:
+            with pytest.raises(LoginFailedError):
+                _login(auth_engine, settings, email, password)
+        assert spy.call_count == 1, f"{email}: expected exactly one argon2 verify, got {spy.call_count}"
 
 
 @pytest.mark.integration

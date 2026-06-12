@@ -15,7 +15,7 @@ from argon2 import PasswordHasher
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.passwords import verify_password
+from app.core.passwords import dummy_password_hash, verify_password
 from app.core.rate_limiter import RateLimiter
 from app.core.tokens import (
     csrf_tokens_match,
@@ -217,11 +217,19 @@ class LoginCommand:
                 raise LoginLockedError(decision.retry_after_seconds)
 
             user = self._users.get_by_email(inp.email)
+            # Run exactly one argon2 verify on EVERY path — even when the account is
+            # missing / disabled / password-less — so response time can't reveal which
+            # (timing-based user enumeration; would otherwise undo the password-reset
+            # endpoint's deliberate "don't leak whether the email exists"). A dummy hash
+            # with identical cost params stands in when there is no real hash to check.
+            stored_hash = (
+                user.password_hash
+                if user is not None and user.password_hash is not None
+                else dummy_password_hash(self._hasher)
+            )
+            password_ok = verify_password(self._hasher, stored_hash, inp.password)
             authenticated = (
-                user is not None
-                and user.status == "active"
-                and user.password_hash is not None
-                and verify_password(self._hasher, user.password_hash, inp.password)
+                user is not None and user.status == "active" and user.password_hash is not None and password_ok
             )
             if not authenticated or user is None:
                 self._audit.write(
