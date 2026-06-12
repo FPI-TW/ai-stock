@@ -49,7 +49,18 @@ _CSRF_COOKIE_PATH = "/"
 
 def _client_ip(request: Request) -> str | None:
     """The peer IP, but only if it parses as one (TestClient uses 'testclient',
-    which the INET column would reject)."""
+    which the INET column would reject).
+
+    TODO(before-prod, SECURITY_AUDIT.md A-1): this returns the DIRECT peer IP. Correct
+    while clients connect directly, but once deployed behind a reverse proxy (Nginx /
+    ALB) every request's peer is the proxy, so the per-IP login throttle (login:ip,
+    20/15min) silently collapses into one shared bucket — legitimate users lock each
+    other out (self-DoS) and the credential-stuffing defence becomes meaningless. Fix
+    before going live behind a proxy: derive the real client IP from X-Forwarded-For via
+    a TRUSTED hop only (Uvicorn --forwarded-allow-ips + Starlette ProxyHeadersMiddleware,
+    or resolve the trusted-proxy CIDR in config). Never blindly trust XFF — it is
+    client-spoofable, which would let an attacker forge IPs to bypass / frame the throttle.
+    """
     if request.client is None:
         return None
     try:
