@@ -158,3 +158,7 @@ class MfaAlreadyEnabledError(AccountError):
 
 class MfaNotSetupError(AccountError):
     """2FA verify attempted before any secret was provisioned."""
+
+
+class AccountNotDisabledError(AccountError):
+    """Reactivation attempted on a user that is not currently disabled."""

@@ -10,6 +10,7 @@ from app.commands.account import (
     AcceptInvitationCommand,
     CreateUserCommand,
     DisableUserCommand,
+    ReactivateUserCommand,
     ResendInvitationCommand,
 )
 from app.commands.auth import LoginCommand, LogoutCommand, RefreshCommand
@@ -551,6 +552,17 @@ def get_disable_user_command(
 
 
 DisableUserCommandDep = Annotated[DisableUserCommand, Depends(get_disable_user_command)]
+
+
+def get_reactivate_user_command(
+    db: DatabaseDep,
+    users: UserRepoDep,
+    audit: AuditWriterDep,
+) -> ReactivateUserCommand:
+    return ReactivateUserCommand(db, users, audit)
+
+
+ReactivateUserCommandDep = Annotated[ReactivateUserCommand, Depends(get_reactivate_user_command)]
 
 
 def get_resend_invitation_command(

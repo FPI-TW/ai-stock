@@ -49,6 +49,14 @@ class UserRepository:
             execution_options={"synchronize_session": False},
         )
 
+    def reactivate(self, user_id: UUID, *, now: datetime) -> None:
+        """Flip a disabled user back to active and clear disabled_at. Old intents are
+        NOT restored (spec §13) — the caller only changes status."""
+        self._db.execute(
+            update(User).where(User.id == user_id).values(status="active", disabled_at=None, updated_at=now),
+            execution_options={"synchronize_session": False},
+        )
+
     def get_mfa_secret_encrypted(self, user_id: UUID) -> bytes | None:
         return self._db.execute(select(User.mfa_secret_encrypted).where(User.id == user_id)).scalar_one_or_none()
 

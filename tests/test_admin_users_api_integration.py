@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_active_user, get_current_user, get_mailer
 from app.core.config import get_settings
 from app.core.security import RequestUser
-from app.db.models.auth import RefreshToken, User
+from app.db.models.auth import AuditEvent, RefreshToken, User
 from app.db.models.core import Symbol, TradeIntent
 from app.main import create_app
 from app.services.mailer import MailMessage
@@ -164,6 +164,51 @@ def test_disable_unknown_user_is_404(admin_engine: Engine) -> None:
     client = _admin_client(admin_engine)
 
     response = client.post(f"/admin/users/{uuid4()}/disable")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "NOT_FOUND"
+
+
+@pytest.mark.integration
+def test_reactivate_restores_disabled_user_without_restoring_intents(admin_engine: Engine) -> None:
+    client = _admin_client(admin_engine)
+    user_id = _seed_active_user(admin_engine, f"reactivate-{uuid4()}@example.com")
+    intent_id = _seed_intent(admin_engine, user_id, status="active")
+
+    assert client.post(f"/admin/users/{user_id}/disable").status_code == 204
+
+    response = client.post(f"/admin/users/{user_id}/reactivate")
+    assert response.status_code == 204
+
+    with Session(admin_engine) as session:
+        user = session.execute(select(User).where(User.id == user_id)).scalar_one()
+        intent = session.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one()
+        assert user.status == "active"
+        assert user.disabled_at is None
+        # spec §13: old intents are NOT restored by reactivation.
+        assert intent.status == "cancelled_by_account_disabled"
+        reactivated = session.execute(
+            select(AuditEvent).where(AuditEvent.event_type == "account_reactivated")
+        ).scalar_one()
+        assert reactivated.event_metadata["target_user_id"] == str(user_id)
+
+
+@pytest.mark.integration
+def test_reactivate_non_disabled_user_is_409(admin_engine: Engine) -> None:
+    client = _admin_client(admin_engine)
+    user_id = _seed_active_user(admin_engine, f"active-{uuid4()}@example.com")
+
+    response = client.post(f"/admin/users/{user_id}/reactivate")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "ACCOUNT_NOT_DISABLED"
+
+
+@pytest.mark.integration
+def test_reactivate_unknown_user_is_404(admin_engine: Engine) -> None:
+    client = _admin_client(admin_engine)
+
+    response = client.post(f"/admin/users/{uuid4()}/reactivate")
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "NOT_FOUND"

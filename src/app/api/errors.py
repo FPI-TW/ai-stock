@@ -10,6 +10,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.domain.auth import (
     AccountError,
+    AccountNotDisabledError,
     AuthError,
     CsrfFailedError,
     EmailAlreadyExistsError,
@@ -100,6 +101,7 @@ class ErrorCode(StrEnum):
     MFA_INVALID_CODE = "MFA_INVALID_CODE"
     MFA_ALREADY_ENABLED = "MFA_ALREADY_ENABLED"
     MFA_NOT_SETUP = "MFA_NOT_SETUP"
+    ACCOUNT_NOT_DISABLED = "ACCOUNT_NOT_DISABLED"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -151,6 +153,7 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.MFA_INVALID_CODE: "驗證碼錯誤",
     ErrorCode.MFA_ALREADY_ENABLED: "已啟用兩階段驗證",
     ErrorCode.MFA_NOT_SETUP: "尚未設定兩階段驗證",
+    ErrorCode.ACCOUNT_NOT_DISABLED: "帳號未處於停用狀態，無法復權",
 }
 
 
@@ -280,6 +283,8 @@ def register_exception_handlers(app: FastAPI) -> None:
             return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.MFA_ALREADY_ENABLED)
         if isinstance(exc, MfaNotSetupError):
             return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.MFA_NOT_SETUP)
+        if isinstance(exc, AccountNotDisabledError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.ACCOUNT_NOT_DISABLED)
         return build_error_response(request, status.HTTP_400_BAD_REQUEST, ErrorCode.VALIDATION_ERROR)
 
     @app.exception_handler(SymbolError)

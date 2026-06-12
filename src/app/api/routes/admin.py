@@ -12,6 +12,7 @@ from app.api.deps import (
     AdminUserDep,
     CreateUserCommandDep,
     DisableUserCommandDep,
+    ReactivateUserCommandDep,
     ResendInvitationCommandDep,
     SetKillSwitchCommandDep,
     SetupTwoFactorCommandDep,
@@ -31,7 +32,7 @@ from app.api.schemas.admin import (
     UserListResponse,
     UserSummary,
 )
-from app.commands.account import CreateUserInput, DisableUserInput, ResendInvitationInput
+from app.commands.account import CreateUserInput, DisableUserInput, ReactivateUserInput, ResendInvitationInput
 from app.commands.kill_switch import SetKillSwitchInput
 from app.commands.two_factor import SetupTwoFactorInput, VerifyTwoFactorInput
 from app.repositories.system_flag_repository import SystemFlagRepository
@@ -85,6 +86,23 @@ def disable_user(
 ) -> None:
     command.execute(
         DisableUserInput(
+            target_user_id=user_id,
+            actor_admin_id=admin.user_id,
+            now=datetime.now(UTC),
+            request_id=get_request_id(request),
+        )
+    )
+
+
+@router.post("/users/{user_id}/reactivate", status_code=status.HTTP_204_NO_CONTENT)
+def reactivate_user(
+    user_id: UUID,
+    request: Request,
+    admin: AdminUserDep,
+    command: ReactivateUserCommandDep,
+) -> None:
+    command.execute(
+        ReactivateUserInput(
             target_user_id=user_id,
             actor_admin_id=admin.user_id,
             now=datetime.now(UTC),
