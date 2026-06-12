@@ -1,10 +1,10 @@
 """Admin request/response models. camelCase at the boundary; snake_case within."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 
 class CreateUserRequest(BaseModel):
@@ -48,3 +48,19 @@ class TwoFactorVerifyResponse(BaseModel):
     token_type: str = Field(default="Bearer", serialization_alias="tokenType")
     expires_in: int = Field(serialization_alias="expiresIn")
     role: str
+
+
+class KillSwitchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    # strip_whitespace + min_length=1 makes reason mandatory and rejects a blank /
+    # whitespace-only reason with a standard (JSON-serializable) validation error.
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class KillSwitchStateResponse(BaseModel):
+    enabled: bool
+    reason: str | None = None
+    updated_at: datetime | None = Field(default=None, serialization_alias="updatedAt")
+    updated_by: UUID | None = Field(default=None, serialization_alias="updatedBy")

@@ -301,6 +301,19 @@ class TriggerEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class SystemFlag(Base):
+    """Platform-wide operational flags (L2 kill switch). V1 uses a single row,
+    `global_trigger_halt`, toggled by an admin to pause all trigger evaluation."""
+
+    __tablename__ = "system_flags"
+
+    flag_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    updated_by: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class Notification(Base):
     __tablename__ = "notifications"
     __table_args__ = (

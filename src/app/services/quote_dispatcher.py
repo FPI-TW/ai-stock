@@ -36,6 +36,7 @@ from app.domain.trade_intent import IntentNotFoundError
 from app.domain.trading_session import TradingSessionService
 from app.domain.trigger_event import quote_snapshot_to_jsonb
 from app.repositories.intent_repository import IntentRepository
+from app.services.kill_switch import KillSwitchProvider
 from app.services.quote.base import QuoteSnapshot
 
 logger = logging.getLogger(__name__)
@@ -59,10 +60,12 @@ class QuoteEvaluationDispatcher:
         session_factory: SessionFactory,
         evaluator: QuoteEvaluator,
         session_service: TradingSessionService,
+        kill_switch: KillSwitchProvider | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._evaluator = evaluator
         self._session_service = session_service
+        self._kill_switch = kill_switch
 
     def dispatch(self, snapshot: QuoteSnapshot) -> None:
         """Evaluate the snapshot against active intents on `snapshot.symbol`.
@@ -77,6 +80,12 @@ class QuoteEvaluationDispatcher:
             logger.exception("quote dispatch failed on %s", snapshot.symbol)
 
     def _dispatch_inner(self, snapshot: QuoteSnapshot) -> None:
+        # Kill switch: when the global trigger-halt flag is on, the provider has
+        # already captured this snapshot (so UI quote / last-update stay live), but
+        # we stop here — no evaluation, no TriggerEvent, no notification. Missed
+        # crossings are not replayed when the switch is turned off (spec §18).
+        if self._kill_switch is not None and self._kill_switch.is_halted():
+            return
         now = self._session_service.now_taipei()
         with self._session_factory() as db:
             repo = IntentRepository(db)

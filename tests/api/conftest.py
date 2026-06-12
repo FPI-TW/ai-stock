@@ -10,6 +10,7 @@ from app.api.deps import (
     get_current_user,
     get_db,
     get_intent_repository,
+    get_kill_switch_provider,
     get_quote_provider,
     get_symbol_service,
 )
@@ -54,6 +55,10 @@ def client(
     app.dependency_overrides[get_intent_repository] = lambda: mock_intent_repository
     app.dependency_overrides[get_quote_provider] = lambda: in_memory_quote_provider
     app.dependency_overrides[get_db] = lambda: MagicMock()
+    # The kill-switch provider opens its own real session (via get_session_factory),
+    # which would bypass the mocked get_db above and hit a real DB. These api tests
+    # don't exercise the kill switch, so treat it as absent ("not halted").
+    app.dependency_overrides[get_kill_switch_provider] = lambda: None
     app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=TEST_USER_ID, role="user")
     # get_active_user does a real DB status lookup; mirror the current-user override so
     # the MagicMock session above isn't queried (write endpoints use ActiveUserDep).

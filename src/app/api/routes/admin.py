@@ -13,7 +13,9 @@ from app.api.deps import (
     CreateUserCommandDep,
     DisableUserCommandDep,
     ResendInvitationCommandDep,
+    SetKillSwitchCommandDep,
     SetupTwoFactorCommandDep,
+    SystemFlagRepoDep,
     UserRepoDep,
     VerifyTwoFactorCommandDep,
 )
@@ -21,6 +23,8 @@ from app.api.errors import get_request_id
 from app.api.schemas.admin import (
     CreateUserRequest,
     CreateUserResponse,
+    KillSwitchRequest,
+    KillSwitchStateResponse,
     TwoFactorSetupResponse,
     TwoFactorVerifyRequest,
     TwoFactorVerifyResponse,
@@ -28,7 +32,10 @@ from app.api.schemas.admin import (
     UserSummary,
 )
 from app.commands.account import CreateUserInput, DisableUserInput, ResendInvitationInput
+from app.commands.kill_switch import SetKillSwitchInput
 from app.commands.two_factor import SetupTwoFactorInput, VerifyTwoFactorInput
+from app.repositories.system_flag_repository import SystemFlagRepository
+from app.services.kill_switch import GLOBAL_TRIGGER_HALT
 
 router = APIRouter()
 
@@ -134,3 +141,38 @@ def verify_two_factor(
         )
     )
     return TwoFactorVerifyResponse(access_token=result.access_token, expires_in=result.expires_in, role=result.role)
+
+
+def _kill_switch_state(flags: SystemFlagRepository) -> KillSwitchStateResponse:
+    state = flags.get_state(GLOBAL_TRIGGER_HALT)
+    return KillSwitchStateResponse(
+        enabled=state.enabled,
+        reason=state.reason,
+        updated_at=state.updated_at,
+        updated_by=state.updated_by,
+    )
+
+
+@router.post("/kill-switch", response_model=KillSwitchStateResponse)
+def set_kill_switch(
+    request: Request,
+    body: KillSwitchRequest,
+    admin: AdminUserDep,
+    command: SetKillSwitchCommandDep,
+    flags: SystemFlagRepoDep,
+) -> KillSwitchStateResponse:
+    command.execute(
+        SetKillSwitchInput(
+            enabled=body.enabled,
+            reason=body.reason,
+            actor_admin_id=admin.user_id,
+            now=datetime.now(UTC),
+            request_id=get_request_id(request),
+        )
+    )
+    return _kill_switch_state(flags)
+
+
+@router.get("/kill-switch", response_model=KillSwitchStateResponse)
+def get_kill_switch(admin: AdminUserDep, flags: SystemFlagRepoDep) -> KillSwitchStateResponse:
+    return _kill_switch_state(flags)

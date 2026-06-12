@@ -14,6 +14,7 @@ from app.commands.account import (
 )
 from app.commands.auth import LoginCommand, LogoutCommand, RefreshCommand
 from app.commands.intent_lifecycle import IntentLifecycleCommand
+from app.commands.kill_switch import SetKillSwitchCommand
 from app.commands.notification import MarkNotificationReadCommand
 from app.commands.password_reset import PasswordResetConfirmCommand, PasswordResetRequestCommand
 from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand
@@ -34,8 +35,10 @@ from app.repositories.notification_repository import NotificationRepository
 from app.repositories.password_reset_repository import PasswordResetRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.symbol_repository import SymbolRepository
+from app.repositories.system_flag_repository import SystemFlagRepository
 from app.repositories.user_repository import UserRepository
 from app.services.audit import AuditEventWriter
+from app.services.kill_switch import KillSwitchProvider
 from app.services.mailer import LoggingMailer, Mailer
 from app.services.quote.base import QuoteProvider
 from app.services.quote.current_price import CurrentPriceProvider
@@ -197,6 +200,20 @@ def get_quote_provider(request: Request) -> QuoteProvider:
 
 QuoteProviderDep = Annotated[QuoteProvider, Depends(get_quote_provider)]
 
+
+def get_kill_switch_provider(request: Request) -> KillSwitchProvider | None:
+    """The process-wide kill-switch read cache stored on app.state.
+
+    `create_app()` builds it only when a DATABASE_URL is configured (it needs a
+    session factory). Returns None otherwise — DB-less unit/api wiring treats a
+    missing provider as "not halted", and the toggle command skips invalidation.
+    """
+
+    return getattr(request.app.state, "kill_switch_provider", None)
+
+
+KillSwitchProviderDep = Annotated[KillSwitchProvider | None, Depends(get_kill_switch_provider)]
+
 CURRENT_PRICE_ALLOWED_SYMBOLS: frozenset[str] = frozenset({"2330", "2317", "0050", "00878"})
 
 
@@ -259,6 +276,7 @@ def get_create_trade_intent_command(
     quote_provider: QuoteProviderDep,
     evaluator: QuoteEvaluatorDep,
     db: DatabaseDep,
+    kill_switch: KillSwitchProviderDep,
 ) -> CreateTradeIntentCommand:
     return CreateTradeIntentCommand(
         symbol_service,
@@ -267,6 +285,7 @@ def get_create_trade_intent_command(
         quote_provider,
         evaluator,
         db,
+        kill_switch,
     )
 
 
@@ -366,6 +385,25 @@ def get_rate_limiter(db: DatabaseDep) -> RateLimiter:
 
 
 RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter)]
+
+
+def get_system_flag_repository(db: DatabaseDep) -> SystemFlagRepository:
+    return SystemFlagRepository(db)
+
+
+SystemFlagRepoDep = Annotated[SystemFlagRepository, Depends(get_system_flag_repository)]
+
+
+def get_set_kill_switch_command(
+    db: DatabaseDep,
+    flags: SystemFlagRepoDep,
+    audit: AuditWriterDep,
+    provider: KillSwitchProviderDep,
+) -> SetKillSwitchCommand:
+    return SetKillSwitchCommand(db, flags, audit, provider)
+
+
+SetKillSwitchCommandDep = Annotated[SetKillSwitchCommand, Depends(get_set_kill_switch_command)]
 
 
 def get_password_hasher(settings: SettingsDep) -> PasswordHasher:

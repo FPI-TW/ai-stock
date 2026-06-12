@@ -15,6 +15,7 @@ from app.domain.trade_intent import MARKET_ORDER_STRATEGIES, TradeIntentData
 from app.domain.trading_session import TradingSessionService
 from app.domain.trigger_event import quote_snapshot_to_jsonb
 from app.repositories.intent_repository import IntentRepository
+from app.services.kill_switch import KillSwitchProvider
 from app.services.quote.base import QuoteProvider, QuoteProviderError, QuoteSnapshot, QuoteUnavailableError
 from app.services.quote.current_price import CurrentPriceProvider
 from app.services.quote.intent_reconciler import reconcile_after_terminal_transition, reconcile_on_create
@@ -90,6 +91,7 @@ class CreateTradeIntentCommand:
         quote_provider: QuoteProvider,
         evaluator: QuoteEvaluator,
         db: Session,
+        kill_switch: KillSwitchProvider | None = None,
     ) -> None:
         self._symbol_service = symbol_service
         self._session_service = session_service
@@ -97,6 +99,7 @@ class CreateTradeIntentCommand:
         self._quote_provider = quote_provider
         self._evaluator = evaluator
         self._db = db
+        self._kill_switch = kill_switch
 
     def execute(self, inp: CreateTradeIntentInput) -> TradeIntentData:
         try:
@@ -166,7 +169,16 @@ class CreateTradeIntentCommand:
             #    intents skip — they wait for the next-day activation path.
             #    Folded into this transaction so dispatcher can never observe
             #    an active-but-pre-trigger window.
-            if inp.strategy in MARKET_ORDER_STRATEGIES and initial_status == "active":
+            #
+            #    Kill switch: when global trigger-halt is on, skip the inline
+            #    trigger too (not just the dispatcher) — the intent still commits
+            #    as active, but no TriggerEvent / notification is produced. Without
+            #    this gate a create whose condition is already met would fire
+            #    straight through the halt (spec §18: "不產 TriggerEvent / 不發通知").
+            halted = self._kill_switch is not None and self._kill_switch.is_halted()
+            if halted:
+                pass
+            elif inp.strategy in MARKET_ORDER_STRATEGIES and initial_status == "active":
                 self._apply_inline_market_order_trigger(intent_id, inp.symbol)
             elif initial_status == "active":
                 self._apply_inline_trigger_if_quote_met(intent_id, inp.symbol, now, security_type)
