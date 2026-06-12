@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, select, text
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_mailer
+from app.api.deps import get_active_user, get_current_user, get_mailer
 from app.core.config import get_settings
 from app.core.security import RequestUser
 from app.db.models.auth import RefreshToken, User
@@ -84,7 +84,11 @@ def _admin_client(engine: Engine, mailer: _RecordingMailer | None = None) -> Tes
     app = create_app()
     if mailer is not None:
         app.dependency_overrides[get_mailer] = lambda: mailer
-    app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=admin_id, role="admin", mfa_verified=True)
+    principal = RequestUser(user_id=admin_id, role="admin", mfa_verified=True)
+    # ActiveUserDep re-checks the session in the DB; mirror the override so the seeded
+    # admin (which has no refresh-token row) isn't rejected by the revocation gate.
+    app.dependency_overrides[get_current_user] = lambda: principal
+    app.dependency_overrides[get_active_user] = lambda: principal
     return TestClient(app)
 
 

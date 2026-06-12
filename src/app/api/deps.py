@@ -92,16 +92,25 @@ CurrentUserDep = Annotated[RequestUser, Depends(get_current_user)]
 
 
 def get_active_user(user: CurrentUserDep, db: DatabaseDep) -> RequestUser:
-    """Like `get_current_user`, but additionally re-checks the account status in the
-    DB. Access tokens are stateless JWTs valid until TTL, so logout/disable cannot
-    invalidate an already-issued token — a disabled user would otherwise keep write
-    access for up to the token lifetime (≤15 min). Use this on state-changing
-    endpoints (order creation etc.) to close that window; read endpoints rely on the
-    short TTL. 403 ACCOUNT_DISABLED for any non-active (disabled/invited) account.
+    """Like `get_current_user`, but additionally re-validates the session against the
+    DB on every request. Access tokens are stateless JWTs valid until TTL, so logout /
+    password reset / account disable cannot invalidate an already-issued token on their
+    own — the principal would otherwise keep access for up to the token lifetime
+    (≤15 min). Each of those flows revokes the session's refresh token, so we look it up
+    by the access token's `session_id` and reject when it has been revoked for any reason
+    other than normal rotation (`rotated` is benign — the successor token supersedes it).
+
+    Disabled accounts -> 403 ACCOUNT_DISABLED (revoked_reason "account_disabled");
+    every other revocation, and a missing session, -> 401 SESSION_REVOKED so the client
+    re-authenticates.
     """
-    record = UserRepository(db).get_by_id(user.user_id)
-    if record is None or record.status != "active":
-        raise ApiError(code=ErrorCode.ACCOUNT_DISABLED, status_code=status.HTTP_403_FORBIDDEN)
+    token = RefreshTokenRepository(db).get_by_id(user.session_id)
+    if token is None:
+        raise ApiError(code=ErrorCode.SESSION_REVOKED, status_code=status.HTTP_401_UNAUTHORIZED)
+    if token.revoked_at is not None and token.revoked_reason != "rotated":
+        if token.revoked_reason == "account_disabled":
+            raise ApiError(code=ErrorCode.ACCOUNT_DISABLED, status_code=status.HTTP_403_FORBIDDEN)
+        raise ApiError(code=ErrorCode.SESSION_REVOKED, status_code=status.HTTP_401_UNAUTHORIZED)
     return user
 
 
@@ -109,9 +118,12 @@ ActiveUserDep = Annotated[RequestUser, Depends(get_active_user)]
 
 
 def require_role(required_role: str) -> Callable[[RequestUser], RequestUser]:
-    """Dependency factory: 403 FORBIDDEN unless the caller holds `required_role`."""
+    """Dependency factory: 403 FORBIDDEN unless the caller holds `required_role`.
 
-    def _dependency(user: CurrentUserDep) -> RequestUser:
+    Layered on `ActiveUserDep` so admin-role endpoints also get session revocation
+    (a logged-out / disabled admin is rejected before the role check runs)."""
+
+    def _dependency(user: ActiveUserDep) -> RequestUser:
         if user.role != required_role:
             raise ApiError(code=ErrorCode.FORBIDDEN, status_code=status.HTTP_403_FORBIDDEN)
         return user
@@ -119,8 +131,10 @@ def require_role(required_role: str) -> Callable[[RequestUser], RequestUser]:
     return _dependency
 
 
-def get_admin_user(user: CurrentUserDep) -> RequestUser:
-    """Admin gate: must hold the admin role AND a verified second factor.
+def get_admin_user(user: ActiveUserDep) -> RequestUser:
+    """Admin gate: must hold a live session, the admin role, AND a verified second
+    factor. The `ActiveUserDep` layer revokes already-issued tokens on logout / disable
+    / password reset before the role + mfa checks below.
 
     Until the 2FA verify flow (Phase 4) sets mfa_verified, admin endpoints answer
     403 MFA_REQUIRED — the deliberate "set up 2FA before using admin" gate (spec §13).

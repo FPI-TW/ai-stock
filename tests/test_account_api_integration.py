@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_mailer
+from app.api.deps import get_active_user, get_current_user, get_mailer
 from app.core.config import get_settings
 from app.core.security import RequestUser
 from app.db.models.auth import User
@@ -66,7 +66,11 @@ def _admin_client(engine: Engine, mailer: _RecordingMailer) -> TestClient:
     admin_id = _seed_admin(engine)
     app = create_app()
     app.dependency_overrides[get_mailer] = lambda: mailer
-    app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=admin_id, role="admin", mfa_verified=True)
+    principal = RequestUser(user_id=admin_id, role="admin", mfa_verified=True)
+    # ActiveUserDep re-checks the session in the DB; mirror the override so the seeded
+    # admin (which has no refresh-token row) isn't rejected by the revocation gate.
+    app.dependency_overrides[get_current_user] = lambda: principal
+    app.dependency_overrides[get_active_user] = lambda: principal
     return TestClient(app)
 
 
@@ -106,7 +110,9 @@ def test_invite_accept_login_full_chain(account_engine: Engine) -> None:
 @pytest.mark.integration
 def test_create_user_requires_admin_role(account_engine: Engine) -> None:
     app = create_app()
-    app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=uuid4(), role="user", mfa_verified=True)
+    principal = RequestUser(user_id=uuid4(), role="user", mfa_verified=True)
+    app.dependency_overrides[get_current_user] = lambda: principal
+    app.dependency_overrides[get_active_user] = lambda: principal
     response = TestClient(app).post("/admin/users", json={"email": f"x-{uuid4()}@y.com", "role": "user"})
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "FORBIDDEN"
@@ -115,7 +121,9 @@ def test_create_user_requires_admin_role(account_engine: Engine) -> None:
 @pytest.mark.integration
 def test_create_user_requires_verified_mfa(account_engine: Engine) -> None:
     app = create_app()
-    app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=uuid4(), role="admin", mfa_verified=False)
+    principal = RequestUser(user_id=uuid4(), role="admin", mfa_verified=False)
+    app.dependency_overrides[get_current_user] = lambda: principal
+    app.dependency_overrides[get_active_user] = lambda: principal
     response = TestClient(app).post("/admin/users", json={"email": f"x-{uuid4()}@y.com", "role": "user"})
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "MFA_REQUIRED"

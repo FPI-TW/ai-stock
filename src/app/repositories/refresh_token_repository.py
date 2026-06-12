@@ -69,6 +69,13 @@ class RefreshTokenRepository:
         row = self._db.execute(select(RefreshToken).where(RefreshToken.token_hash == token_hash)).scalar_one_or_none()
         return _to_domain(row) if row is not None else None
 
+    def get_by_id(self, token_id: UUID) -> RefreshTokenData | None:
+        """Look up a session's refresh token by id. The access token carries this id as
+        its `session_id`, so the auth layer can re-check whether the session is still
+        live (not logged out / disabled / password-reset) on each request."""
+        row = self._db.execute(select(RefreshToken).where(RefreshToken.id == token_id)).scalar_one_or_none()
+        return _to_domain(row) if row is not None else None
+
     def revoke(self, token_id: UUID, *, reason: str, now: datetime) -> None:
         """Revoke a single token if not already revoked (keeps the original reason)."""
         self._db.execute(

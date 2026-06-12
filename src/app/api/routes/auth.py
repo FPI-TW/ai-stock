@@ -15,7 +15,7 @@ from fastapi import APIRouter, Request, Response, status
 
 from app.api.deps import (
     AcceptInvitationCommandDep,
-    CurrentUserDep,
+    ActiveUserDep,
     LoginCommandDep,
     LogoutCommandDep,
     PasswordResetConfirmCommandDep,
@@ -216,7 +216,7 @@ def logout(
 
 
 @router.get("/me", response_model=MeResponse)
-def me(user: CurrentUserDep, users: UserRepoDep) -> MeResponse:
+def me(user: ActiveUserDep, users: UserRepoDep) -> MeResponse:
     profile = users.get_by_id(user.user_id)
     if profile is None:
         # Token verified but the user no longer exists (deleted / mid-disable race).

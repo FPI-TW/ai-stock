@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, delete
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_active_user, get_current_user
 from app.core.config import get_settings
 from app.core.security import RequestUser
 from app.db.models.core import Symbol, TradeIntent
@@ -137,7 +137,9 @@ def test_cancel_releases_subscription_when_no_peers_remain(db_session: Session) 
     intent_id = _seed_intent(db_session, owner_id=owner)
 
     app = create_app()
-    app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=owner, role="local")
+    principal = RequestUser(user_id=owner, role="local")
+    app.dependency_overrides[get_current_user] = lambda: principal
+    app.dependency_overrides[get_active_user] = lambda: principal
 
     with TestClient(app) as client:
         provider = app.state.quote_provider
@@ -156,7 +158,9 @@ def test_cancel_keeps_subscription_when_other_intent_still_active(db_session: Se
     _seed_intent(db_session, owner_id=owner_b)  # peer intent on the same symbol
 
     app = create_app()
-    app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=owner_a, role="local")
+    principal = RequestUser(user_id=owner_a, role="local")
+    app.dependency_overrides[get_current_user] = lambda: principal
+    app.dependency_overrides[get_active_user] = lambda: principal
 
     with TestClient(app) as client:
         provider = app.state.quote_provider

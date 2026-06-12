@@ -9,7 +9,12 @@ import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_current_user, get_mark_notification_read_command, get_notification_repository
+from app.api.deps import (
+    get_active_user,
+    get_current_user,
+    get_mark_notification_read_command,
+    get_notification_repository,
+)
 from app.core.security import RequestUser
 from app.domain.notification import NotificationData, NotificationNotFoundError
 from app.domain.trade_intent import InvalidCursorError
@@ -59,7 +64,11 @@ def api_client(mock_repo: MagicMock, mock_command: MagicMock) -> Generator[TestC
     app = create_app()
     app.dependency_overrides[get_notification_repository] = lambda: mock_repo
     app.dependency_overrides[get_mark_notification_read_command] = lambda: mock_command
-    app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")
+    principal = RequestUser(user_id=_OWNER_ID, role="user")
+    # Notification endpoints use ActiveUserDep (DB session re-check); override it too so
+    # the mock client doesn't hit a real DB session lookup.
+    app.dependency_overrides[get_current_user] = lambda: principal
+    app.dependency_overrides[get_active_user] = lambda: principal
     client = TestClient(app)
     yield client
     app.dependency_overrides.clear()
