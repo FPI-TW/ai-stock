@@ -137,3 +137,25 @@ def test_twap_worker_settings_parse_env(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert settings.twap_worker_enabled is False
     assert settings.twap_worker_interval_seconds == 3.5
+
+
+def test_missing_mfa_key_with_local_mode_false_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    monkeypatch.setenv("JWT_ACCESS_SECRET", "prod-secret")
+    monkeypatch.delenv("MFA_ENCRYPTION_KEY", raising=False)
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert "MFA_ENCRYPTION_KEY is required when LOCAL_MODE is false" in str(exc_info.value)
+
+
+def test_cors_allow_origins_list_parses_and_trims(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("CORS_ALLOW_ORIGINS", " https://a.example.com , https://b.example.com ,")
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.cors_allow_origins_list == ["https://a.example.com", "https://b.example.com"]
