@@ -65,12 +65,18 @@ class CreateTradeIntentInput:
     notification_mode: str = "single"
     trail_mode: str | None = None
     trail_value: Decimal | None = None
+    # §16 correlation id, plumbed from the API X-Request-Id. The intent
+    # lifecycle audit event (`intent_created`) that will stamp this is not yet
+    # owned by any V1 work order — see TASK_TRACKER. Carried here so whichever
+    # order picks that up inherits the id without reworking the command seam.
+    request_id: str | None = None
 
 
 @dataclass(frozen=True)
 class CancelTradeIntentInput:
     intent_id: UUID
     owner_user_id: UUID
+    request_id: str | None = None  # §16 correlation id; see CreateTradeIntentInput
 
 
 class CreateTradeIntentCommand:

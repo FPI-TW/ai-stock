@@ -2,7 +2,7 @@ from datetime import UTC, date, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.api.deps import (
     ActiveUserDep,
@@ -16,7 +16,7 @@ from app.api.deps import (
     TwapPlanCommandDep,
     enforce_mutation_rate_limit,
 )
-from app.api.errors import ApiError, ErrorCode
+from app.api.errors import ApiError, ErrorCode, get_request_id
 from app.api.routes._pagination import validate_cursor
 from app.commands.trade_intent import CancelTradeIntentInput, CreateTradeIntentInput
 from app.commands.twap import TwapPlanInput
@@ -66,6 +66,7 @@ def _validate_statuses(statuses: list[str] | None) -> None:
     dependencies=[Depends(enforce_mutation_rate_limit)],
 )
 def create_intent(
+    http_request: Request,
     request: IntentCreateRequest,
     user: ActiveUserDep,
     command: CreateTradeIntentCommandDep,
@@ -84,6 +85,7 @@ def create_intent(
                 trail_mode=getattr(request, "trail_mode", None),
                 trail_value=getattr(request, "trail_value", None),
                 owner_user_id=user.user_id,
+                request_id=get_request_id(http_request),
             )
         )
         return IntentCreateResponse(data=map_to_response_data(intent)).model_dump(mode="json")
@@ -188,6 +190,7 @@ def get_intent(
     dependencies=[Depends(enforce_mutation_rate_limit)],
 )
 def cancel_intent(
+    http_request: Request,
     intent_id: UUID,
     user: ActiveUserDep,
     command: CancelTradeIntentCommandDep,
@@ -198,7 +201,13 @@ def cancel_intent(
 ) -> dict[str, Any]:
     def execute() -> dict[str, Any]:
         lifecycle.run()
-        intent = command.execute(CancelTradeIntentInput(intent_id=intent_id, owner_user_id=user.user_id))
+        intent = command.execute(
+            CancelTradeIntentInput(
+                intent_id=intent_id,
+                owner_user_id=user.user_id,
+                request_id=get_request_id(http_request),
+            )
+        )
         slices = intent_repo.list_twap_slices(intent_id, user.user_id) if intent.strategy == "twap_order" else None
         return IntentDetailResponse(data=map_to_detail_response_data(intent, slices)).model_dump(mode="json")
 
