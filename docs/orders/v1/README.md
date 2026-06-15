@@ -13,6 +13,7 @@
 **上線後**
 - [P1 停利/停損 + OCO](P1-take-profit-stop-loss-oco.md)（[白話說明](P1-白話說明.md)）
 - [P2 通知交付保證（Outbox）](P2-outbox-notification-delivery.md)（[白話說明](P2-白話說明.md)）
+- [P2.5 intent 生命週期 audit](P2.5-intent-lifecycle-audit.md) — 補齊 §17 的 `intent_created`/`activated`/`triggered`/`expired`/`cancelled`（L2 清單列出但無票認領的孤兒；接於 P2 後）（[白話說明](P2.5-白話說明.md)）
 - [P3 Telegram 綁定 + 通知設定](P3-telegram-binding-notification-settings.md)（[白話說明](P3-白話說明.md)）
 - [P4 除息調整](P4-corporate-action-dividend.md)（[白話說明](P4-白話說明.md)）
 - [P5 Admin 監控 + 覆寫 + Kill Switch 完整版](P5-admin-monitoring-overrides-killswitch.md)（[白話說明](P5-白話說明.md)）
@@ -20,4 +21,5 @@
 
 ## 執行序
 
-L1 → L2 → L3 →【上線】→（P1 ‖ P2 ‖ P4）→ P3 → P5 → P6
+L1 → L2 → L3 →【上線】→（P1 ‖ P2 ‖ P4）→ P2.5 → P3 → P5 → P6
+（P2.5 接於 P2 後：`intent_triggered` 需 P2 refactor 後的 outbox transaction）
