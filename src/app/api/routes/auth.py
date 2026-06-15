@@ -122,6 +122,15 @@ def _enforce_csrf_origin(request: Request, allowed_origins: list[str]) -> None:
     Referer) is present but not in the CORS allow-list. When neither header is
     present we fall through to the double-submit check — non-browser clients and
     some same-origin requests omit both, and the token still guards them."""
+    if not allowed_origins:
+        # No allow-list configured → same-origin deployment (the CORS middleware
+        # is likewise skipped when the list is empty). We have nothing to compare
+        # against and our own origin isn't enumerated, so an empty list would
+        # otherwise reject the browser's own same-origin Origin header on every
+        # refresh/logout and lock out all sessions. Skip this defense-in-depth
+        # layer and rely on the double-submit token, which still blocks cross-site
+        # forgeries (an attacker can't read our CSRF cookie to echo it).
+        return
     origin = request.headers.get("Origin")
     if origin is not None:
         if origin not in allowed_origins:

@@ -34,3 +34,10 @@ def test_no_origin_no_referer_falls_through() -> None:
     # Neither header present → rely on the double-submit token; do not hard-fail
     # (non-browser clients and some same-origin requests omit both).
     _enforce_csrf_origin(_request({}), _ALLOWED)
+
+
+def test_empty_allowlist_skips_origin_check() -> None:
+    # Same-origin deployment with no configured allow-list: the browser still sends
+    # its own Origin, which would never be in an empty list. Must NOT reject — that
+    # would lock out every refresh/logout. Falls back to the double-submit token.
+    _enforce_csrf_origin(_request({"origin": "https://app.example.com"}), [])
