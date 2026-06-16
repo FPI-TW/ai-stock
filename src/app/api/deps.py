@@ -351,8 +351,9 @@ def get_twap_confirm_command(
     intent_repo: IntentRepoDep,
     quote_provider: QuoteProviderDep,
     db: DatabaseDep,
+    limits: IntentLimitsDep,
 ) -> TwapConfirmCommand:
-    return TwapConfirmCommand(symbol_service, session_service, intent_repo, quote_provider, db)
+    return TwapConfirmCommand(symbol_service, session_service, intent_repo, quote_provider, db, limits)
 
 
 TwapConfirmCommandDep = Annotated[TwapConfirmCommand, Depends(get_twap_confirm_command)]
