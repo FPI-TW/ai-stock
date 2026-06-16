@@ -11,10 +11,13 @@ from fastapi import status
 from fastapi.testclient import TestClient
 
 from app.api.deps import (
+    enforce_mutation_rate_limit,
     get_active_user,
     get_cancel_trade_intent_command,
     get_create_trade_intent_command,
     get_current_user,
+    get_idempotency_key,
+    get_idempotency_manager,
     get_intent_repository,
 )
 from app.core.security import RequestUser
@@ -25,6 +28,12 @@ from app.domain.trade_intent import (
     TradeIntentData,
 )
 from app.main import create_app
+
+
+class _PassthroughIdempotency:
+    def run(self, *, execute: object, **_: object) -> object:
+        return execute()  # type: ignore[operator]
+
 
 _OWNER_ID = UUID("00000000-0000-0000-0000-000000000001")
 _INTENT_ID = uuid4()
@@ -122,6 +131,9 @@ def api_client(
     app = create_app()
     app.dependency_overrides[get_create_trade_intent_command] = lambda: mock_create_command
     app.dependency_overrides[get_cancel_trade_intent_command] = lambda: mock_cancel_command
+    app.dependency_overrides[enforce_mutation_rate_limit] = lambda: None
+    app.dependency_overrides[get_idempotency_key] = lambda: "test-idempotency-key"
+    app.dependency_overrides[get_idempotency_manager] = lambda: _PassthroughIdempotency()
     app.dependency_overrides[get_intent_repository] = lambda: mock_repo
     app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")
     app.dependency_overrides[get_active_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")

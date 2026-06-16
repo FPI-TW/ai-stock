@@ -45,6 +45,7 @@ def clear_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
         "TELEGRAM_TIMEOUT_SECONDS",
         "TWAP_WORKER_ENABLED",
         "TWAP_WORKER_INTERVAL_SECONDS",
+        "IDEMPOTENCY_CLEANUP_ENABLED",
         "JWT_ACCESS_SECRET",
         "MFA_ENCRYPTION_KEY",
     ):
@@ -61,6 +62,7 @@ def clear_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "")
     monkeypatch.setenv("TWAP_WORKER_ENABLED", "false")
+    monkeypatch.setenv("IDEMPOTENCY_CLEANUP_ENABLED", "false")
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()

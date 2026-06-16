@@ -11,10 +11,16 @@ from app.commands.trigger_intent import TriggerIntentInput, persist_trigger
 from app.db.models.core import TradeIntent as TradeIntentRow
 from app.domain.price import InvalidTypeError, PriceRequest, PriceService, SecurityType
 from app.domain.quote_evaluation import QuoteEvaluator
-from app.domain.trade_intent import MARKET_ORDER_STRATEGIES, TradeIntentData
+from app.domain.trade_intent import (
+    MARKET_ORDER_STRATEGIES,
+    SymbolIntentLimitExceededError,
+    TradeIntentData,
+    UserIntentLimitExceededError,
+)
 from app.domain.trading_session import TradingSessionService
 from app.domain.trigger_event import quote_snapshot_to_jsonb
 from app.repositories.intent_repository import IntentRepository
+from app.services.kill_switch import KillSwitchProvider
 from app.services.quote.base import QuoteProvider, QuoteProviderError, QuoteSnapshot, QuoteUnavailableError
 from app.services.quote.current_price import CurrentPriceProvider
 from app.services.quote.intent_reconciler import reconcile_after_terminal_transition, reconcile_on_create
@@ -39,6 +45,15 @@ _TRIGGER_REF: dict[str, str] = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class IntentLimits:
+    """§15 per-owner creation caps. Injected into CreateTradeIntentCommand from env
+    defaults; P5 will swap the providing dependency for an admin-tunable source."""
+
+    per_user: int
+    per_symbol: int
+
+
 @dataclass(frozen=True)
 class CreateTradeIntentInput:
     symbol: str
@@ -50,12 +65,18 @@ class CreateTradeIntentInput:
     notification_mode: str = "single"
     trail_mode: str | None = None
     trail_value: Decimal | None = None
+    # §16 correlation id, plumbed from the API X-Request-Id. The intent
+    # lifecycle audit event (`intent_created`) that will stamp this is not yet
+    # owned by any V1 work order — see TASK_TRACKER. Carried here so whichever
+    # order picks that up inherits the id without reworking the command seam.
+    request_id: str | None = None
 
 
 @dataclass(frozen=True)
 class CancelTradeIntentInput:
     intent_id: UUID
     owner_user_id: UUID
+    request_id: str | None = None  # §16 correlation id; see CreateTradeIntentInput
 
 
 class CreateTradeIntentCommand:
@@ -90,6 +111,8 @@ class CreateTradeIntentCommand:
         quote_provider: QuoteProvider,
         evaluator: QuoteEvaluator,
         db: Session,
+        kill_switch: KillSwitchProvider | None = None,
+        limits: IntentLimits | None = None,
     ) -> None:
         self._symbol_service = symbol_service
         self._session_service = session_service
@@ -97,6 +120,8 @@ class CreateTradeIntentCommand:
         self._quote_provider = quote_provider
         self._evaluator = evaluator
         self._db = db
+        self._kill_switch = kill_switch
+        self._limits = limits
 
     def execute(self, inp: CreateTradeIntentInput) -> TradeIntentData:
         try:
@@ -140,6 +165,21 @@ class CreateTradeIntentCommand:
             if trigger_ref is None:
                 raise ValueError(f"Unsupported strategy: {inp.strategy}")
 
+            # §15 creation caps — checked before insert so an over-limit create is
+            # rejected without writing. User cap first (broader), then per-symbol.
+            # limits is None in fake-repo / DB-less test wiring → enforcement skipped.
+            if self._limits is not None:
+                user_count = self._intent_repo.count_active_or_scheduled_for_user(inp.owner_user_id)
+                if user_count >= self._limits.per_user:
+                    raise UserIntentLimitExceededError(limit=self._limits.per_user, current=user_count)
+                symbol_count = self._intent_repo.count_active_or_scheduled_for_user_symbol(
+                    inp.owner_user_id, inp.symbol
+                )
+                if symbol_count >= self._limits.per_symbol:
+                    raise SymbolIntentLimitExceededError(
+                        symbol=inp.symbol, limit=self._limits.per_symbol, current=symbol_count
+                    )
+
             intent_id = self._intent_repo.create(
                 owner_user_id=inp.owner_user_id,
                 symbol=inp.symbol,
@@ -166,7 +206,16 @@ class CreateTradeIntentCommand:
             #    intents skip — they wait for the next-day activation path.
             #    Folded into this transaction so dispatcher can never observe
             #    an active-but-pre-trigger window.
-            if inp.strategy in MARKET_ORDER_STRATEGIES and initial_status == "active":
+            #
+            #    Kill switch: when global trigger-halt is on, skip the inline
+            #    trigger too (not just the dispatcher) — the intent still commits
+            #    as active, but no TriggerEvent / notification is produced. Without
+            #    this gate a create whose condition is already met would fire
+            #    straight through the halt (spec §18: "不產 TriggerEvent / 不發通知").
+            halted = self._kill_switch is not None and self._kill_switch.is_halted()
+            if halted:
+                pass
+            elif inp.strategy in MARKET_ORDER_STRATEGIES and initial_status == "active":
                 self._apply_inline_market_order_trigger(intent_id, inp.symbol)
             elif initial_status == "active":
                 self._apply_inline_trigger_if_quote_met(intent_id, inp.symbol, now, security_type)

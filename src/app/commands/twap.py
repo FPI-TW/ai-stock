@@ -7,9 +7,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.commands.intent_lifecycle import IntentLifecycleCommand
+from app.commands.trade_intent import IntentLimits
 from app.db.models.core import Notification, TradeIntent, TwapSlice
 from app.domain.price import InvalidTypeError, SecurityType
-from app.domain.trade_intent import TradeIntentData
+from app.domain.trade_intent import (
+    SymbolIntentLimitExceededError,
+    TradeIntentData,
+    UserIntentLimitExceededError,
+)
 from app.domain.trading_session import TradingDayPhase, TradingSessionService
 from app.domain.twap import (
     TWAP_EXECUTION_MODE,
@@ -22,6 +27,7 @@ from app.domain.twap import (
     build_twap_plan,
 )
 from app.repositories.intent_repository import IntentRepository
+from app.services.kill_switch import KillSwitchProvider
 from app.services.notification_template import render_twap_price_followup, render_twap_slice
 from app.services.quote.base import QuoteProvider, QuoteProviderError, QuoteSnapshot
 from app.services.quote.intent_reconciler import reconcile_on_create
@@ -38,6 +44,7 @@ class TwapPlanInput:
     start_time: time | None
     end_time: time
     owner_user_id: UUID
+    request_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,15 +97,18 @@ class TwapConfirmCommand(TwapPlanCommand):
         intent_repo: IntentRepository,
         quote_provider: QuoteProvider,
         db: Session,
+        limits: IntentLimits | None = None,
     ) -> None:
         super().__init__(symbol_service, session_service)
         self._intent_repo = intent_repo
         self._quote_provider = quote_provider
         self._db = db
+        self._limits = limits
 
     def execute(self, inp: TwapPlanInput) -> TwapConfirmOutput:
         try:
             self._validate_symbol(inp.symbol)
+            self._enforce_creation_caps(inp)
             plan = self._build_plan(inp)
             initial_status = "active" if plan.trading_phase == TradingDayPhase.REGULAR_SESSION else "scheduled"
             intent_id = self._intent_repo.create_twap(
@@ -117,6 +127,19 @@ class TwapConfirmCommand(TwapPlanCommand):
             raise
         return TwapConfirmOutput(intent=self._intent_repo.find_by_id(intent_id, inp.owner_user_id))
 
+    def _enforce_creation_caps(self, inp: TwapPlanInput) -> None:
+        # §15 creation caps — same gate as CreateTradeIntentCommand, checked before
+        # insert so an over-limit confirm is rejected without writing. User cap first
+        # (broader), then per-symbol. limits is None in DB-less test wiring → skipped.
+        if self._limits is None:
+            return
+        user_count = self._intent_repo.count_active_or_scheduled_for_user(inp.owner_user_id)
+        if user_count >= self._limits.per_user:
+            raise UserIntentLimitExceededError(limit=self._limits.per_user, current=user_count)
+        symbol_count = self._intent_repo.count_active_or_scheduled_for_user_symbol(inp.owner_user_id, inp.symbol)
+        if symbol_count >= self._limits.per_symbol:
+            raise SymbolIntentLimitExceededError(symbol=inp.symbol, limit=self._limits.per_symbol, current=symbol_count)
+
 
 class TwapSliceWorkerCommand:
     def __init__(
@@ -124,15 +147,22 @@ class TwapSliceWorkerCommand:
         db: Session,
         quote_provider: QuoteProvider,
         session_service: TradingSessionService,
+        kill_switch: KillSwitchProvider | None = None,
     ) -> None:
         self._db = db
         self._quote_provider = quote_provider
         self._session_service = session_service
+        self._kill_switch = kill_switch
 
     def process_due_slices(self, *, limit: int = 100) -> TwapWorkerOutput:
         now = self._session_service.now_taipei()
         IntentLifecycleCommand(IntentRepository(self._db), self._session_service).run()
         if self._session_service.get_trading_day_phase(now) != TradingDayPhase.REGULAR_SESSION:
+            return TwapWorkerOutput(processed_count=0)
+        # Kill switch (§18): global trigger-halt suppresses TWAP slice notifications
+        # too — processing a due slice produces a notification, exactly what the halt
+        # forbids. No provider (DB-less wiring) is treated as "not halted".
+        if self._kill_switch is not None and self._kill_switch.is_halted():
             return TwapWorkerOutput(processed_count=0)
         try:
             rows = self._load_due_slices(now, limit)
@@ -148,6 +178,10 @@ class TwapSliceWorkerCommand:
         now = self._session_service.now_taipei()
         IntentLifecycleCommand(IntentRepository(self._db), self._session_service).run()
         if self._session_service.get_trading_day_phase(now) != TradingDayPhase.REGULAR_SESSION:
+            return TwapWorkerOutput(processed_count=0)
+        # Kill switch (§18): a price follow-up is itself a notification, so a halt
+        # must suppress it too. See process_due_slices.
+        if self._kill_switch is not None and self._kill_switch.is_halted():
             return TwapWorkerOutput(processed_count=0)
         try:
             rows = self._load_followup_slices(now, limit)

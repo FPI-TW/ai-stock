@@ -14,6 +14,7 @@ from sqlalchemy import (
     Numeric,
     Text,
     Time,
+    UniqueConstraint,
     func,
     text,
 )
@@ -299,6 +300,41 @@ class TriggerEvent(Base):
     dynamic_trigger_price_at_trigger: Mapped[Decimal | None] = mapped_column(Numeric(9, 4), nullable=True)
     triggered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class SystemFlag(Base):
+    """Platform-wide operational flags (L2 kill switch). V1 uses a single row,
+    `global_trigger_halt`, toggled by an admin to pause all trigger evaluation."""
+
+    __tablename__ = "system_flags"
+
+    flag_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    updated_by: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class IdempotencyKey(Base):
+    """Per-user idempotency record (L2 §16). A replay of the same (user, key) with the
+    same request_hash returns response_snapshot without re-running side effects; a
+    different request_hash on a live key is a conflict. Rows live 24h (expires_at)."""
+
+    __tablename__ = "idempotency_keys"
+    __table_args__ = (
+        UniqueConstraint("user_id", "key", name="uq_idempotency_keys_user_id_key"),
+        Index("ix_idempotency_keys_expires_at", "expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
+    request_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    response_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class Notification(Base):

@@ -10,13 +10,15 @@ from app.commands.account import (
     AcceptInvitationCommand,
     CreateUserCommand,
     DisableUserCommand,
+    ReactivateUserCommand,
     ResendInvitationCommand,
 )
 from app.commands.auth import LoginCommand, LogoutCommand, RefreshCommand
 from app.commands.intent_lifecycle import IntentLifecycleCommand
+from app.commands.kill_switch import SetKillSwitchCommand
 from app.commands.notification import MarkNotificationReadCommand
 from app.commands.password_reset import PasswordResetConfirmCommand, PasswordResetRequestCommand
-from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand
+from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand, IntentLimits
 from app.commands.trigger_intent import TriggerIntentCommand
 from app.commands.twap import TwapConfirmCommand, TwapPlanCommand, TwapSliceWorkerCommand
 from app.commands.two_factor import SetupTwoFactorCommand, VerifyTwoFactorCommand
@@ -26,16 +28,21 @@ from app.core.rate_limiter import RateLimiter
 from app.core.security import RequestUser
 from app.core.tokens import InvalidAccessTokenError, decode_access_token
 from app.db.session import check_database_connectivity, get_session_factory
+from app.domain.auth import RateLimitedError
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
+from app.repositories.idempotency_repository import IdempotencyRepository
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.invitation_repository import InvitationRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.repositories.password_reset_repository import PasswordResetRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.symbol_repository import SymbolRepository
+from app.repositories.system_flag_repository import SystemFlagRepository
 from app.repositories.user_repository import UserRepository
 from app.services.audit import AuditEventWriter
+from app.services.idempotency import IdempotencyManager
+from app.services.kill_switch import KillSwitchProvider
 from app.services.mailer import LoggingMailer, Mailer
 from app.services.quote.base import QuoteProvider
 from app.services.quote.current_price import CurrentPriceProvider
@@ -197,6 +204,20 @@ def get_quote_provider(request: Request) -> QuoteProvider:
 
 QuoteProviderDep = Annotated[QuoteProvider, Depends(get_quote_provider)]
 
+
+def get_kill_switch_provider(request: Request) -> KillSwitchProvider | None:
+    """The process-wide kill-switch read cache stored on app.state.
+
+    `create_app()` builds it only when a DATABASE_URL is configured (it needs a
+    session factory). Returns None otherwise — DB-less unit/api wiring treats a
+    missing provider as "not halted", and the toggle command skips invalidation.
+    """
+
+    return getattr(request.app.state, "kill_switch_provider", None)
+
+
+KillSwitchProviderDep = Annotated[KillSwitchProvider | None, Depends(get_kill_switch_provider)]
+
 CURRENT_PRICE_ALLOWED_SYMBOLS: frozenset[str] = frozenset({"2330", "2317", "0050", "00878"})
 
 
@@ -252,6 +273,15 @@ def get_quote_evaluator(session_service: TradingSessionServiceDep) -> QuoteEvalu
 QuoteEvaluatorDep = Annotated[QuoteEvaluator, Depends(get_quote_evaluator)]
 
 
+def get_intent_limits(settings: SettingsDep) -> IntentLimits:
+    """§15 creation caps from env defaults. P5 overrides this dependency to source
+    admin-tunable limits without touching the command."""
+    return IntentLimits(per_user=settings.intent_limit_per_user, per_symbol=settings.intent_limit_per_symbol)
+
+
+IntentLimitsDep = Annotated[IntentLimits, Depends(get_intent_limits)]
+
+
 def get_create_trade_intent_command(
     symbol_service: SymbolServiceDep,
     session_service: TradingSessionServiceDep,
@@ -259,6 +289,8 @@ def get_create_trade_intent_command(
     quote_provider: QuoteProviderDep,
     evaluator: QuoteEvaluatorDep,
     db: DatabaseDep,
+    kill_switch: KillSwitchProviderDep,
+    limits: IntentLimitsDep,
 ) -> CreateTradeIntentCommand:
     return CreateTradeIntentCommand(
         symbol_service,
@@ -267,6 +299,8 @@ def get_create_trade_intent_command(
         quote_provider,
         evaluator,
         db,
+        kill_switch,
+        limits,
     )
 
 
@@ -317,8 +351,9 @@ def get_twap_confirm_command(
     intent_repo: IntentRepoDep,
     quote_provider: QuoteProviderDep,
     db: DatabaseDep,
+    limits: IntentLimitsDep,
 ) -> TwapConfirmCommand:
-    return TwapConfirmCommand(symbol_service, session_service, intent_repo, quote_provider, db)
+    return TwapConfirmCommand(symbol_service, session_service, intent_repo, quote_provider, db, limits)
 
 
 TwapConfirmCommandDep = Annotated[TwapConfirmCommand, Depends(get_twap_confirm_command)]
@@ -328,8 +363,9 @@ def get_twap_slice_worker_command(
     db: DatabaseDep,
     quote_provider: QuoteProviderDep,
     session_service: TradingSessionServiceDep,
+    kill_switch: KillSwitchProviderDep,
 ) -> TwapSliceWorkerCommand:
-    return TwapSliceWorkerCommand(db, quote_provider, session_service)
+    return TwapSliceWorkerCommand(db, quote_provider, session_service, kill_switch)
 
 
 TwapSliceWorkerCommandDep = Annotated[TwapSliceWorkerCommand, Depends(get_twap_slice_worker_command)]
@@ -366,6 +402,72 @@ def get_rate_limiter(db: DatabaseDep) -> RateLimiter:
 
 
 RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter)]
+
+
+def enforce_mutation_rate_limit(
+    user: ActiveUserDep,
+    db: DatabaseDep,
+    rate_limiter: RateLimiterDep,
+    settings: SettingsDep,
+) -> None:
+    """Per-user token bucket shared across every mutating endpoint (§13).
+
+    Consumes one token, then commits immediately to persist the bucket and release
+    the `SELECT ... FOR UPDATE` lock before the endpoint's own work runs (otherwise
+    a slow create would hold the bucket lock and serialise the user's requests).
+    The consume counts whether or not the downstream command later succeeds.
+    """
+    decision = rate_limiter.consume(
+        f"mutation:{user.user_id}",
+        capacity=settings.mutation_rate_limit_capacity,
+        refill_per_second=settings.mutation_rate_limit_refill_per_second,
+    )
+    db.commit()
+    if not decision.allowed:
+        raise RateLimitedError(decision.retry_after_seconds)
+
+
+MutationRateLimitDep = Annotated[None, Depends(enforce_mutation_rate_limit)]
+
+
+def get_idempotency_key(request: Request) -> str:
+    """The required `Idempotency-Key` header on mutating endpoints (§16).
+
+    Missing / blank -> 400 IDEMPOTENCY_KEY_REQUIRED. Tests that don't exercise
+    idempotency override this dependency."""
+    key = (request.headers.get("Idempotency-Key") or "").strip()
+    if not key:
+        raise ApiError(code=ErrorCode.IDEMPOTENCY_KEY_REQUIRED, status_code=status.HTTP_400_BAD_REQUEST)
+    return key
+
+
+IdempotencyKeyDep = Annotated[str, Depends(get_idempotency_key)]
+
+
+def get_idempotency_manager(db: DatabaseDep) -> IdempotencyManager:
+    return IdempotencyManager(db, IdempotencyRepository(db))
+
+
+IdempotencyManagerDep = Annotated[IdempotencyManager, Depends(get_idempotency_manager)]
+
+
+def get_system_flag_repository(db: DatabaseDep) -> SystemFlagRepository:
+    return SystemFlagRepository(db)
+
+
+SystemFlagRepoDep = Annotated[SystemFlagRepository, Depends(get_system_flag_repository)]
+
+
+def get_set_kill_switch_command(
+    db: DatabaseDep,
+    flags: SystemFlagRepoDep,
+    audit: AuditWriterDep,
+    provider: KillSwitchProviderDep,
+) -> SetKillSwitchCommand:
+    return SetKillSwitchCommand(db, flags, audit, provider)
+
+
+SetKillSwitchCommandDep = Annotated[SetKillSwitchCommand, Depends(get_set_kill_switch_command)]
 
 
 def get_password_hasher(settings: SettingsDep) -> PasswordHasher:
@@ -452,6 +554,17 @@ def get_disable_user_command(
 
 
 DisableUserCommandDep = Annotated[DisableUserCommand, Depends(get_disable_user_command)]
+
+
+def get_reactivate_user_command(
+    db: DatabaseDep,
+    users: UserRepoDep,
+    audit: AuditWriterDep,
+) -> ReactivateUserCommand:
+    return ReactivateUserCommand(db, users, audit)
+
+
+ReactivateUserCommandDep = Annotated[ReactivateUserCommand, Depends(get_reactivate_user_command)]
 
 
 def get_resend_invitation_command(

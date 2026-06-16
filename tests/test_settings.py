@@ -97,6 +97,36 @@ def test_telegram_settings_parse_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.telegram_timeout_seconds == 2.5
 
 
+def test_trusted_proxy_ips_default_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.delenv("TRUSTED_PROXY_IPS", raising=False)
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.trusted_proxy_networks == []
+
+
+def test_trusted_proxy_ips_parses_mixed_ip_and_cidr(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "172.18.0.0/16, 10.0.0.5")
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    networks = [str(net) for net in settings.trusted_proxy_networks]
+    assert networks == ["172.18.0.0/16", "10.0.0.5/32"]
+
+
+def test_malformed_trusted_proxy_ips_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "not-an-ip")
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)  # type: ignore[call-arg]
+
+
 def test_twap_worker_settings_parse_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.setenv("LOCAL_MODE", "true")

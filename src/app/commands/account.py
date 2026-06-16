@@ -21,6 +21,7 @@ from app.core.rate_limiter import RateLimiter
 from app.core.tokens import generate_url_token, hash_url_token
 from app.domain.auth import (
     AccountError,
+    AccountNotDisabledError,
     AuthError,
     EmailAlreadyExistsError,
     InvitationConsumedError,
@@ -82,6 +83,14 @@ class DisableUserInput:
 
 @dataclass(frozen=True, slots=True)
 class ResendInvitationInput:
+    target_user_id: UUID
+    actor_admin_id: UUID
+    now: datetime
+    request_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReactivateUserInput:
     target_user_id: UUID
     actor_admin_id: UUID
     now: datetime
@@ -259,6 +268,46 @@ class DisableUserCommand:
                     "cancelled_intent_count": cancelled,
                     "revoked_token_count": revoked,
                 },
+                request_id=inp.request_id,
+                now=inp.now,
+            )
+            self._db.commit()
+        except (AuthError, AccountError):
+            raise
+        except Exception:
+            self._db.rollback()
+            raise
+
+
+class ReactivateUserCommand:
+    """Admin re-enables a disabled user: flip status back to active. Old intents are
+    NOT restored (spec §13) and revoked sessions stay revoked — the user logs in afresh.
+    Only a currently-disabled account can be reactivated."""
+
+    def __init__(
+        self,
+        db: Session,
+        users: UserRepository,
+        audit: AuditEventWriter,
+    ) -> None:
+        self._db = db
+        self._users = users
+        self._audit = audit
+
+    def execute(self, inp: ReactivateUserInput) -> None:
+        try:
+            user = self._users.get_by_id(inp.target_user_id)
+            if user is None:
+                raise UserNotFoundError()
+            if user.status != "disabled":
+                raise AccountNotDisabledError()
+
+            self._users.reactivate(user.id, now=inp.now)
+            self._audit.write(
+                event_type="account_reactivated",
+                actor_type="admin",
+                actor_id=inp.actor_admin_id,
+                metadata={"target_user_id": str(user.id)},
                 request_id=inp.request_id,
                 now=inp.now,
             )

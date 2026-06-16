@@ -146,6 +146,56 @@ def test_dispatch_does_not_trigger_when_condition_not_met(
     mock_repo.commit.assert_not_called()
 
 
+def test_dispatch_skips_all_work_when_kill_switch_halted(
+    monkeypatch: pytest.MonkeyPatch, mock_session: MagicMock
+) -> None:
+    """Kill switch on: dispatch returns before touching the DB or evaluator —
+    no intent listing, no evaluation, no trigger (spec §18 halt)."""
+    mock_repo = MagicMock()
+    monkeypatch.setattr("app.services.quote_dispatcher.IntentRepository", lambda db: mock_repo)
+    evaluator = MagicMock()
+    kill_switch = MagicMock()
+    kill_switch.is_halted.return_value = True
+
+    dispatcher = QuoteEvaluationDispatcher(
+        session_factory=lambda: mock_session,
+        evaluator=evaluator,
+        session_service=TradingSessionService(),
+        kill_switch=kill_switch,
+    )
+    dispatcher.dispatch(_snapshot())
+
+    kill_switch.is_halted.assert_called_once()
+    mock_repo.system_list_active_by_symbols.assert_not_called()
+    evaluator.evaluate.assert_not_called()
+
+
+def test_dispatch_proceeds_when_kill_switch_not_halted(
+    monkeypatch: pytest.MonkeyPatch, mock_session: MagicMock
+) -> None:
+    """Kill switch off: dispatch runs the normal path (evaluator consulted)."""
+    intent = _intent()
+    mock_repo = MagicMock()
+    mock_repo.system_list_active_by_symbols.return_value = [intent]
+    monkeypatch.setattr("app.services.quote_dispatcher.IntentRepository", lambda db: mock_repo)
+    monkeypatch.setattr("app.services.quote_dispatcher.TriggerIntentCommand", lambda db: MagicMock())
+    evaluator = MagicMock()
+    evaluator.evaluate.return_value = EvaluationResult(should_trigger=False)
+    kill_switch = MagicMock()
+    kill_switch.is_halted.return_value = False
+
+    dispatcher = QuoteEvaluationDispatcher(
+        session_factory=lambda: mock_session,
+        evaluator=evaluator,
+        session_service=TradingSessionService(),
+        kill_switch=kill_switch,
+    )
+    dispatcher.dispatch(_snapshot())
+
+    kill_switch.is_halted.assert_called_once()
+    evaluator.evaluate.assert_called_once()
+
+
 def test_dispatch_swallows_unexpected_exception(monkeypatch: pytest.MonkeyPatch, mock_session: MagicMock) -> None:
     """Broker callback thread must never see an exception escape the listener.
 

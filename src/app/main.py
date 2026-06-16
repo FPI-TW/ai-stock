@@ -21,6 +21,8 @@ from app.core.ids import RequestIdMiddleware
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
+from app.services.idempotency_cleanup import IdempotencyCleanupScheduler
+from app.services.kill_switch import KillSwitchProvider
 from app.services.quote import build_quote_provider
 from app.services.quote_dispatcher import QuoteEvaluationDispatcher
 from app.services.twap_scheduler import TwapSliceScheduler
@@ -48,6 +50,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     provider.startup()
 
     twap_scheduler_task: Task[None] | None = None
+    idempotency_cleanup_task: Task[None] | None = None
     if settings.database_url:
         from app.db.session import get_session_factory
 
@@ -72,6 +75,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             session_factory=session_factory,
             evaluator=QuoteEvaluator(session_service),
             session_service=session_service,
+            kill_switch=app.state.kill_switch_provider,
         )
         provider.add_quote_listener(dispatcher.dispatch)
 
@@ -81,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 quote_provider=provider,
                 session_service=session_service,
                 interval_seconds=settings.twap_worker_interval_seconds,
+                kill_switch=app.state.kill_switch_provider,
             )
             twap_scheduler_task = create_task(scheduler.run_forever())
             logger.info(
@@ -88,15 +93,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 extra={"interval_seconds": settings.twap_worker_interval_seconds},
             )
 
+        if settings.idempotency_cleanup_enabled:
+            cleanup = IdempotencyCleanupScheduler(
+                session_factory=session_factory,
+                interval_seconds=settings.idempotency_cleanup_interval_seconds,
+            )
+            idempotency_cleanup_task = create_task(cleanup.run_forever())
+            logger.info(
+                "idempotency cleanup scheduler started",
+                extra={"interval_seconds": settings.idempotency_cleanup_interval_seconds},
+            )
+
     try:
         yield
     finally:
-        if twap_scheduler_task is not None:
-            twap_scheduler_task.cancel()
-            try:
-                await twap_scheduler_task
-            except CancelledError:
-                pass
+        for task in (twap_scheduler_task, idempotency_cleanup_task):
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except CancelledError:
+                    pass
         provider.shutdown()
 
 
@@ -105,6 +122,14 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
     app.state.request_id_header = settings.request_id_header
     app.state.quote_provider = build_quote_provider(settings)
+    # Kill-switch read cache (L2). Needs a session factory, so it only comes online
+    # when a DATABASE_URL is configured; DB-less unit/api wiring leaves it None and
+    # the create / dispatch paths treat "no provider" as "not halted".
+    app.state.kill_switch_provider = None
+    if settings.database_url:
+        from app.db.session import get_session_factory
+
+        app.state.kill_switch_provider = KillSwitchProvider(get_session_factory())
     allow_origins = [origin.strip() for origin in settings.cors_allow_origins.split(",") if origin.strip()]
     if allow_origins:
         app.add_middleware(

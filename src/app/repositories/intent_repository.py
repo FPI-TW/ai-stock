@@ -542,6 +542,36 @@ class IntentRepository:
         )
         return int(self._db.execute(stmt).scalar_one())
 
+    def count_active_or_scheduled_for_user(self, owner_user_id: UUID) -> int:
+        """Count this owner's non-terminal (active/scheduled) intents across all symbols.
+
+        Drives the §15 per-user creation cap.
+        """
+
+        stmt = (
+            select(func.count())
+            .select_from(TradeIntent)
+            .where(
+                TradeIntent.owner_user_id == owner_user_id,
+                TradeIntent.status.in_(CANCELLABLE_STATUSES),
+            )
+        )
+        return int(self._db.execute(stmt).scalar_one())
+
+    def count_active_or_scheduled_for_user_symbol(self, owner_user_id: UUID, symbol: str) -> int:
+        """Count this owner's non-terminal intents on a single symbol (§15 per-symbol cap)."""
+
+        stmt = (
+            select(func.count())
+            .select_from(TradeIntent)
+            .where(
+                TradeIntent.owner_user_id == owner_user_id,
+                TradeIntent.symbol == symbol,
+                TradeIntent.status.in_(CANCELLABLE_STATUSES),
+            )
+        )
+        return int(self._db.execute(stmt).scalar_one())
+
     def cancel_active_for_owner(self, owner_user_id: UUID, *, status: str, now: datetime) -> int:
         """Bulk-cancel every active/scheduled intent for an owner (account-disable
         cascade). Returns the number of intents transitioned. No commit."""

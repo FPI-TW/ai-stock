@@ -1,4 +1,5 @@
 import base64
+import ipaddress
 from functools import lru_cache
 from typing import Literal
 from uuid import UUID
@@ -29,6 +30,12 @@ class Settings(BaseSettings):
     local_user_id: UUID | None = Field(default=None, alias="LOCAL_USER_ID")
     local_mode: bool = Field(default=True, alias="LOCAL_MODE")
     request_id_header: str = Field(default="X-Request-Id", alias="REQUEST_ID_HEADER")
+    # Comma-separated IPs / CIDRs of the reverse proxies (Nginx / ALB) sitting in
+    # front of the app. Empty = direct connections (dev / tests): the peer IP is the
+    # client. When set, the per-IP throttles resolve the real client from
+    # X-Forwarded-For instead of the proxy's address (see _client_ip). Without this,
+    # every request behind a proxy shares one IP bucket and users lock each other out.
+    trusted_proxy_ips: str | None = Field(default=None, alias="TRUSTED_PROXY_IPS")
     cors_allow_origins: str = Field(
         default=(
             "http://localhost:3000,http://127.0.0.1:3000,"
@@ -57,6 +64,24 @@ class Settings(BaseSettings):
     # Local V0.5 TWAP worker loop; dev endpoints remain available for manual backfill.
     twap_worker_enabled: bool = Field(default=True, alias="TWAP_WORKER_ENABLED")
     twap_worker_interval_seconds: float = Field(default=1.0, alias="TWAP_WORKER_INTERVAL_SECONDS")
+
+    # --- L2 §15 creation caps ---
+    # Per-owner active/scheduled intent caps. env defaults here; an admin-tunable
+    # override is P5 (injected over the get_intent_limits dependency).
+    intent_limit_per_user: int = Field(default=200, alias="INTENT_LIMIT_PER_USER")
+    intent_limit_per_symbol: int = Field(default=20, alias="INTENT_LIMIT_PER_SYMBOL")
+
+    # --- L2 §13 global mutating-endpoint rate limit ---
+    # One token bucket per user, shared across every mutating endpoint (create /
+    # cancel / future webhook). capacity = burst, refill = sustained tokens/sec.
+    mutation_rate_limit_capacity: float = Field(default=60.0, alias="MUTATION_RATE_LIMIT_CAPACITY")
+    mutation_rate_limit_refill_per_second: float = Field(default=1.0, alias="MUTATION_RATE_LIMIT_REFILL_PER_SECOND")
+
+    # --- L2 §16 idempotency record GC ---
+    # Background sweep that deletes idempotency_keys past their 24h expiry, so the
+    # table (written once per create/cancel) does not grow without bound.
+    idempotency_cleanup_enabled: bool = Field(default=True, alias="IDEMPOTENCY_CLEANUP_ENABLED")
+    idempotency_cleanup_interval_seconds: float = Field(default=3600.0, alias="IDEMPOTENCY_CLEANUP_INTERVAL_SECONDS")
 
     # --- L1 auth / session ---
     # HS256 signing secret for short-lived access JWTs. Required in production
@@ -106,6 +131,24 @@ class Settings(BaseSettings):
         if self.jwt_access_secret:
             return self.jwt_access_secret
         return _DEV_JWT_ACCESS_SECRET
+
+    @property
+    def trusted_proxy_networks(self) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+        """Parsed `trusted_proxy_ips`; empty list when unset (direct connections)."""
+        if not self.trusted_proxy_ips:
+            return []
+        return [
+            ipaddress.ip_network(token.strip(), strict=False)
+            for token in self.trusted_proxy_ips.split(",")
+            if token.strip()
+        ]
+
+    @model_validator(mode="after")
+    def _validate_trusted_proxy_ips(self) -> "Settings":
+        # Parse once at startup so a malformed TRUSTED_PROXY_IPS fails fast instead
+        # of raising on the first authenticated request.
+        _ = self.trusted_proxy_networks
+        return self
 
     @property
     def cookie_secure(self) -> bool:

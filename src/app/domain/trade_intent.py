@@ -46,6 +46,27 @@ class InvalidCursorError(IntentError):
         super().__init__(f"Cursor not found or expired: {cursor_id}")
 
 
+class IntentLimitExceededError(IntentError):
+    """Creation would push an owner past a §15 active/scheduled-intent cap."""
+
+    def __init__(self, limit: int, current: int) -> None:
+        self.limit = limit
+        self.current = current
+        super().__init__(f"intent limit exceeded: {current}/{limit}")
+
+
+class UserIntentLimitExceededError(IntentLimitExceededError):
+    """Owner already holds `limit` active/scheduled intents across all symbols."""
+
+
+class SymbolIntentLimitExceededError(IntentLimitExceededError):
+    """Owner already holds `limit` active/scheduled intents on this one symbol."""
+
+    def __init__(self, symbol: str, limit: int, current: int) -> None:
+        self.symbol = symbol
+        super().__init__(limit, current)
+
+
 def derive_order_side(strategy: str) -> str:
     if strategy in BUY_SIDE_STRATEGIES:
         return "buy"

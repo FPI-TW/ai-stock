@@ -18,9 +18,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.deps import (
+    enforce_mutation_rate_limit,
     get_active_user,
     get_current_user,
     get_db,
+    get_idempotency_key,
+    get_idempotency_manager,
+    get_intent_limits,
     get_intent_repository,
     get_quote_provider,
     get_symbol_service,
@@ -29,6 +33,12 @@ from app.core.security import RequestUser
 from app.domain.trade_intent import TradeIntentData
 from app.main import create_app
 from app.services.quote.shioaji_demo.provider import ShioajiQuoteProvider
+
+
+class _PassthroughIdempotency:
+    def run(self, *, execute: object, **_: object) -> object:
+        return execute()  # type: ignore[operator]
+
 
 _OWNER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
@@ -100,6 +110,12 @@ def client(
     app.dependency_overrides[get_symbol_service] = lambda: mock_symbol_service
     app.dependency_overrides[get_intent_repository] = lambda: mock_intent_repo
     app.dependency_overrides[get_db] = lambda: MagicMock()
+    # mock_intent_repo returns MagicMocks from the §15 count queries → disable limit
+    # enforcement here (this suite exercises quote reconcile, not creation caps).
+    app.dependency_overrides[get_intent_limits] = lambda: None
+    app.dependency_overrides[enforce_mutation_rate_limit] = lambda: None
+    app.dependency_overrides[get_idempotency_key] = lambda: "test-idempotency-key"
+    app.dependency_overrides[get_idempotency_manager] = lambda: _PassthroughIdempotency()
     app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")
     app.dependency_overrides[get_active_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")
     yield TestClient(app)
