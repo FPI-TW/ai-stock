@@ -363,8 +363,9 @@ def get_twap_slice_worker_command(
     db: DatabaseDep,
     quote_provider: QuoteProviderDep,
     session_service: TradingSessionServiceDep,
+    kill_switch: KillSwitchProviderDep,
 ) -> TwapSliceWorkerCommand:
-    return TwapSliceWorkerCommand(db, quote_provider, session_service)
+    return TwapSliceWorkerCommand(db, quote_provider, session_service, kill_switch)
 
 
 TwapSliceWorkerCommandDep = Annotated[TwapSliceWorkerCommand, Depends(get_twap_slice_worker_command)]

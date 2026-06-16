@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.commands.twap import TwapSliceWorkerCommand
 from app.db.models.core import Notification, TradeIntent, TwapSlice
 from app.domain.trading_session import TradingSessionService
+from app.services.kill_switch import KillSwitchProvider
 from app.services.quote.base import QuoteListener, QuoteSnapshot, QuoteUnavailableError
 
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -164,16 +165,26 @@ def _slice(
     )
 
 
+class FakeKillSwitch:
+    def __init__(self, *, halted: bool) -> None:
+        self._halted = halted
+
+    def is_halted(self) -> bool:
+        return self._halted
+
+
 def _worker(
     fake_db: FakeSession,
     provider: FakeQuoteProvider,
     *,
     now: datetime = NOW,
+    kill_switch: FakeKillSwitch | None = None,
 ) -> TwapSliceWorkerCommand:
     return TwapSliceWorkerCommand(
         db=cast(Session, fake_db),
         quote_provider=provider,
         session_service=TradingSessionService(clock=lambda: now),
+        kill_switch=cast("KillSwitchProvider | None", kill_switch),
     )
 
 
@@ -255,6 +266,50 @@ def test_process_due_slices_after_close_skips_notifications() -> None:
     assert output.processed_count == 0
     assert fake_db.added_notifications == []
     assert fake_db.results
+
+
+def test_process_due_slices_skips_when_kill_switch_halted() -> None:
+    # §18: during a global trigger-halt the worker must not notify, even inside the
+    # regular session. The slice query never runs (results untouched).
+    intent = _intent(status="active", position_side="long")
+    slice_row = _slice(intent, status="pending")
+    fake_db = FakeSession([FakeResult(rows=[(slice_row, intent)])])
+
+    output = _worker(
+        fake_db, FakeQuoteProvider(_snapshot()), kill_switch=FakeKillSwitch(halted=True)
+    ).process_due_slices()
+
+    assert output.processed_count == 0
+    assert fake_db.added_notifications == []
+    assert fake_db.results  # the due-slice query was never executed
+
+
+def test_process_price_followups_skips_when_kill_switch_halted() -> None:
+    intent = _intent(position_side="short")
+    slice_row = _slice(intent, status="notified", attempts=1)
+    fake_db = FakeSession([FakeResult(rows=[(slice_row, intent)])])
+
+    output = _worker(
+        fake_db, FakeQuoteProvider(_snapshot()), kill_switch=FakeKillSwitch(halted=True)
+    ).process_price_followups()
+
+    assert output.processed_count == 0
+    assert fake_db.added_notifications == []
+    assert fake_db.results
+
+
+def test_process_due_slices_runs_when_kill_switch_not_halted() -> None:
+    # Halt off → normal processing (guards against the gate firing unconditionally).
+    intent = _intent(status="active", position_side="long")
+    slice_row = _slice(intent, status="pending")
+    fake_db = FakeSession([FakeResult(rows=[(slice_row, intent)]), FakeResult(scalar=0)])
+
+    output = _worker(
+        fake_db, FakeQuoteProvider(_snapshot()), kill_switch=FakeKillSwitch(halted=False)
+    ).process_due_slices()
+
+    assert output.processed_count == 1
+    assert len(fake_db.added_notifications) == 1
 
 
 def test_process_due_slice_without_price_sends_primary_notification_and_schedules_followup() -> None:

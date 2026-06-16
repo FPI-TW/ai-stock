@@ -27,6 +27,7 @@ from app.domain.twap import (
     build_twap_plan,
 )
 from app.repositories.intent_repository import IntentRepository
+from app.services.kill_switch import KillSwitchProvider
 from app.services.notification_template import render_twap_price_followup, render_twap_slice
 from app.services.quote.base import QuoteProvider, QuoteProviderError, QuoteSnapshot
 from app.services.quote.intent_reconciler import reconcile_on_create
@@ -146,15 +147,22 @@ class TwapSliceWorkerCommand:
         db: Session,
         quote_provider: QuoteProvider,
         session_service: TradingSessionService,
+        kill_switch: KillSwitchProvider | None = None,
     ) -> None:
         self._db = db
         self._quote_provider = quote_provider
         self._session_service = session_service
+        self._kill_switch = kill_switch
 
     def process_due_slices(self, *, limit: int = 100) -> TwapWorkerOutput:
         now = self._session_service.now_taipei()
         IntentLifecycleCommand(IntentRepository(self._db), self._session_service).run()
         if self._session_service.get_trading_day_phase(now) != TradingDayPhase.REGULAR_SESSION:
+            return TwapWorkerOutput(processed_count=0)
+        # Kill switch (§18): global trigger-halt suppresses TWAP slice notifications
+        # too — processing a due slice produces a notification, exactly what the halt
+        # forbids. No provider (DB-less wiring) is treated as "not halted".
+        if self._kill_switch is not None and self._kill_switch.is_halted():
             return TwapWorkerOutput(processed_count=0)
         try:
             rows = self._load_due_slices(now, limit)
@@ -170,6 +178,10 @@ class TwapSliceWorkerCommand:
         now = self._session_service.now_taipei()
         IntentLifecycleCommand(IntentRepository(self._db), self._session_service).run()
         if self._session_service.get_trading_day_phase(now) != TradingDayPhase.REGULAR_SESSION:
+            return TwapWorkerOutput(processed_count=0)
+        # Kill switch (§18): a price follow-up is itself a notification, so a halt
+        # must suppress it too. See process_due_slices.
+        if self._kill_switch is not None and self._kill_switch.is_halted():
             return TwapWorkerOutput(processed_count=0)
         try:
             rows = self._load_followup_slices(now, limit)

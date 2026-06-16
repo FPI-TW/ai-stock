@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.commands.twap import TwapSliceWorkerCommand
 from app.domain.trading_session import TradingSessionService
+from app.services.kill_switch import KillSwitchProvider
 from app.services.quote.base import QuoteProvider
 
 logger = logging.getLogger(__name__)
@@ -23,11 +24,13 @@ class TwapSliceScheduler:
         quote_provider: QuoteProvider,
         session_service: TradingSessionService,
         interval_seconds: float,
+        kill_switch: KillSwitchProvider | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._quote_provider = quote_provider
         self._session_service = session_service
         self._interval_seconds = interval_seconds
+        self._kill_switch = kill_switch
 
     def run_once(self) -> None:
         self._run_worker_phase("due_slices")
@@ -41,7 +44,7 @@ class TwapSliceScheduler:
     def _run_worker_phase(self, phase: str) -> None:
         try:
             with self._session_factory() as db:
-                worker = TwapSliceWorkerCommand(db, self._quote_provider, self._session_service)
+                worker = TwapSliceWorkerCommand(db, self._quote_provider, self._session_service, self._kill_switch)
                 if phase == "due_slices":
                     worker.process_due_slices()
                 elif phase == "price_followups":

@@ -31,6 +31,7 @@ def test_scheduler_processes_due_slices_and_price_followups(monkeypatch: pytest.
             _db: Session,
             _quote_provider: QuoteProvider,
             _session_service: TradingSessionService,
+            _kill_switch: object = None,
         ) -> None:
             return None
 
@@ -62,6 +63,7 @@ def test_scheduler_continues_to_followups_when_due_slice_phase_fails(monkeypatch
             _db: Session,
             _quote_provider: QuoteProvider,
             _session_service: TradingSessionService,
+            _kill_switch: object = None,
         ) -> None:
             return None
 

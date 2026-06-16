@@ -85,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 quote_provider=provider,
                 session_service=session_service,
                 interval_seconds=settings.twap_worker_interval_seconds,
+                kill_switch=app.state.kill_switch_provider,
             )
             twap_scheduler_task = create_task(scheduler.run_forever())
             logger.info(
