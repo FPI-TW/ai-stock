@@ -47,26 +47,43 @@ _REFRESH_COOKIE_PATH = "/auth"
 _CSRF_COOKIE_PATH = "/"
 
 
-def _client_ip(request: Request) -> str | None:
-    """The peer IP, but only if it parses as one (TestClient uses 'testclient',
-    which the INET column would reject).
+def _client_ip(request: Request, settings: Settings) -> str | None:
+    """The real client IP for the per-IP throttles (login:ip, pwreset:ip).
 
-    TODO(before-prod, SECURITY_AUDIT.md A-1): this returns the DIRECT peer IP. Correct
-    while clients connect directly, but once deployed behind a reverse proxy (Nginx /
-    ALB) every request's peer is the proxy, so the per-IP login throttle (login:ip,
-    20/15min) silently collapses into one shared bucket — legitimate users lock each
-    other out (self-DoS) and the credential-stuffing defence becomes meaningless. Fix
-    before going live behind a proxy: derive the real client IP from X-Forwarded-For via
-    a TRUSTED hop only (Uvicorn --forwarded-allow-ips + Starlette ProxyHeadersMiddleware,
-    or resolve the trusted-proxy CIDR in config). Never blindly trust XFF — it is
-    client-spoofable, which would let an attacker forge IPs to bypass / frame the throttle.
+    Returns None when the peer is not a parseable IP (TestClient uses 'testclient',
+    which the INET column would reject) — the IP gate is simply skipped then.
+
+    Behind a reverse proxy the TCP peer is the proxy, not the user, so a naive peer
+    IP makes every request share one bucket (users self-DoS, credential-stuffing
+    defence becomes meaningless). When `trusted_proxy_ips` is configured and the peer
+    is one of those proxies, the real client is taken from X-Forwarded-For: the
+    right-most entry that is NOT itself a trusted proxy. We never trust XFF from an
+    untrusted peer, and never take the left-most entry — both are client-spoofable,
+    which would let an attacker forge IPs to bypass or frame the throttle.
     """
     if request.client is None:
         return None
     try:
-        ipaddress.ip_address(request.client.host)
+        peer = ipaddress.ip_address(request.client.host)
     except ValueError:
         return None
+
+    trusted = settings.trusted_proxy_networks
+    if not trusted or not any(peer in net for net in trusted):
+        # Direct connection, or a peer we don't recognise as our proxy: trust the
+        # peer only, ignore any (spoofable) forwarded header.
+        return request.client.host
+
+    forwarded = request.headers.get("X-Forwarded-For")
+    if not forwarded:
+        return request.client.host
+    for hop in reversed([part.strip() for part in forwarded.split(",") if part.strip()]):
+        try:
+            candidate = ipaddress.ip_address(hop)
+        except ValueError:
+            continue
+        if not any(candidate in net for net in trusted):
+            return str(candidate)
     return request.client.host
 
 
@@ -120,7 +137,7 @@ def login(
             password=body.password,
             now=now,
             user_agent=request.headers.get("User-Agent"),
-            ip=_client_ip(request),
+            ip=_client_ip(request, settings),
             request_id=get_request_id(request),
         )
     )
@@ -144,7 +161,7 @@ def accept_invitation(
             terms_version=body.terms_version,
             now=now,
             user_agent=request.headers.get("User-Agent"),
-            ip=_client_ip(request),
+            ip=_client_ip(request, settings),
             request_id=get_request_id(request),
         )
     )
@@ -167,7 +184,7 @@ def refresh(
             csrf_header=request.headers.get(_CSRF_HEADER),
             now=now,
             user_agent=request.headers.get("User-Agent"),
-            ip=_client_ip(request),
+            ip=_client_ip(request, settings),
             request_id=get_request_id(request),
         )
     )
@@ -180,13 +197,14 @@ def password_reset_request(
     request: Request,
     body: PasswordResetRequestRequest,
     command: PasswordResetRequestCommandDep,
+    settings: SettingsDep,
 ) -> None:
     # Always 202: never reveals whether the email exists.
     command.execute(
         PasswordResetRequestInput(
             email=body.email,
             now=datetime.now(UTC),
-            ip=_client_ip(request),
+            ip=_client_ip(request, settings),
             request_id=get_request_id(request),
         )
     )
