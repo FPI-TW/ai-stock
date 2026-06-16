@@ -1,0 +1,26 @@
+# 版控與本地工具產物
+.git
+.gitignore
+.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+htmlcov
+.coverage
+
+# 機密與本地設定（映像內不可帶入）
+.env
+.env.*
+.mcp.json
+
+# 測試與文件（runtime 不需要）；README.md 為 pyproject 安裝所需，保留。
+tests
+docs
+*.md
+!README.md
+
+# 雜項
+__pycache__
+*.py[cod]
+*.log
+.DS_Store
