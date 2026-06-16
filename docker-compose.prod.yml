@@ -89,3 +89,8 @@ volumes:
 networks:
   backend:
     driver: bridge
+    # 固定子網，讓 app 的 TRUSTED_PROXY_IPS 能精準信任 nginx（XFF 取真實 client IP）。
+    # 改這裡的話，.env.prod 的 TRUSTED_PROXY_IPS 要一起改。
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
