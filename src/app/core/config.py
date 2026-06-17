@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     database_url: str | None = Field(default=None, alias="DATABASE_URL")
     local_user_id: UUID | None = Field(default=None, alias="LOCAL_USER_ID")
     local_mode: bool = Field(default=True, alias="LOCAL_MODE")
+    initial_admin_email: str | None = Field(default=None, alias="INITIAL_ADMIN_EMAIL")
+    initial_admin_password: str | None = Field(default=None, alias="INITIAL_ADMIN_PASSWORD")
+    initial_admin_allow_non_local: bool = Field(default=False, alias="INITIAL_ADMIN_ALLOW_NON_LOCAL")
     request_id_header: str = Field(default="X-Request-Id", alias="REQUEST_ID_HEADER")
     # Comma-separated IPs / CIDRs of the reverse proxies (Nginx / ALB) sitting in
     # front of the app. Empty = direct connections (dev / tests): the peer IP is the
