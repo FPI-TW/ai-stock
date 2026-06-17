@@ -257,3 +257,49 @@ def test_bootstrap_initial_admin_rejects_weak_password(monkeypatch: pytest.Monke
         )
 
     assert fake_db.commits == 0
+
+
+def test_bootstrap_initial_admin_no_overwrite_refuses_existing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The per-admin CLI passes overwrite=False so re-running for an existing admin
+    # can't silently reset their password.
+    settings = _settings(monkeypatch)
+    existing = User(
+        id=uuid4(),
+        email="admin@tingfong.com",
+        password_hash="keep-me",
+        role="admin",
+        status="active",
+    )
+    fake_db = _FakeSession(existing)
+
+    with pytest.raises(RuntimeError, match="refusing to overwrite"):
+        bootstrap_initial_admin(
+            cast(Session, fake_db),
+            settings,
+            BootstrapAdminConfig(email="admin@tingfong.com", password="newpass123", allow_non_local=False),
+            overwrite=False,
+        )
+
+    # untouched: no write, original hash preserved.
+    assert fake_db.commits == 0
+    assert fake_db.added == []
+    assert existing.password_hash == "keep-me"
+
+
+def test_bootstrap_initial_admin_no_overwrite_creates_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(monkeypatch)
+    fake_db = _FakeSession()
+
+    result = bootstrap_initial_admin(
+        cast(Session, fake_db),
+        settings,
+        BootstrapAdminConfig(email="dev@example.com", password="password123", allow_non_local=False),
+        overwrite=False,
+    )
+
+    assert result.action == "created"
+    assert result.email == "dev@example.com"
+    assert len(fake_db.added) == 1
+    assert fake_db.added[0].role == "admin"
+    assert fake_db.added[0].status == "active"
+    assert fake_db.commits == 1
