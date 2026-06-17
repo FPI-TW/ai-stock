@@ -5,7 +5,6 @@ services:
       POSTGRES_DB: ai_stock
       POSTGRES_USER: ai_stock
       POSTGRES_PASSWORD: ai_stock
-      POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "127.0.0.1:5434:5432"
     volumes:
