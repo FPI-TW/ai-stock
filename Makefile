@@ -1,6 +1,6 @@
-.PHONY: install install-hooks dev lint format format-check typecheck commit-check pre-push-check check migrate downgrade seed test test-integration check-shioaji-isolation
+.PHONY: install install-hooks dev lint format format-check typecheck commit-check pre-push-check check migrate downgrade seed bootstrap-admin test test-integration check-shioaji-isolation
 
-DATABASE_URL ?= postgresql+psycopg://ai_stock:ai_stock@localhost:5432/ai_stock
+DATABASE_URL ?= postgresql+psycopg://ai_stock:ai_stock@localhost:5434/ai_stock
 
 install:
 	uv sync
@@ -52,6 +52,9 @@ downgrade:
 
 seed:
 	DATABASE_URL=$(DATABASE_URL) PYTHONPATH=src uv run python -m app.db.seed
+
+bootstrap-admin:
+	PYTHONPATH=src uv run python -m app.db.bootstrap_admin
 
 test:
 	uv run pytest -s
