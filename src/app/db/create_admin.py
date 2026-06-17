@@ -21,6 +21,7 @@ argument, which would leak into `ps`, shell history, and docker run events.
 import argparse
 import os
 import secrets
+import sys
 
 from app.core.config import get_settings
 from app.db.bootstrap_admin import BootstrapAdminConfig, bootstrap_initial_admin
@@ -48,8 +49,16 @@ def main() -> None:
     config = BootstrapAdminConfig(email=args.email, password=password, allow_non_local=True)
 
     session_factory = get_session_factory()
-    with session_factory() as db:
-        result = bootstrap_initial_admin(db, settings, config, overwrite=False)
+    # bootstrap_initial_admin raises RuntimeError for expected, user-facing conditions
+    # (email already exists, blank email, weak password). Those are not crashes, so
+    # print a clean message and exit non-zero instead of dumping a traceback. Other
+    # exceptions (e.g. DB connection failures) propagate as tracebacks for debugging.
+    try:
+        with session_factory() as db:
+            result = bootstrap_initial_admin(db, settings, config, overwrite=False)
+    except RuntimeError as exc:
+        print(f"建立失敗：{exc}", file=sys.stderr)
+        sys.exit(1)
 
     print(f"admin {result.action}: {result.email} ({result.user_id})")
     if generated:
