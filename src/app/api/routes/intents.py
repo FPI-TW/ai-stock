@@ -18,14 +18,20 @@ from app.api.deps import (
 )
 from app.api.errors import ApiError, ErrorCode, get_request_id
 from app.api.routes._pagination import validate_cursor
-from app.commands.trade_intent import CancelTradeIntentInput, CreateTradeIntentInput
+from app.commands.trade_intent import CancelTradeIntentInput, CreateTradeIntentCommand, CreateTradeIntentInput
 from app.commands.twap import TwapPlanInput
 from app.domain.trade_intent import VALID_STATUSES
 from app.schemas.intent import (
+    BuyPriceAlertCreateRequest,
     IntentCreateRequest,
     IntentCreateResponse,
     IntentDetailResponse,
     IntentListResponse,
+    LimitBuyOrderCreateRequest,
+    LimitSellOrderCreateRequest,
+    MarketOrderCreateRequest,
+    SellPriceAlertCreateRequest,
+    TrailingStopAlertCreateRequest,
     TwapConfirmResponse,
     TwapPlanRequest,
     TwapPreviewResponse,
@@ -33,6 +39,7 @@ from app.schemas.intent import (
     map_to_response_data,
     map_twap_plan,
 )
+from app.services.idempotency import IdempotencyManager
 
 router = APIRouter()
 
@@ -97,6 +104,241 @@ def create_intent(
         payload=request.model_dump(mode="json"),
         now=datetime.now(UTC),
         execute=execute,
+    )
+
+
+# --- Per-strategy create endpoints --------------------------------------------
+# Each strategy gets its own typed endpoint so the body is validated against
+# exactly one request model — no discriminated-union `getattr` plumbing. The
+# legacy `POST /trade-intents` above stays until clients have moved over. The
+# shared idempotency + command + response wiring lives in `_run_create_intent`.
+
+
+def _run_create_intent(
+    command: CreateTradeIntentCommand,
+    idempotency: IdempotencyManager,
+    *,
+    user_id: UUID,
+    idempotency_key: str,
+    endpoint: str,
+    inp: CreateTradeIntentInput,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    def execute() -> dict[str, Any]:
+        intent = command.execute(inp)
+        return IntentCreateResponse(data=map_to_response_data(intent)).model_dump(mode="json")
+
+    return idempotency.run(
+        user_id=user_id,
+        key=idempotency_key,
+        endpoint=endpoint,
+        payload=payload,
+        now=datetime.now(UTC),
+        execute=execute,
+    )
+
+
+@router.post(
+    "/buy-price-alert",
+    response_model=IntentCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_mutation_rate_limit)],
+)
+def create_buy_price_alert(
+    http_request: Request,
+    request: BuyPriceAlertCreateRequest,
+    user: ActiveUserDep,
+    command: CreateTradeIntentCommandDep,
+    idempotency_key: IdempotencyKeyDep,
+    idempotency: IdempotencyManagerDep,
+) -> dict[str, Any]:
+    inp = CreateTradeIntentInput(
+        symbol=request.symbol,
+        strategy=request.strategy,
+        quantity_lots=request.quantity_lots,
+        target_price=request.target_price,
+        owner_user_id=user.user_id,
+        request_id=get_request_id(http_request),
+    )
+    return _run_create_intent(
+        command,
+        idempotency,
+        user_id=user.user_id,
+        idempotency_key=idempotency_key,
+        endpoint="create_buy_price_alert",
+        inp=inp,
+        payload=request.model_dump(mode="json"),
+    )
+
+
+@router.post(
+    "/sell-price-alert",
+    response_model=IntentCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_mutation_rate_limit)],
+)
+def create_sell_price_alert(
+    http_request: Request,
+    request: SellPriceAlertCreateRequest,
+    user: ActiveUserDep,
+    command: CreateTradeIntentCommandDep,
+    idempotency_key: IdempotencyKeyDep,
+    idempotency: IdempotencyManagerDep,
+) -> dict[str, Any]:
+    inp = CreateTradeIntentInput(
+        symbol=request.symbol,
+        strategy=request.strategy,
+        quantity_lots=request.quantity_lots,
+        target_price=request.target_price,
+        owner_user_id=user.user_id,
+        request_id=get_request_id(http_request),
+    )
+    return _run_create_intent(
+        command,
+        idempotency,
+        user_id=user.user_id,
+        idempotency_key=idempotency_key,
+        endpoint="create_sell_price_alert",
+        inp=inp,
+        payload=request.model_dump(mode="json"),
+    )
+
+
+@router.post(
+    "/limit-buy-order",
+    response_model=IntentCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_mutation_rate_limit)],
+)
+def create_limit_buy_order(
+    http_request: Request,
+    request: LimitBuyOrderCreateRequest,
+    user: ActiveUserDep,
+    command: CreateTradeIntentCommandDep,
+    idempotency_key: IdempotencyKeyDep,
+    idempotency: IdempotencyManagerDep,
+) -> dict[str, Any]:
+    inp = CreateTradeIntentInput(
+        symbol=request.symbol,
+        strategy=request.strategy,
+        quantity_lots=request.quantity_lots,
+        target_price=request.target_price,
+        transaction_mode=request.transaction_mode,
+        notification_mode=request.notification_mode,
+        owner_user_id=user.user_id,
+        request_id=get_request_id(http_request),
+    )
+    return _run_create_intent(
+        command,
+        idempotency,
+        user_id=user.user_id,
+        idempotency_key=idempotency_key,
+        endpoint="create_limit_buy_order",
+        inp=inp,
+        payload=request.model_dump(mode="json"),
+    )
+
+
+@router.post(
+    "/limit-sell-order",
+    response_model=IntentCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_mutation_rate_limit)],
+)
+def create_limit_sell_order(
+    http_request: Request,
+    request: LimitSellOrderCreateRequest,
+    user: ActiveUserDep,
+    command: CreateTradeIntentCommandDep,
+    idempotency_key: IdempotencyKeyDep,
+    idempotency: IdempotencyManagerDep,
+) -> dict[str, Any]:
+    inp = CreateTradeIntentInput(
+        symbol=request.symbol,
+        strategy=request.strategy,
+        quantity_lots=request.quantity_lots,
+        target_price=request.target_price,
+        transaction_mode=request.transaction_mode,
+        notification_mode=request.notification_mode,
+        owner_user_id=user.user_id,
+        request_id=get_request_id(http_request),
+    )
+    return _run_create_intent(
+        command,
+        idempotency,
+        user_id=user.user_id,
+        idempotency_key=idempotency_key,
+        endpoint="create_limit_sell_order",
+        inp=inp,
+        payload=request.model_dump(mode="json"),
+    )
+
+
+@router.post(
+    "/market-order",
+    response_model=IntentCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_mutation_rate_limit)],
+)
+def create_market_order(
+    http_request: Request,
+    request: MarketOrderCreateRequest,
+    user: ActiveUserDep,
+    command: CreateTradeIntentCommandDep,
+    idempotency_key: IdempotencyKeyDep,
+    idempotency: IdempotencyManagerDep,
+) -> dict[str, Any]:
+    inp = CreateTradeIntentInput(
+        symbol=request.symbol,
+        strategy=request.strategy,
+        quantity_lots=request.quantity_lots,
+        transaction_mode=request.transaction_mode,
+        notification_mode=request.notification_mode,
+        owner_user_id=user.user_id,
+        request_id=get_request_id(http_request),
+    )
+    return _run_create_intent(
+        command,
+        idempotency,
+        user_id=user.user_id,
+        idempotency_key=idempotency_key,
+        endpoint="create_market_order",
+        inp=inp,
+        payload=request.model_dump(mode="json"),
+    )
+
+
+@router.post(
+    "/trailing-stop-alert",
+    response_model=IntentCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_mutation_rate_limit)],
+)
+def create_trailing_stop_alert(
+    http_request: Request,
+    request: TrailingStopAlertCreateRequest,
+    user: ActiveUserDep,
+    command: CreateTradeIntentCommandDep,
+    idempotency_key: IdempotencyKeyDep,
+    idempotency: IdempotencyManagerDep,
+) -> dict[str, Any]:
+    inp = CreateTradeIntentInput(
+        symbol=request.symbol,
+        strategy=request.strategy,
+        quantity_lots=request.quantity_lots,
+        trail_mode=request.trail_mode,
+        trail_value=request.trail_value,
+        owner_user_id=user.user_id,
+        request_id=get_request_id(http_request),
+    )
+    return _run_create_intent(
+        command,
+        idempotency,
+        user_id=user.user_id,
+        idempotency_key=idempotency_key,
+        endpoint="create_trailing_stop_alert",
+        inp=inp,
+        payload=request.model_dump(mode="json"),
     )
 
 
