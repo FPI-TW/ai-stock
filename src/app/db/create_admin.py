@@ -12,9 +12,14 @@ the admin enrols 2FA themselves (POST /admin/2fa/setup -> /verify) after first l
 Usage (in prod, against the compose DB on the host):
     docker compose -f docker-compose.prod.yml --env-file .env.prod \
         run --rm app python -m app.db.create_admin --email dev@example.com
+
+The password is auto-generated and printed once by default. To set a specific
+password, pass it via the CREATE_ADMIN_PASSWORD environment variable — never a CLI
+argument, which would leak into `ps`, shell history, and docker run events.
 """
 
 import argparse
+import os
 import secrets
 
 from app.core.config import get_settings
@@ -23,19 +28,19 @@ from app.db.session import get_session_factory
 
 # token_urlsafe(16) -> ~22 chars, comfortably clears the >= 8 strength check.
 _GENERATED_PASSWORD_BYTES = 16
+# Optional custom-password source. Read from the environment (not a CLI arg) so a
+# chosen password never lands in `ps` / shell history / docker run events.
+_PASSWORD_ENV = "CREATE_ADMIN_PASSWORD"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="建立一個 admin 帳號（可重複執行，每次一個）")
     parser.add_argument("--email", required=True, help="新 admin 的 email")
-    parser.add_argument(
-        "--password",
-        help="指定密碼；省略則自動產生強密碼並印出一次",
-    )
     args = parser.parse_args()
 
-    generated = args.password is None
-    password = args.password or secrets.token_urlsafe(_GENERATED_PASSWORD_BYTES)
+    custom_password = os.environ.get(_PASSWORD_ENV) or None
+    generated = custom_password is None
+    password = custom_password or secrets.token_urlsafe(_GENERATED_PASSWORD_BYTES)
 
     settings = get_settings()
     # This is the explicit "create a real admin" tool, so it is allowed to run in

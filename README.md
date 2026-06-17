@@ -134,11 +134,20 @@ make seed
 make bootstrap-admin
 ```
 
-**逐一建立（建議，可重複執行、每次一個）：** email 用參數帶入，密碼省略時自動產生強密碼並印出一次。同 email 已存在會拒絕，不會覆蓋既有帳號。
+**逐一建立（建議，可重複執行、每次一個）：** email 用參數帶入，密碼自動產生強密碼並印出一次。同 email 已存在會拒絕，不會覆蓋既有帳號。
 
 ```bash
 make create-admin EMAIL=dev@example.com
-# 或：PYTHONPATH=src uv run python -m app.db.create_admin --email dev@example.com [--password <自訂>]
+# 或：PYTHONPATH=src uv run python -m app.db.create_admin --email dev@example.com
+```
+
+若要指定自訂密碼，**經 `CREATE_ADMIN_PASSWORD` 環境變數**傳入，不要用 CLI 參數（會洩漏到 `ps`、shell history、docker 事件）。用 `read -rs` 讀入、再以「只帶名稱」的方式傳給容器，值不會出現在命令列：
+
+```bash
+read -rs CREATE_ADMIN_PASSWORD; export CREATE_ADMIN_PASSWORD   # 不回顯、不進 history
+docker compose -f docker-compose.prod.yml --env-file .env.prod \
+  run --rm -e CREATE_ADMIN_PASSWORD app python -m app.db.create_admin --email dev@example.com
+unset CREATE_ADMIN_PASSWORD
 ```
 
 **Production（在 EC2 上，對 compose 內的 DB 跑一次性容器，零停機）：**
