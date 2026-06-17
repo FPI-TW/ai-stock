@@ -37,6 +37,10 @@ make dev
 curl http://127.0.0.1:8100/health
 ```
 
+前端串接本地主流程與必要 headers，見
+[`docs/api/v0.5-local-flow.md`](docs/api/v0.5-local-flow.md)。`POST /trade-intents`
+和 cancel 這類 mutating APIs 必須帶 `Idempotency-Key` header。
+
 ## 品質指令
 
 ```bash
