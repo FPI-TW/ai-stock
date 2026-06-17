@@ -155,6 +155,12 @@ class Settings(BaseSettings):
         """Refresh / CSRF cookies carry the Secure flag everywhere except LOCAL_MODE."""
         return not self.local_mode
 
+    @property
+    def cors_allow_origins_list(self) -> list[str]:
+        """Parsed CORS allow-list; shared by the CORS middleware and the CSRF
+        Origin/Referer check so both enforce the exact same set of origins."""
+        return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
+
     @model_validator(mode="after")
     def _enforce_shioaji_credentials(self) -> "Settings":
         if self.quote_provider == "shioaji_demo":

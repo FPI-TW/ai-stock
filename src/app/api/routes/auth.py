@@ -10,6 +10,7 @@ Cookie design (spec §13):
 
 import ipaddress
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request, Response, status
 
@@ -37,6 +38,7 @@ from app.commands.account import AcceptInvitationInput
 from app.commands.auth import IssuedSession, LoginInput, LogoutInput, RefreshInput
 from app.commands.password_reset import PasswordResetConfirmInput, PasswordResetRequestInput
 from app.core.config import Settings
+from app.domain.auth import CsrfFailedError
 
 router = APIRouter()
 
@@ -114,6 +116,33 @@ def _clear_session_cookies(response: Response) -> None:
     response.delete_cookie(_CSRF_COOKIE, path=_CSRF_COOKIE_PATH)
 
 
+def _enforce_csrf_origin(request: Request, allowed_origins: list[str]) -> None:
+    """Defense-in-depth on top of the double-submit token (spec §13): reject a
+    cookie-authenticated state-changing request whose Origin (or, failing that,
+    Referer) is present but not in the CORS allow-list. When neither header is
+    present we fall through to the double-submit check — non-browser clients and
+    some same-origin requests omit both, and the token still guards them."""
+    if not allowed_origins:
+        # No allow-list configured → same-origin deployment (the CORS middleware
+        # is likewise skipped when the list is empty). We have nothing to compare
+        # against and our own origin isn't enumerated, so an empty list would
+        # otherwise reject the browser's own same-origin Origin header on every
+        # refresh/logout and lock out all sessions. Skip this defense-in-depth
+        # layer and rely on the double-submit token, which still blocks cross-site
+        # forgeries (an attacker can't read our CSRF cookie to echo it).
+        return
+    origin = request.headers.get("Origin")
+    if origin is not None:
+        if origin not in allowed_origins:
+            raise CsrfFailedError()
+        return
+    referer = request.headers.get("Referer")
+    if referer is not None:
+        parsed = urlsplit(referer)
+        if f"{parsed.scheme}://{parsed.netloc}" not in allowed_origins:
+            raise CsrfFailedError()
+
+
 def _session_response(issued: IssuedSession, now: datetime) -> SessionTokenResponse:
     return SessionTokenResponse(
         access_token=issued.access_token,
@@ -176,6 +205,7 @@ def refresh(
     settings: SettingsDep,
     response: Response,
 ) -> SessionTokenResponse:
+    _enforce_csrf_origin(request, settings.cors_allow_origins_list)
     now = datetime.now(UTC)
     issued = command.execute(
         RefreshInput(
@@ -230,8 +260,10 @@ def password_reset_confirm(
 def logout(
     request: Request,
     command: LogoutCommandDep,
+    settings: SettingsDep,
     response: Response,
 ) -> None:
+    _enforce_csrf_origin(request, settings.cors_allow_origins_list)
     command.execute(
         LogoutInput(
             raw_refresh_token=request.cookies.get(_REFRESH_COOKIE),

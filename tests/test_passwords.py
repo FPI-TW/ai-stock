@@ -33,3 +33,14 @@ def test_verify_rejects_malformed_hash_without_raising() -> None:
 def test_password_strength_boundary() -> None:
     assert is_password_strong_enough("a" * MIN_PASSWORD_LENGTH) is True
     assert is_password_strong_enough("a" * (MIN_PASSWORD_LENGTH - 1)) is False
+
+
+def test_weak_password_message_states_length_not_strength() -> None:
+    # spec §13 / L3: the MVP rule is length-only; the message must not imply a
+    # composition "strength" requirement.
+    from app.api.errors import DEFAULT_MESSAGES, ErrorCode
+
+    message = DEFAULT_MESSAGES[ErrorCode.WEAK_PASSWORD]
+
+    assert str(MIN_PASSWORD_LENGTH) in message
+    assert "強度" not in message

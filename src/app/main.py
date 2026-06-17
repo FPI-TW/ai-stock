@@ -18,6 +18,7 @@ from app.api.routes.symbols import router as symbols_router
 from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.core.config import get_settings
 from app.core.ids import RequestIdMiddleware
+from app.core.security_headers import SecurityHeadersMiddleware
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
@@ -130,15 +131,23 @@ def create_app() -> FastAPI:
         from app.db.session import get_session_factory
 
         app.state.kill_switch_provider = KillSwitchProvider(get_session_factory())
-    allow_origins = [origin.strip() for origin in settings.cors_allow_origins.split(",") if origin.strip()]
+    allow_origins = settings.cors_allow_origins_list
     if allow_origins:
+        # Credentialed (cookie-bearing) cross-origin calls require an explicit
+        # allow-list — `*` is rejected by browsers when credentials are sent.
+        # Headers list covers what the SPA sends: bearer auth, the CSRF echo,
+        # the request-id and idempotency keys.
         app.add_middleware(
             CORSMiddleware,
             allow_origins=allow_origins,
-            allow_methods=["*"],
-            allow_headers=["*"],
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-Request-Id", "Idempotency-Key"],
         )
     app.add_middleware(RequestIdMiddleware, header_name=settings.request_id_header)
+    # Outermost so the hardening headers land on every response, including
+    # error envelopes and CORS preflight. HSTS only over HTTPS (production).
+    app.add_middleware(SecurityHeadersMiddleware, hsts_enabled=not settings.local_mode)
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
