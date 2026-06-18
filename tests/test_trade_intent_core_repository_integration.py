@@ -316,7 +316,7 @@ def test_system_update_trailing_baseline_raises_for_non_trailing_intent(repo: Tr
 @pytest.mark.integration
 def test_active_or_scheduled_symbols(repo: TradeIntentCoreRepository) -> None:
     owner = uuid4()
-    active = _create_price_alert(repo, owner_user_id=owner, target_price="600.0000")
+    _create_price_alert(repo, owner_user_id=owner, target_price="600.0000")
     _create_price_alert(repo, owner_user_id=owner, target_price="620.0000")  # 同 symbol，distinct
     cancelled = _create_price_alert(repo, owner_user_id=owner, target_price="640.0000")
     repo.cancel(cancelled, owner)
@@ -324,4 +324,3 @@ def test_active_or_scheduled_symbols(repo: TradeIntentCoreRepository) -> None:
 
     # 只回非終態（active/scheduled）的 distinct symbol；已取消的不算
     assert repo.active_or_scheduled_symbols() == {"2330"}
-    assert active is not None

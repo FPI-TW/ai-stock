@@ -11,6 +11,11 @@
 入參用攤平的 `TradeIntentData`（dispatcher / 建單路徑都已持有），故毋需存取衛星
 relationship。`triggered_at` 留給 DB `func.now()`：同一交易內每次 NOW() 回交易起始
 時刻，trigger row 與 status UPDATE 的時間戳自然一致。
+
+**注意（side-effect 在 commit 前發生，與 legacy 同）**：telegram 在 `db.flush()` 後、
+caller commit 前就送出。若 caller 把多筆觸發批次成單一 commit、而該 commit 之後失敗，
+已送的 telegram 對應 DB 紀錄會被回滾 → 下一 tick 重新觸發 + 重複 telegram。此為承自舊軌
+的既有特性；長線解法是改 outbox（交易內寫 row、commit 後才送）。
 """
 
 from dataclasses import dataclass
@@ -73,6 +78,8 @@ def persist_core_trigger(
 
     if intent.strategy in MARKET_ORDER_STRATEGIES:
         notification_type = "market_order_triggered"
+        # 市價單無目標價，但稽核欄 target_price_effective 為 NOT NULL/>0；借位填成交價
+        # （trigger_price）以滿足約束，與 legacy 一致。讀稽核時勿把它當「使用者設定的目標價」。
         target_price_effective = inp.trigger_price
         title, body = render_market_order_triggered(
             symbol=intent.symbol,
