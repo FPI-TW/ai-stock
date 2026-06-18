@@ -1,5 +1,11 @@
 # T1：trade_intents 核心表 + 策略衛星參數表分層（V0.5 遺留 schema 債）
 
+> **狀態更新（2026-06-18）— 設計已改為「模式丙：雙軌完全獨立」**
+>
+> 原「原地改 `trade_intents`」設計**已被推翻**。改採平行軌：舊 `trade_intents` + 舊 endpoint + 舊 dispatcher + 舊 repo/command **一律不動、留作可隨時 git 還原的保險**；另建全新 `trade_intent_core` + 3 衛星表 + 新 repo/command/dispatcher（robot #2），自成一條互不引用的垂直切片。新軌驗證跑通後，舊軌才整組退役（屆時整批刪除，新軌零改動）。
+>
+> 去重方案 A（核心表 `dedup_key`）維持不變。下方「結論 / 目標 / DB / 介面」等章節仍描述**舊的原地設計**，整份改寫待辦；**最新事實以本 banner + 文末〈附錄：模式丙落地〉為準。**
+
 ## Metadata
 
 - 分層：上線後（schema 重構 / 技術債，非阻擋上線；可獨立排程）
@@ -110,3 +116,37 @@ dispatcher 的跨策略熱查詢（`system_list_active_*`、`list_by_owner`、`c
 - relationship 用 1:1（`uselist=False`），mypy 型別需明確（`Mapped[PriceParams | None]`）。
 - 命名遵循 snake_case；class 名用 PascalCase（如 `TradeIntentPriceParams`）。
 - 與任何「會再加 trade_intents 欄」的功能票錯開時程，避免 migration rebase 衝突。
+
+---
+
+## 附錄：模式丙落地 — 已完成 / 刻意延後的 repository 方法（JIT）
+
+> 新軌 repo `src/app/repositories/trade_intent_core_repository.py` 採 **JIT（just-in-time）**：
+> 只實作「已有 / 即將出生 caller」的方法，不把舊 `IntentRepository` 的全部表面預先搬過來。
+>
+> **為什麼要延後、而不是一次補齊**（資深判斷，與使用者確認）：
+> 1. 這是取代型遷移，新軌終究要 parity，所以這些方法**不是臆測**——每個在舊軌都有真實 caller。
+> 2. 但「caller 還沒出生就先建好」會落地**未被任何路徑驗證**的程式，且 parity 只能在 **consumer 接縫 + 測試**上證明，不是在方法定義上宣稱。
+> 3. 更糟的是有些「移植」現在是**半成品**：例如 `system_expire_day_intents_through` 的「到期連動取消 TWAP slices」必須等新 slices 表存在才寫得對，現在 port 過來只會是個假完成的坑。
+> 4. 有些方法藏著**還沒拍板的跨軌設計決策**（訂閱共用 infra、帳號停用要不要連動新表），預先 port 等於默默替這些決策定案。
+
+### 已實作（有即將出生的 caller）
+
+- `create` / `find_by_id` / `cancel` / `commit` / `begin_nested`、`build_dedup_key`、`_to_domain`（非 TWAP 寫/讀/取消，已測）
+- `count_active_or_scheduled_for_user` / `count_active_or_scheduled_for_user_symbol`（→ 新 command §15 限額）
+- `system_list_active_symbols` / `system_list_active_by_symbols` / `system_update_trailing_baseline`（→ robot #2）
+
+### 刻意延後 ↔ 補回增量（每個都附舊軌真實 caller，佐證非死碼）
+
+| 舊 repo 方法 | 補回時機（增量） | 為什麼延到那時 | 舊軌真實 caller |
+|---|---|---|---|
+| `active_or_scheduled_symbols` | 新表訂閱接線（早，與 command/robot 同期） | robot #2 要收到報價，symbol 必須先被訂閱；屬尚未拍板的「新軌是否驅動共用訂閱」 | `main.py:63`（啟動 seed） |
+| `count_active_or_scheduled_for_symbol` | 新表訂閱接線 | 取消時 reconcile 判斷是否退訂；同上跨軌訂閱決策 | `services/quote/intent_reconciler.py:62` |
+| `list_by_owner` | 讀取 endpoint / GET 清單 cutover | cursor 分頁邏輯只在 GET 清單接上時才驗得了等價 | `api/routes/intents.py:118` |
+| `system_activate_scheduled_day_intents` | 新生命週期排程 | 新軌還沒有排程 caller | `commands/intent_lifecycle.py:29` |
+| `system_expire_day_intents_through` | 新生命週期排程（**接在 TWAP 增量後**） | 到期要連動取消 TWAP slices，須等新 slices 表，否則是半成品 | `commands/intent_lifecycle.py:25` |
+| `cancel_active_for_owner` | 帳號停用連動新表 | caller＝改過的 account command，屬跨軌整合、尚未決定 | `commands/account.py:258` |
+
+### TWAP 增量（獨立）
+
+- `create_twap` + 新 slices 表（FK→`trade_intent_core.id`）+ slice 連動取消；完成後才接 `system_expire_day_intents_through`。
