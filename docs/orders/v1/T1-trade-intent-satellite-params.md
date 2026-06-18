@@ -4,7 +4,23 @@
 >
 > 原「原地改 `trade_intents`」設計**已被推翻**。改採平行軌：舊 `trade_intents` + 舊 endpoint + 舊 dispatcher + 舊 repo/command **一律不動、留作可隨時 git 還原的保險**；另建全新 `trade_intent_core` + 3 衛星表 + 新 repo/command/dispatcher（robot #2），自成一條互不引用的垂直切片。新軌驗證跑通後，舊軌才整組退役（屆時整批刪除，新軌零改動）。
 >
-> 去重方案 A（核心表 `dedup_key`）維持不變。下方「結論 / 目標 / DB / 介面」等章節仍描述**舊的原地設計**，整份改寫待辦；**最新事實以本 banner + 文末〈附錄：模式丙落地〉為準。**
+> 去重方案 A（核心表 `dedup_key`）維持不變。下方「結論 / 目標 / DB / 介面」等章節仍描述**舊的原地設計**，整份改寫待辦；**最新事實以本 banner + 下方〈Epic 階段〉+ 文末〈附錄：模式丙落地〉為準。**
+
+## Epic 階段（PR 地圖）
+
+T1 已從單一 schema 重構膨脹為**多階段 epic**（模式丙的代價：階段多、但每步小且可逆）。**不含舊軌退役**，到「新軌完整上線、不退化既有功能」共 **4 個 PR**：
+
+| PR | 內容 | 性質 |
+|---|---|---|
+| **PR1** | 資料層：新表 schema（model+migration）+ repo（dedup + CRUD + §15 count + robot 查詢）+ 最小 command | 暗裝，無行為改變 |
+| **PR2** | 新軌觸發能力：robot #2（新 dispatcher）+ 新 `trigger_events`/`notifications` 表 + 訂閱接線 | 暗裝（掃空表） |
+| **PR3** | cutover（非 TWAP）：6 個 create endpoint + GET 清單切到新表 + inline 觸發回填 + 生命週期(啟用/到期) + 帳號停用連動 | **扳開關**，可單獨 revert |
+| **PR4** | TWAP：新 slices 表 + `create_twap` + 到期連動 + TWAP endpoint 切換 | 獨立 |
+
+- **小件（生命週期 activate/expire、帳號停用連動）折進 PR3**——它們是「切過去後不讓既有功能退化」的必要前置，不單獨成 PR，避免零碎。
+- 最高風險的「切換」隔離在 **PR3 一個可 revert 的 commit**（這就是模式丙的保險）。
+- **舊軌退役（整組刪除舊 endpoint/表/dispatcher/repo）為之後另議**，不在這 4 個 PR 內。
+- 各 PR 內「刻意延後的 repo 方法 ↔ 補回時機」見文末〈附錄：模式丙落地〉。
 
 ## Metadata
 

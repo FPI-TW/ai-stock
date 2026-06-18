@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, SessionTransaction
+from sqlalchemy.orm import Session, SessionTransaction, selectinload
 from sqlalchemy.sql import Select
 
 from app.db.models.core import Symbol
@@ -103,6 +103,16 @@ def _to_domain(core: TradeIntentCore, security_type: SecurityType) -> TradeInten
 
 def _core_with_symbol_type() -> Select[tuple[TradeIntentCore, str]]:
     return select(TradeIntentCore, Symbol.instrument_type).join(Symbol, TradeIntentCore.symbol == Symbol.symbol)
+
+
+def _core_with_symbol_type_loaded() -> Select[tuple[TradeIntentCore, str]]:
+    """As above but eager-loads the 3 satellites to avoid N+1 in list/system reads."""
+
+    return _core_with_symbol_type().options(
+        selectinload(TradeIntentCore.price_params),
+        selectinload(TradeIntentCore.trailing_params),
+        selectinload(TradeIntentCore.twap_params),
+    )
 
 
 class TradeIntentCoreRepository:
@@ -246,3 +256,79 @@ class TradeIntentCoreRepository:
         )
         self._db.refresh(core)
         return _to_domain(core, SecurityType(instrument_type))
+
+    # ------------------------------------------------------------------
+    # trailing baseline (robot #2 evaluator writes back here)
+    # ------------------------------------------------------------------
+
+    def system_update_trailing_baseline(
+        self,
+        intent_id: UUID,
+        baseline: Decimal | None,
+        dynamic_trigger_price: Decimal | None,
+        baseline_updated_at: datetime | None,
+    ) -> None:
+        values: dict[str, object | None] = {
+            "baseline": baseline,
+            "dynamic_trigger_price": dynamic_trigger_price,
+        }
+        if baseline_updated_at is not None:
+            values["baseline_updated_at"] = baseline_updated_at
+        self._db.execute(
+            update(TradeIntentTrailingParams)
+            .where(TradeIntentTrailingParams.trade_intent_id == intent_id)
+            .values(**values)
+        )
+        self._db.execute(update(TradeIntentCore).where(TradeIntentCore.id == intent_id).values(updated_at=func.now()))
+
+    # ------------------------------------------------------------------
+    # reads — 只保留「下一步（robot #2 + §15 限額）馬上會呼叫」的查詢。
+    # 其餘舊 repo 方法（list_by_owner / 生命週期 / 訂閱 / 帳號停用 cascade）
+    # 隨各自 consumer 增量補回，見 TASK_TRACKER「方法 ↔ 增量」對應表。
+    # ------------------------------------------------------------------
+
+    def system_list_active_symbols(self) -> list[str]:
+        """Distinct symbols with at least one active intent (owner-agnostic; robot #2 path)."""
+
+        rows = (
+            self._db.execute(select(TradeIntentCore.symbol).where(TradeIntentCore.status == "active").distinct())
+            .scalars()
+            .all()
+        )
+        return list(rows)
+
+    def system_list_active_by_symbols(self, symbols: list[str]) -> list[TradeIntentData]:
+        """All active intents whose symbol is in the list (owner-agnostic; robot #2 path)."""
+
+        if not symbols:
+            return []
+        rows = self._db.execute(
+            _core_with_symbol_type_loaded().where(
+                TradeIntentCore.status == "active",
+                TradeIntentCore.symbol.in_(symbols),
+            )
+        ).all()
+        return [_to_domain(core, SecurityType(instrument_type)) for core, instrument_type in rows]
+
+    def count_active_or_scheduled_for_user(self, owner_user_id: UUID) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(TradeIntentCore)
+            .where(
+                TradeIntentCore.owner_user_id == owner_user_id,
+                TradeIntentCore.status.in_(CANCELLABLE_STATUSES),
+            )
+        )
+        return int(self._db.execute(stmt).scalar_one())
+
+    def count_active_or_scheduled_for_user_symbol(self, owner_user_id: UUID, symbol: str) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(TradeIntentCore)
+            .where(
+                TradeIntentCore.owner_user_id == owner_user_id,
+                TradeIntentCore.symbol == symbol,
+                TradeIntentCore.status.in_(CANCELLABLE_STATUSES),
+            )
+        )
+        return int(self._db.execute(stmt).scalar_one())

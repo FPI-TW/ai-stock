@@ -4,7 +4,7 @@
 """
 
 from collections.abc import Generator
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -229,3 +229,69 @@ def test_find_by_id_wrong_owner_raises(repo: TradeIntentCoreRepository) -> None:
     intent_id = _create_price_alert(repo, owner_user_id=owner)
     with pytest.raises(IntentNotFoundError):
         repo.find_by_id(intent_id, uuid4())
+
+
+# --- 保留的查詢方法（§15 limits + robot #2 用）-----------------------------------
+
+
+@pytest.mark.integration
+def test_counts_active_or_scheduled(repo: TradeIntentCoreRepository) -> None:
+    owner = uuid4()
+    other = uuid4()
+    _create_price_alert(repo, owner_user_id=owner, target_price="600.0000")
+    _create_price_alert(repo, owner_user_id=owner, target_price="620.0000")
+    _create_price_alert(repo, owner_user_id=other, target_price="600.0000")
+
+    assert repo.count_active_or_scheduled_for_user(owner) == 2
+    assert repo.count_active_or_scheduled_for_user_symbol(owner, "2330") == 2
+    assert repo.count_active_or_scheduled_for_user(other) == 1
+
+
+@pytest.mark.integration
+def test_system_list_active(repo: TradeIntentCoreRepository) -> None:
+    owner = uuid4()
+    _create_price_alert(repo, owner_user_id=owner, target_price="600.0000")
+    _create_price_alert(repo, owner_user_id=owner, target_price="620.0000")
+
+    assert repo.system_list_active_symbols() == ["2330"]
+    rows = repo.system_list_active_by_symbols(["2330"])
+    assert len(rows) == 2
+    # 確認衛星參數有被組裝回來（owner-agnostic 路徑）
+    assert {r.target_price_effective for r in rows} == {Decimal("600.0000"), Decimal("620.0000")}
+    assert repo.system_list_active_by_symbols([]) == []
+
+
+@pytest.mark.integration
+def test_system_update_trailing_baseline(repo: TradeIntentCoreRepository) -> None:
+    owner = uuid4()
+    ensure_user(repo._db, owner)
+    intent_id = repo.create(
+        owner_user_id=owner,
+        symbol="2330",
+        strategy="trailing_stop_alert",
+        quantity_lots=1,
+        target_price_original=None,
+        target_price_effective=None,
+        trigger_reference_price_type="bid",
+        trading_date=date(2026, 5, 12),
+        time_in_force="day",
+        execution_mode="notify_only",
+        status="active",
+        trail_mode="percentage",
+        trail_value=Decimal("5"),
+    )
+    repo.commit()
+
+    now = datetime(2026, 5, 12, 1, 30, tzinfo=UTC)
+    repo.system_update_trailing_baseline(
+        intent_id,
+        baseline=Decimal("610.0000"),
+        dynamic_trigger_price=Decimal("579.5000"),
+        baseline_updated_at=now,
+    )
+    repo.commit()
+
+    intent = repo.find_by_id(intent_id, owner)
+    assert intent.baseline == Decimal("610.0000")
+    assert intent.dynamic_trigger_price == Decimal("579.5000")
+    assert intent.baseline_updated_at == now
