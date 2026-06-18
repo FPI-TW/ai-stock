@@ -25,10 +25,8 @@ services:
       - backend
 
   # 一次性執行 DB migration，成功後 app 才啟動，避免多 worker 併發跑 alembic。
+  # 復用 app 建出的映像（單一 build 來源見 app service），不自帶 build。
   migrate:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: ai-stock-api:latest
     restart: "no"
     command: ["alembic", "upgrade", "head"]
@@ -42,6 +40,7 @@ services:
     networks:
       - backend
 
+  # 唯一的映像 build 來源；migrate / worker 皆復用此處建出的 ai-stock-api:latest。
   app:
     build:
       context: .
@@ -76,9 +75,7 @@ services:
   # 與 app 同 image，但 --workers 1 → 背景排程只跑一份，不隨 app 的 worker 數放大
   # （issue #53）。不對外、不掛 nginx，只在內網跑排程。
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # 復用 app 建出的映像（單一 build 來源），不自帶 build。
     image: ai-stock-api:latest
     restart: unless-stopped
     command:
