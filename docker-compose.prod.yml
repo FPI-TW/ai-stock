@@ -1,8 +1,10 @@
-# 正式環境部署：postgres + 一次性 migrate + app(FastAPI) + nginx 反向代理。
+# 正式環境部署：postgres + 一次性 migrate + app(FastAPI HTTP) + worker(背景排程) + nginx 反向代理。
 # 用法：
 #   1. cp .env.prod.example .env.prod 並填入真實機密（JWT / MFA / DB 密碼 / Shioaji）。
 #   2. docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
-# 對外只暴露 nginx（80/443）；app 與 postgres 留在內部網路。
+# 對外只暴露 nginx（80/443）；app / worker / postgres 留在內部網路。
+# 背景排程（TWAP / idempotency cleanup）只在單一 worker process 跑（見 worker service /
+# issue #53），不隨 app 的 uvicorn worker 數放大。
 
 services:
   postgres:
@@ -50,6 +52,44 @@ services:
       - .env.prod
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      # 背景排程改由下方獨立 worker 跑。app 的多個 uvicorn worker 只服務 HTTP，
+      # 不各起一份排程，避免 ×worker 數放大 TWAP/cleanup 的 DB 輪詢（issue #53）。
+      TWAP_WORKER_ENABLED: "false"
+      IDEMPOTENCY_CLEANUP_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8100/health').status==200 else 1)\""
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - backend
+
+  # 背景排程專責 worker（單一 process）：TWAP slice 排程 + idempotency cleanup。
+  # 與 app 同 image，但 --workers 1 → 背景排程只跑一份，不隨 app 的 worker 數放大
+  # （issue #53）。不對外、不掛 nginx，只在內網跑排程。
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ai-stock-api:latest
+    restart: unless-stopped
+    command:
+      ["uvicorn", "app.main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8100", "--workers", "1"]
+    env_file:
+      - .env.prod
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      # 排程只在此 service 開啟（app 已關閉）。
+      TWAP_WORKER_ENABLED: "true"
+      IDEMPOTENCY_CLEANUP_ENABLED: "true"
     depends_on:
       postgres:
         condition: service_healthy
