@@ -352,7 +352,7 @@ class Notification(Base):
             "'price_triggered', 'limit_order_triggered', 'trailing_stop_triggered', "
             "'market_order_triggered', 'twap_slice', 'twap_price_followup'"
             ")) "
-            "OR (trade_intent_id IS NOT NULL)",
+            "OR (trade_intent_id IS NOT NULL OR trade_intent_core_id IS NOT NULL)",
             name="triggered_notification_intent",
         ),
         Index("ix_notifications_owner_created_at", "owner_user_id", text("created_at DESC")),
@@ -362,6 +362,13 @@ class Notification(Base):
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
     owner_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     trade_intent_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("trade_intents.id"))
+    # 新軌（模式丙）通知共用本表，以此欄指向 trade_intent_core；舊軌用 trade_intent_id。
+    # 收件匣是跨功能的單一來源，故不另開表，僅 additive 加欄 + 放寬上面的 CHECK。
+    trade_intent_core_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("trade_intent_core.id"),
+        nullable=True,
+    )
     type: Mapped[str] = mapped_column(Text, nullable=False)
     rendered_title: Mapped[str] = mapped_column(Text, nullable=False)
     rendered_body: Mapped[str] = mapped_column(Text, nullable=False)

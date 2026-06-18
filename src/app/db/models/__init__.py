@@ -11,6 +11,7 @@ from app.db.models.trade_intent_core import (
     TradeIntentCore,
     TradeIntentPriceParams,
     TradeIntentTrailingParams,
+    TradeIntentTrigger,
     TradeIntentTwapParams,
 )
 
@@ -26,6 +27,7 @@ __all__ = [
     "TradeIntentCore",
     "TradeIntentPriceParams",
     "TradeIntentTrailingParams",
+    "TradeIntentTrigger",
     "TradeIntentTwapParams",
     "TriggerEvent",
     "TwapSlice",
