@@ -350,6 +350,13 @@ class TradeIntentCoreRepository:
         ).all()
         return [_to_domain(core, SecurityType(instrument_type)) for core, instrument_type in rows]
 
+    def active_or_scheduled_symbols(self) -> set[str]:
+        """Distinct symbols across every non-terminal intent — seeds robot #2 的報價訂閱
+        （main.py 啟動 reconcile 呼叫）。"""
+
+        stmt = select(TradeIntentCore.symbol).where(TradeIntentCore.status.in_(CANCELLABLE_STATUSES)).distinct()
+        return {row for (row,) in self._db.execute(stmt).all()}
+
     def count_active_or_scheduled_for_user(self, owner_user_id: UUID) -> int:
         stmt = (
             select(func.count())
