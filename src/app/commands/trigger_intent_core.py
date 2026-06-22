@@ -24,13 +24,15 @@ from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID, uuid4
 
+from psycopg.errors import UniqueViolation
 from sqlalchemy import CursorResult, func, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models.core import Notification as NotificationRow
 from app.db.models.trade_intent_core import TradeIntentCore, TradeIntentTrigger
 from app.domain.trade_intent import MARKET_ORDER_STRATEGIES, TradeIntentData
-from app.domain.trigger_event import TriggerError
+from app.domain.trigger_event import DuplicateTriggerError, TriggerError
 from app.services.notification_template import (
     render_limit_order_triggered,
     render_market_order_triggered,
@@ -66,9 +68,11 @@ def persist_core_trigger(
 ) -> tuple[TradeIntentTrigger, NotificationRow]:
     """寫 trigger + notification + 更新 status='triggered'，不 commit（caller 擁有交易）。
 
-    `rowcount == 0` 代表 status guard 未過（已非 active）→ raise，讓 caller 回滾已暫存
-    的 trigger / notification。`trade_intent_triggers.trade_intent_id` 的 UNIQUE 是最終
-    防線（重複觸發），由 caller 把 IntegrityError 轉成對應錯誤。
+    `rowcount == 0` 代表 status guard 未過（已非 active）→ raise `CoreIntentNotActiveError`，
+    讓 caller 回滾已暫存的 trigger / notification。`trade_intent_triggers.trade_intent_id` 的
+    UNIQUE 是最終防線（重複觸發）：唯一違規在此就地轉成 `DuplicateTriggerError`（與 legacy
+    `trigger_intent.stage` 同模式），其餘 `IntegrityError` 不吞、原樣往上拋——那是真 bug，
+    不該被當成競態靜默跳過。
     """
 
     notification_type = "price_triggered"
@@ -157,23 +161,33 @@ def persist_core_trigger(
     )
 
     db.add(trigger_row)
-    result = cast(
-        CursorResult[Any],
-        db.execute(
-            update(TradeIntentCore)
-            .where(TradeIntentCore.id == intent.id, TradeIntentCore.status == "active")
-            .values(
-                status="triggered",
-                triggered_at=func.now(),
-                updated_at=func.now(),
-                filled_quantity_lots=intent.quantity_lots,
-                last_fill_at=func.now(),
+    # autoflush on `execute(update(...))` 會先把 trigger_row 的 INSERT 送出，
+    # `trade_intent_triggers.trade_intent_id` UNIQUE 違規（他執行緒已搶先觸發）就在這裡
+    # 浮現，故把 update + flush 一起包起來辨識唯一違規。
+    try:
+        result = cast(
+            CursorResult[Any],
+            db.execute(
+                update(TradeIntentCore)
+                .where(TradeIntentCore.id == intent.id, TradeIntentCore.status == "active")
+                .values(
+                    status="triggered",
+                    triggered_at=func.now(),
+                    updated_at=func.now(),
+                    filled_quantity_lots=intent.quantity_lots,
+                    last_fill_at=func.now(),
+                ),
             ),
-        ),
-    )
-    if result.rowcount == 0:
-        raise CoreIntentNotActiveError(intent.id, "stale")
-    db.add(notification_row)
-    db.flush()
+        )
+        if result.rowcount == 0:
+            raise CoreIntentNotActiveError(intent.id, "stale")
+        db.add(notification_row)
+        db.flush()
+    except IntegrityError as exc:
+        # 只有 trade_intent_id UNIQUE 違規是可預期的競態 → 包成具名錯誤讓 caller 安靜跳過；
+        # 其餘整合性違規（FK / CHECK / NOT NULL）是真 bug，原樣往上拋、絕不靜默吞。
+        if isinstance(exc.orig, UniqueViolation):
+            raise DuplicateTriggerError(intent.id) from exc
+        raise
     dispatch_notification_to_telegram(notification_row)
     return trigger_row, notification_row

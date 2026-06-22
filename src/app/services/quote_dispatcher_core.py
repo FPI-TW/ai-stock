@@ -16,13 +16,12 @@
 import logging
 from collections.abc import Callable
 
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.commands.trigger_intent_core import CoreIntentNotActiveError, TriggerCoreInput, persist_core_trigger
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
-from app.domain.trigger_event import quote_snapshot_to_jsonb
+from app.domain.trigger_event import DuplicateTriggerError, quote_snapshot_to_jsonb
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.services.kill_switch import KillSwitchProvider
 from app.services.quote.base import QuoteSnapshot
@@ -98,8 +97,9 @@ class TradeIntentCoreDispatcher:
                             ),
                         )
                     has_pending_writes = True
-                except (CoreIntentNotActiveError, IntegrityError) as exc:
-                    # 與列出 actives 之間的競態、或他執行緒已觸發 → 安靜跳過。
+                except (CoreIntentNotActiveError, DuplicateTriggerError) as exc:
+                    # 與列出 actives 之間的競態、或他執行緒已觸發 → 安靜跳過。其餘整合性錯誤
+                    # （persist 不會吞的 IntegrityError）往上拋給 dispatch 的 logger.exception。
                     logger.warning("core dispatch trigger skipped for intent %s: %s", intent.id, exc)
             if has_pending_writes:
                 repo.commit()

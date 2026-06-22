@@ -22,6 +22,7 @@ from app.db.models.trade_intent_core import (
     TradeIntentTrigger,
     TradeIntentTwapParams,
 )
+from app.domain.trigger_event import DuplicateTriggerError
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from tests.db_helpers import ensure_user
 
@@ -191,3 +192,41 @@ def test_persist_trailing_trigger_records_baseline(repo: TradeIntentCoreReposito
     assert trigger.dynamic_trigger_price_at_trigger == Decimal("579.5000")
     note = db_session.execute(select(Notification).where(Notification.trade_intent_core_id == intent_id)).scalar_one()
     assert note.type == "trailing_stop_triggered"
+
+
+@pytest.mark.integration
+def test_persist_trigger_unique_backstop_raises_duplicate(repo: TradeIntentCoreRepository, db_session: Session) -> None:
+    """trade_intent_id UNIQUE 違規（競態：他執行緒已寫 trigger row、本 session 仍看到 active）
+    要被就地辨識成 DuplicateTriggerError，而非裸 IntegrityError 漏給上層。"""
+
+    owner = uuid4()
+    intent_id = _create_active_price_alert(repo, owner, price="600.0000")
+    intent = repo.find_by_id(intent_id, owner)
+    # 預埋一筆 trigger row，但刻意不翻 status → 模擬本 session 讀到的 intent 仍是 active
+    db_session.add(
+        TradeIntentTrigger(
+            id=uuid4(),
+            trade_intent_id=intent_id,
+            owner_user_id=owner,
+            symbol="2330",
+            quote_snapshot={"last_price": "600.0000"},
+            target_price_effective=Decimal("600.0000"),
+            trigger_price=Decimal("600.0000"),
+            trigger_reference_price_type="ask",
+        )
+    )
+    db_session.commit()
+
+    # persist 的 trigger_row INSERT 在 status guard 之前 autoflush → UNIQUE 違規 → DuplicateTriggerError
+    with pytest.raises(DuplicateTriggerError):
+        persist_core_trigger(db_session, intent, _input(intent_id))
+    db_session.rollback()
+
+    # 第二筆 trigger 隨 rollback 消失（只剩預埋那筆）；intent 維持 active、未被誤翻 triggered
+    rows = (
+        db_session.execute(select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == intent_id))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert repo.find_by_id(intent_id, owner).status == "active"

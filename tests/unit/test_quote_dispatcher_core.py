@@ -14,6 +14,7 @@ import pytest
 from app.domain.quote_evaluation import EvaluationResult
 from app.domain.trade_intent import TradeIntentData
 from app.domain.trading_session import TradingSessionService
+from app.domain.trigger_event import DuplicateTriggerError
 from app.services.quote.base import QuoteSnapshot
 from app.services.quote_dispatcher_core import TradeIntentCoreDispatcher
 
@@ -124,6 +125,30 @@ def test_dispatch_no_trigger_when_condition_not_met(monkeypatch: pytest.MonkeyPa
     _dispatcher(mock_session=mock_session, evaluator=evaluator).dispatch(_snapshot())
 
     persist.assert_not_called()
+    mock_repo.commit.assert_not_called()
+
+
+def test_dispatch_skips_quietly_on_duplicate_trigger(monkeypatch: pytest.MonkeyPatch, mock_session: MagicMock) -> None:
+    """persist 拋 DuplicateTriggerError（UNIQUE 競態）→ dispatcher 安靜跳過、不外拋、不 commit。"""
+    intent = _intent()
+    mock_repo = MagicMock()
+    mock_repo.system_list_active_by_symbols.return_value = [intent]
+
+    def raising_persist(db: object, _intent: object, inp: object) -> None:
+        raise DuplicateTriggerError(intent.id)
+
+    monkeypatch.setattr("app.services.quote_dispatcher_core.TradeIntentCoreRepository", lambda db: mock_repo)
+    monkeypatch.setattr("app.services.quote_dispatcher_core.persist_core_trigger", raising_persist)
+    evaluator = MagicMock()
+    evaluator.evaluate.return_value = EvaluationResult(
+        should_trigger=True,
+        trigger_price=Decimal("99"),
+        trigger_reference_price_type="ask",
+        fallback_used=False,
+    )
+
+    _dispatcher(mock_session=mock_session, evaluator=evaluator).dispatch(_snapshot())  # must not raise
+
     mock_repo.commit.assert_not_called()
 
 
