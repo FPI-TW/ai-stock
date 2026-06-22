@@ -1,7 +1,10 @@
 # 正式環境部署：postgres + 一次性 migrate + app(FastAPI HTTP) + worker(背景排程) + nginx 反向代理。
-# 用法：
+# 映像由 CI build 後推到 GHCR，EC2 只 pull、不在本機 build（見 .github/workflows/ci-cd.yml）。
+# 手動部署時用法：
 #   1. cp .env.prod.example .env.prod 並填入真實機密（JWT / MFA / DB 密碼 / Shioaji）。
-#   2. docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#   2. echo "$GHCR_TOKEN" | docker login ghcr.io -u <github_user> --password-stdin
+#   3. IMAGE_TAG=<commit_sha 或 latest> docker compose -f docker-compose.prod.yml --env-file .env.prod pull
+#   4. IMAGE_TAG=<同上> docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 # 對外只暴露 nginx（80/443）；app / worker / postgres 留在內部網路。
 # 背景排程（TWAP / idempotency cleanup）只在單一 worker process 跑（見 worker service /
 # issue #53），不隨 app 的 uvicorn worker 數放大。
@@ -25,9 +28,9 @@ services:
       - backend
 
   # 一次性執行 DB migration，成功後 app 才啟動，避免多 worker 併發跑 alembic。
-  # 復用 app 建出的映像（單一 build 來源見 app service），不自帶 build。
+  # 映像由 CI build 後推到 GHCR；EC2 只 pull，migrate / app / worker 共用同一 IMAGE_TAG。
   migrate:
-    image: ai-stock-api:latest
+    image: ghcr.io/fpi-tw/ai-stock:${IMAGE_TAG:-latest}
     restart: "no"
     command: ["alembic", "upgrade", "head"]
     env_file:
@@ -40,12 +43,10 @@ services:
     networks:
       - backend
 
-  # 唯一的映像 build 來源；migrate / worker 皆復用此處建出的 ai-stock-api:latest。
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: ai-stock-api:latest
+    # 映像由 CI build 後推到 GHCR；EC2 只 pull，不在本機 build。IMAGE_TAG 由部署腳本帶入
+    # 該次 commit 的 SHA；未設時退回 latest。migrate / app / worker 共用同一 tag。
+    image: ghcr.io/fpi-tw/ai-stock:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file:
       - .env.prod
@@ -75,8 +76,8 @@ services:
   # 與 app 同 image，但 --workers 1 → 背景排程只跑一份，不隨 app 的 worker 數放大
   # （issue #53）。不對外、不掛 nginx，只在內網跑排程。
   worker:
-    # 復用 app 建出的映像（單一 build 來源），不自帶 build。
-    image: ai-stock-api:latest
+    # 與 app 同一 GHCR 映像（同 IMAGE_TAG），不自帶 build。
+    image: ghcr.io/fpi-tw/ai-stock:${IMAGE_TAG:-latest}
     restart: unless-stopped
     command:
       ["uvicorn", "app.main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8100", "--workers", "1"]
