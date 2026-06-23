@@ -87,6 +87,11 @@ fail_deploy() {
 
 # 5. 等 app 通過 healthcheck（最多 ~3 分鐘）；逾時或 unhealthy 即印 log、回滾、讓部署失敗。
 app_cid="$("${compose[@]}" ps -q app)"
+# app 容器根本沒建立（常見主因：migrate 失敗，app 的 depends_on 未滿足）→ 立即失敗，
+# 不要進健康檢查迴圈乾等 ~3 分鐘還回報看不出真因的逾時。
+if [[ -z "$app_cid" ]]; then
+  fail_deploy "app 容器未建立（通常是 migrate 失敗），近期 migrate/app log："
+fi
 for attempt in $(seq 1 "$max_attempts"); do
   state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$app_cid" 2>/dev/null || echo missing)"
   case "$state" in
