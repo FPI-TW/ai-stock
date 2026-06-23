@@ -1,3 +1,4 @@
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -19,6 +20,13 @@ def get_url() -> str:
     url = config.get_main_option("sqlalchemy.url")
     if url:
         return url
+
+    # Migrations only need the DB URL. Read it straight from the environment first so
+    # a migration run does not require the app's full settings to validate — e.g. the
+    # quote-provider broker credentials, which are irrelevant to schema changes.
+    env_url = os.environ.get("DATABASE_URL")
+    if env_url:
+        return env_url
 
     settings_url = get_settings().database_url
     if not settings_url:

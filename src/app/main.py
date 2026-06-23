@@ -44,6 +44,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
        `subscribe()` its symbol. Skipped when no DATABASE_URL is configured
        (e.g. lightweight unit-test runs).
     3. `provider.shutdown()` on exit — broker logout, clear local state.
+
+    SINGLE-PROCESS ONLY — do NOT run this under multiple uvicorn workers.
+    Everything below (broker login, quote subscriptions, and the TWAP /
+    idempotency-cleanup / quote-evaluation schedulers) runs once per worker
+    process. With N workers you get N broker logins competing for the same
+    account (many brokers evict the previous session on re-login, so workers
+    repeatedly log each other out) and N copies of every background loop. The
+    DB-mutating paths are row-lock safe (`SELECT ... FOR UPDATE`), so this would
+    not double-trigger intents — but the broker connection is not protected and
+    breaks. To scale horizontally, first split the broker/scheduler work into a
+    single dedicated process, or gate it behind a Postgres advisory lock
+    (leader election); only then raise `--workers`.
     """
 
     settings = get_settings()
