@@ -51,12 +51,43 @@ compose=(docker compose -f "$compose_file" --env-file "$env_file")
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
 "${compose[@]}" pull
 
-# 4. 滾動更新。compose 的 depends_on 已保證 postgres healthy → migrate 跑完成功 → app 才起。
+# 4. 滾動更新前，先記下目前線上的 app 映像，供健康檢查失敗時回滾（首次部署時為空）。
+prev_app_cid="$("${compose[@]}" ps -q app 2>/dev/null || true)"
+prev_app_image=""
+if [[ -n "$prev_app_cid" ]]; then
+  prev_app_image="$(docker inspect -f '{{.Config.Image}}' "$prev_app_cid" 2>/dev/null || true)"
+fi
+
+# 健康檢查最長等待：max_attempts × 5s。改等待時間只動這一個常數（避免兩處數字不同步）。
+max_attempts=36
+
+# 部署失敗收尾：印 log → 回滾 app 至前一版映像 → 讓部署失敗。集中於一處，兩個失敗分支共用。
+rollback_app() {
+  if [[ -z "$prev_app_image" ]]; then
+    echo "無前一版 app 映像可回滾（可能是首次部署），請手動處理。" >&2
+    return
+  fi
+  local prev_tag="${prev_app_image##*:}"
+  echo "回滾 app 至前一版 IMAGE_TAG=$prev_tag" >&2
+  # 注意：migrate 可能已套用新 schema；若失敗主因是不可逆的 migration，回滾舊 app 後仍需人工確認。
+  if ! IMAGE_TAG="$prev_tag" "${compose[@]}" up -d --remove-orphans >&2; then
+    echo "回滾失敗，請手動處理。" >&2
+  fi
+}
+
+fail_deploy() {
+  echo "$1" >&2
+  "${compose[@]}" logs --tail 100 migrate app >&2 || true
+  rollback_app
+  exit 1
+}
+
+# compose 的 depends_on 已保證 postgres healthy → migrate 跑完成功 → app 才起。
 "${compose[@]}" up -d --remove-orphans
 
-# 5. 等 app 通過 healthcheck（最多 ~3 分鐘），逾時或 unhealthy 即讓部署失敗。
+# 5. 等 app 通過 healthcheck（最多 ~3 分鐘）；逾時或 unhealthy 即印 log、回滾、讓部署失敗。
 app_cid="$("${compose[@]}" ps -q app)"
-for attempt in $(seq 1 36); do
+for attempt in $(seq 1 "$max_attempts"); do
   state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$app_cid" 2>/dev/null || echo missing)"
   case "$state" in
     healthy)
@@ -64,15 +95,11 @@ for attempt in $(seq 1 36); do
       break
       ;;
     unhealthy)
-      echo "app healthcheck 失敗，近期 migrate/app log：" >&2
-      "${compose[@]}" logs --tail 100 migrate app >&2
-      exit 1
+      fail_deploy "app healthcheck 失敗，近期 migrate/app log："
       ;;
   esac
-  if [[ "$attempt" -eq 36 ]]; then
-    echo "等待 app 就緒逾時（migration 失敗也會卡在此），近期 migrate/app log：" >&2
-    "${compose[@]}" logs --tail 100 migrate app >&2
-    exit 1
+  if [[ "$attempt" -eq "$max_attempts" ]]; then
+    fail_deploy "等待 app 就緒逾時（migration 失敗也會卡在此），近期 migrate/app log："
   fi
   sleep 5
 done
