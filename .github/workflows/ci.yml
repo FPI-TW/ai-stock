@@ -1,0 +1,15 @@
+name: CI
+
+# PR 只跑測試（不 build、不部署）。
+on:
+  pull_request:
+    branches: [main]
+
+# 同分支有新 push 就取消進行中的舊跑，省 runner。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
