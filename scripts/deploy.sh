@@ -110,13 +110,23 @@ for attempt in $(seq 1 "$max_attempts"); do
 done
 
 # 6. 收尾：登出 GHCR + 清理舊映像，避免磁碟被歷次 SHA tag 塞爆。
-#    `docker image prune -f`（無 -a）只刪 dangling（無 tag）映像，清不掉歷次部署留下的
-#    ghcr.io/...:<sha> 有 tag 舊版 → 磁碟仍會漲。故分兩段清：
-#      a. 先清 dangling（被新 latest 取代的無 tag 舊層）。
-#      b. 再清「7 天前、且無容器引用」的有 tag 舊版——正在跑的當前 / latest 版有容器
-#         引用，不會被刪；近 7 天的版本保留供快速回滾（要回滾更舊版需重新 pull）。
+#    保留依「版本數」而非「時間」：始終留本專案映像最近 keep_versions 個版本（含目前運行
+#    版 + 回滾窗），刪更舊的。用時間（until=168h）的問題是久未部署時，上一個可回滾版本可能
+#    已超過保留窗被誤刪；改用版本數可確保回滾目標一定還在本機。
 docker logout ghcr.io >/dev/null 2>&1 || true
-docker image prune -f
-docker image prune -af --filter "until=168h"
+docker image prune -f   # 先清 dangling（被新版取代的無 tag 舊層）
+
+keep_versions=5
+# 從目前運行的 app 容器反查本專案映像 repo（避免在腳本裡硬編 registry 路徑）。
+image_ref="$(docker inspect -f '{{.Config.Image}}' "$app_cid" 2>/dev/null || true)"
+image_repo="${image_ref%:*}"
+if [[ -n "$image_repo" ]]; then
+  # 取本專案映像、去重 image ID、保留最新 keep_versions 個，其餘（含其 tag）刪除。
+  old_ids="$(docker images "$image_repo" --format '{{.ID}}' | awk '!seen[$0]++' | tail -n +"$((keep_versions + 1))")"
+  if [[ -n "$old_ids" ]]; then
+    # 目前運行版被容器引用，docker rmi 會失敗 → || true 容忍，不影響部署結果。
+    echo "$old_ids" | xargs docker rmi >/dev/null 2>&1 || true
+  fi
+fi
 
 echo "部署完成 IMAGE_TAG=$IMAGE_TAG"

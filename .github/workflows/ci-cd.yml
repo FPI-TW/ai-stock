@@ -156,8 +156,11 @@ jobs:
           scp "${ssh_opts[@]}" docker-compose.prod.yml "$EC2_USER@$EC2_HOST:$deploy_dir/"
           scp "${ssh_opts[@]}" nginx/nginx.conf "$EC2_USER@$EC2_HOST:$deploy_dir/nginx/"
 
-          # 3. 執行部署。變數隨遠端命令列帶入遠端 bash；GHCR_TOKEN 不落地寫檔，runner 跑完即銷毀。
-          ssh "${ssh_opts[@]}" \
-            "$EC2_USER@$EC2_HOST" \
-            IMAGE_TAG="$IMAGE_TAG" GHCR_ACTOR="$GHCR_ACTOR" GHCR_TOKEN="$GHCR_TOKEN" \
-            'bash -s' < scripts/deploy.sh
+          # 3. 執行部署。機密以 stdin（而非遠端命令列引數）餵入遠端 bash：先送一行 export，
+          #    再接 deploy.sh 內文。遠端 argv 僅有 `bash -s`，token 不會出現在 EC2 的
+          #    ps / /proc/<pid>/cmdline（%q 確保值安全引用）。GHCR_TOKEN 仍不落地、用後即焚。
+          {
+            printf 'export IMAGE_TAG=%q GHCR_ACTOR=%q GHCR_TOKEN=%q\n' \
+              "$IMAGE_TAG" "$GHCR_ACTOR" "$GHCR_TOKEN"
+            cat scripts/deploy.sh
+          } | ssh "${ssh_opts[@]}" "$EC2_USER@$EC2_HOST" 'bash -s'
