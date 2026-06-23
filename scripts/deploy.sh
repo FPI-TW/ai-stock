@@ -82,16 +82,16 @@ fail_deploy() {
   exit 1
 }
 
-# compose 的 depends_on 已保證 postgres healthy → migrate 跑完成功 → app 才起。
-"${compose[@]}" up -d --remove-orphans
+# 滾動更新。compose 的 depends_on 保證 postgres healthy → migrate 成功 → app 才起。
+# migrate（service_completed_successfully 相依）失敗時 up -d 自身即回非零；必須顯式接
+# || fail_deploy 印 log + 回滾，否則 set -e 會讓腳本在此無聲中止（無 log、無回滾）。
+"${compose[@]}" up -d --remove-orphans \
+  || fail_deploy "compose up 失敗（通常是 migrate 失敗），近期 migrate/app log："
 
 # 5. 等 app 通過 healthcheck（最多 ~3 分鐘）；逾時或 unhealthy 即印 log、回滾、讓部署失敗。
+# 走到這裡代表 up -d 成功、app 容器必已建立，故不需再檢查 app_cid 為空（migrate 失敗已由
+# 上面攔下）。
 app_cid="$("${compose[@]}" ps -q app)"
-# app 容器根本沒建立（常見主因：migrate 失敗，app 的 depends_on 未滿足）→ 立即失敗，
-# 不要進健康檢查迴圈乾等 ~3 分鐘還回報看不出真因的逾時。
-if [[ -z "$app_cid" ]]; then
-  fail_deploy "app 容器未建立（通常是 migrate 失敗），近期 migrate/app log："
-fi
 for attempt in $(seq 1 "$max_attempts"); do
   state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$app_cid" 2>/dev/null || echo missing)"
   case "$state" in
