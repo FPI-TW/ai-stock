@@ -22,6 +22,7 @@ jobs:
   build-push:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 20  # 防 build/push 異常掛到預設 6 小時、空燒 runner 額度。
 
     permissions:
       contents: read

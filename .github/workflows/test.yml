@@ -7,6 +7,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15  # 防測試/服務異常掛到預設 6 小時、空燒 runner 額度。
 
     services:
       postgres:
