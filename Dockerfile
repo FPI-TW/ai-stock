@@ -45,4 +45,6 @@ USER app_runtime
 EXPOSE 8100
 
 # 預設啟動 API；migration 由 compose 的一次性 migrate service 負責。
-CMD ["uvicorn", "app.main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8100", "--workers", "4"]
+# 一對一服務：每個部署只服務單一使用者、負載為 I/O-bound，單 worker 的 async event
+# loop 即足夠；保留 --workers 1 讓 uvicorn supervisor 在 worker crash 時自動重啟。
+CMD ["uvicorn", "app.main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8100", "--workers", "1"]
