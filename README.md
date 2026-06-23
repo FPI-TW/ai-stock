@@ -141,14 +141,16 @@ make create-admin EMAIL=dev@example.com
 # 或：PYTHONPATH=src uv run python -m app.db.create_admin --email dev@example.com
 ```
 
-若要指定自訂密碼，**經 `CREATE_ADMIN_PASSWORD` 環境變數**傳入，不要用 CLI 參數（會洩漏到 `ps`、shell history、docker 事件）。用 `read -rs` 讀入、再以「只帶名稱」的方式傳給容器，值不會出現在命令列：
+若要指定自訂密碼，**經 `CREATE_ADMIN_PASSWORD` 環境變數**傳入，不要用 CLI 參數（會洩漏到 `ps`、shell history、docker 事件）。用 `read -rsp` 帶提示讀入、再以「只帶名稱」的方式傳給容器，值不會出現在命令列（EC2 Ubuntu 預設 bash；`read` 那行需單獨先跑、輸入密碼後再貼後續指令）：
 
 ```bash
-read -rs CREATE_ADMIN_PASSWORD; export CREATE_ADMIN_PASSWORD   # 不回顯、不進 history
+read -rsp "Admin 密碼：" CREATE_ADMIN_PASSWORD; echo; export CREATE_ADMIN_PASSWORD   # 帶提示、不回顯、不進 history
 docker compose -f docker-compose.prod.yml --env-file .env.prod \
   run --rm -e CREATE_ADMIN_PASSWORD app python -m app.db.create_admin --email dev@example.com
 unset CREATE_ADMIN_PASSWORD
 ```
+
+> 此步驟只是建好可登入的 admin 帳號（`mfa_enabled=false`）。該 admin **首次登入後仍須自行註冊 2FA**（見下方〈2. admin 自助註冊 2FA〉），否則 admin 端點會被擋（`403 MFA_REQUIRED`）。
 
 **Production（在 EC2 上，對 compose 內的 DB 跑一次性容器，零停機）：**
 

@@ -15,7 +15,13 @@ Usage (in prod, against the compose DB on the host):
 
 The password is auto-generated and printed once by default. To set a specific
 password, pass it via the CREATE_ADMIN_PASSWORD environment variable — never a CLI
-argument, which would leak into `ps`, shell history, and docker run events.
+argument, which would leak into `ps`, shell history, and docker run events. On the
+EC2 host (bash), read it with a prompt first, then run the one-off container — keep
+the `read` line on its own so it does not swallow the next command as the password:
+    read -rsp "Admin password: " CREATE_ADMIN_PASSWORD; echo; export CREATE_ADMIN_PASSWORD
+    docker compose -f docker-compose.prod.yml --env-file .env.prod \
+        run --rm -e CREATE_ADMIN_PASSWORD app python -m app.db.create_admin --email dev@example.com
+    unset CREATE_ADMIN_PASSWORD
 """
 
 import argparse
