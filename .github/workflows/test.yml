@@ -1,0 +1,57 @@
+name: Test
+
+# 共用測試門檻：CI（PR）與 CD（push main）都呼叫同一份，避免兩邊各寫一份而不同步。
+on:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ai_stock
+          POSTGRES_PASSWORD: ai_stock
+          POSTGRES_DB: ai_stock_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ai_stock -d ai_stock_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+psycopg://ai_stock:ai_stock@localhost:5432/ai_stock_test
+      # alembic smoke 在 pytest 外跑、吃不到 conftest 的 env，但 migration 會觸發完整
+      # Settings 驗證：需 LOCAL_USER_ID（LOCAL_MODE 預設 true），且 QUOTE_PROVIDER 須避開
+      # 需金鑰的 shioaji_demo，故指定 in_memory。
+      LOCAL_USER_ID: "00000000-0000-0000-0000-000000000001"
+      QUOTE_PROVIDER: in_memory
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Quality gate（lint / format / typecheck / 隔離 / 單元測試）
+        run: make check
+
+      - name: Migration smoke test
+        run: |
+          uv run alembic upgrade head
+          uv run alembic current
+
+      - name: Integration tests（需 PostgreSQL）
+        run: uv run pytest -m integration -q

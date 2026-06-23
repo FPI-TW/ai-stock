@@ -1,0 +1,100 @@
+name: CD
+
+# push 進 main 才跑：依序 test → build-push → deploy。
+on:
+  push:
+    branches: [main]
+
+env:
+  IMAGE: ghcr.io/fpi-tw/ai-stock
+
+# 不取消進行中的舊跑：新 push 排隊等舊 run（含部署）跑完，避免半途換版。
+# （只在 workflow 層 false 才擋得住整 run 被取消；deploy job 自身的序列化擋不住這層。）
+concurrency:
+  group: cd-main
+  cancel-in-progress: false
+
+jobs:
+  # 部署前先過測試門檻（與 CI 共用 test.yml）；測不過就不會 build、不會部署。
+  test:
+    uses: ./.github/workflows/test.yml
+
+  build-push:
+    needs: test
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build-push
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: read
+
+    # 部署序列化：排隊等前一個部署跑完（與 workflow 層一致，雙重保險）。
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 推送設定並透過 SSH 部署到 EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+          GHCR_ACTOR: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # 釘住 host key 防 MITM；EC2_KNOWN_HOSTS 由 `ssh-keyscan <host>` 取得。
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+          ssh_opts=(-i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts)
+          deploy_dir="/home/ubuntu/app/ai-stock"
+
+          # 確保遠端目錄存在（.env.prod 由使用者一次性放置，CI 不碰）。
+          ssh "${ssh_opts[@]}" "$EC2_USER@$EC2_HOST" "mkdir -p '$deploy_dir/nginx'"
+
+          # 推送式：把本次 commit 的 compose + nginx 設定 scp 到 EC2（EC2 不需 git）。
+          scp "${ssh_opts[@]}" docker-compose.prod.yml "$EC2_USER@$EC2_HOST:$deploy_dir/"
+          scp "${ssh_opts[@]}" nginx/nginx.conf "$EC2_USER@$EC2_HOST:$deploy_dir/nginx/"
+
+          # 機密以 stdin（而非遠端命令列引數）餵入遠端 bash：先送一行 export，再接
+          # deploy.sh 內文。遠端 argv 僅 `bash -s`，token 不出現在 EC2 的 ps / proc cmdline。
+          {
+            printf 'export IMAGE_TAG=%q GHCR_ACTOR=%q GHCR_TOKEN=%q\n' \
+              "$IMAGE_TAG" "$GHCR_ACTOR" "$GHCR_TOKEN"
+            cat scripts/deploy.sh
+          } | ssh "${ssh_opts[@]}" "$EC2_USER@$EC2_HOST" 'bash -s'
