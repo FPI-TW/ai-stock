@@ -141,10 +141,13 @@ make create-admin EMAIL=dev@example.com
 # 或：PYTHONPATH=src uv run python -m app.db.create_admin --email dev@example.com
 ```
 
-若要指定自訂密碼，**經 `CREATE_ADMIN_PASSWORD` 環境變數**傳入，不要用 CLI 參數（會洩漏到 `ps`、shell history、docker 事件）。用 `read -rsp` 帶提示讀入、再以「只帶名稱」的方式傳給容器，值不會出現在命令列（EC2 Ubuntu 預設 bash；`read` 那行需單獨先跑、輸入密碼後再貼後續指令）：
+若要指定自訂密碼，CLI **不收**密碼參數（會洩漏到 `ps`、shell history、docker 事件）。改成在終端機**互動輸入**：下面第一行的 `read -rsp` 會跳出提示讓你當場打密碼，存進當前 shell session 的暫時變數 `CREATE_ADMIN_PASSWORD`（**不需要、也不要寫進 `.env`**），再用 `-e` 只帶變數「名稱」傳進容器（值不出現在命令列），最後 `unset` 清掉。
+
+> EC2 Ubuntu 預設 bash。`read` 那行**需單獨先貼、輸入密碼按 Enter 後**，再貼後面兩行——整段一起貼會讓 `read` 把 docker 那行當成密碼吃掉。
 
 ```bash
-read -rsp "Admin 密碼：" CREATE_ADMIN_PASSWORD; echo; export CREATE_ADMIN_PASSWORD   # 帶提示、不回顯、不進 history
+read -rsp "Admin 密碼：" CREATE_ADMIN_PASSWORD; echo   # 跳提示、當場輸入、不回顯、不進 history
+export CREATE_ADMIN_PASSWORD
 docker compose -f docker-compose.prod.yml --env-file .env.prod \
   run --rm -e CREATE_ADMIN_PASSWORD app python -m app.db.create_admin --email dev@example.com
 unset CREATE_ADMIN_PASSWORD
