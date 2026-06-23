@@ -51,6 +51,9 @@ jobs:
   deploy:
     needs: build-push
     runs-on: ubuntu-latest
+    # 連線/部署卡死時及時失敗（預設 job timeout 是 6 小時）；配 cancel-in-progress:false
+    # 不能讓掛死的 run 霸佔部署佇列，否則後續 main 部署（含 hotfix）全部乾等。
+    timeout-minutes: 15
 
     permissions:
       contents: read
@@ -81,7 +84,10 @@ jobs:
           # 釘住 host key 防 MITM；EC2_KNOWN_HOSTS 由 `ssh-keyscan <host>` 取得。
           printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
 
-          ssh_opts=(-i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts)
+          # ConnectTimeout 讓連不上時快速失敗；ServerAlive* 在連上後主機失聯時 ~45s 內斷線，
+          # 不讓 ssh 無限掛到 job timeout。此陣列同時供下方 scp 與 ssh 使用。
+          ssh_opts=(-i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts
+                    -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3)
           deploy_dir="/home/ubuntu/app/ai-stock"
 
           # 確保遠端目錄存在（.env.prod 由使用者一次性放置，CI 不碰）。
