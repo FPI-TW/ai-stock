@@ -47,4 +47,9 @@ EXPOSE 8100
 # 預設啟動 API；migration 由 compose 的一次性 migrate service 負責。
 # 一對一服務：每個部署只服務單一使用者、負載為 I/O-bound，單 worker 的 async event
 # loop 即足夠；保留 --workers 1 讓 uvicorn supervisor 在 worker crash 時自動重啟。
+#
+# ⚠️ 不要直接把 --workers 調大。app.main 的 lifespan 內含「券商登入 + 行情訂閱 +
+# TWAP/cleanup 排程」，這些每個 worker 各跑一份：多 worker 會造成券商重複登入、互踢
+# session，以及背景工作 N 倍冗餘。要橫向擴展請先改架構（拆出單一背景行程，或用 PG
+# advisory lock 做 leader election），詳見 app/main.py lifespan 的註解。
 CMD ["uvicorn", "app.main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8100", "--workers", "1"]
