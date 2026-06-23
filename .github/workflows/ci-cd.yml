@@ -9,11 +9,14 @@ on:
 env:
   IMAGE: ghcr.io/fpi-tw/ai-stock
 
-# 同一時間只跑一個 pipeline（同 ref）；新的 push 取消進行中的舊跑。
-# 注意：部署 job 自身另用較保守策略，見 deploy job。
+# 同一時間只跑一個 pipeline（同 ref）。
+# cancel-in-progress 分情況：非 main（PR / 功能分支）取消進行中的舊跑省 runner；
+# main 設 false——新 run 改排隊等舊 run 跑完，避免取消進行中的 deploy 造成半途換版。
+# （deploy job 自身的 concurrency cancel-in-progress=false 只能序列化 deploy job 彼此，
+#  擋不住 workflow 層的整 run 取消，故保護必須下放到這層。）
 concurrency:
   group: ci-cd-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # ---------------------------------------------------------------------------
