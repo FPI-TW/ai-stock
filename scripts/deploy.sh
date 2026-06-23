@@ -68,10 +68,13 @@ rollback_app() {
     return
   fi
   local prev_tag="${prev_app_image##*:}"
-  echo "回滾 app 至前一版 IMAGE_TAG=$prev_tag" >&2
-  # 注意：migrate 可能已套用新 schema；若失敗主因是不可逆的 migration，回滾舊 app 後仍需人工確認。
-  if ! IMAGE_TAG="$prev_tag" "${compose[@]}" up -d --remove-orphans >&2; then
-    echo "回滾失敗，請手動處理。" >&2
+  echo "回滾 app/worker 至前一版 IMAGE_TAG=$prev_tag（--no-deps：不重跑 migrate）" >&2
+  # 只重啟 app/worker，用 --no-deps 刻意跳過 migrate：本次部署若已套用新 migration，DB schema
+  # 已前進，用舊映像重跑 migrate 會撞「Can't locate revision」而必然失敗。故只回滾 app code。
+  # ⚠️ schema 不會被回滾：若新 migration 非向後相容，舊 app 可能仍不健康，需人工處理
+  #    （含 migration 的部署無法自動完整回滾——遵循 expand-contract 向後相容遷移可避免此風險）。
+  if ! IMAGE_TAG="$prev_tag" "${compose[@]}" up -d --no-deps app worker >&2; then
+    echo "回滾失敗（schema 已前進，需人工處理）。" >&2
   fi
 }
 
