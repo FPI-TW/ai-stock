@@ -1,0 +1,160 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  IMAGE: ghcr.io/fpi-tw/ai-stock
+
+# 同一時間只跑一個 pipeline（同 ref）；新的 push 取消進行中的舊跑。
+# 注意：部署 job 自身另用較保守策略，見 deploy job。
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. 測試門檻：push 與 PR 都跑。測不過就不會 build、不會部署。
+  # ---------------------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ai_stock
+          POSTGRES_PASSWORD: ai_stock
+          POSTGRES_DB: ai_stock_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ai_stock -d ai_stock_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # 單元測試由 conftest 設 LOCAL_MODE=true，不需機密；DB 僅供 alembic smoke 與 integration。
+      DATABASE_URL: postgresql+psycopg://ai_stock:ai_stock@localhost:5432/ai_stock_test
+      # alembic smoke 在 pytest 之外跑，吃不到 conftest 的 env；migration（_seed_local_user）
+      # 會呼叫 get_settings() 觸發完整 Settings 驗證。補上 conftest（tests/conftest.py:7-9）
+      # 同樣的值讓驗證通過：LOCAL_MODE 預設 true 需 LOCAL_USER_ID；預設 QUOTE_PROVIDER=
+      # shioaji_demo 需 shioaji 金鑰，故改 in_memory。
+      LOCAL_USER_ID: "00000000-0000-0000-0000-000000000001"
+      QUOTE_PROVIDER: in_memory
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Quality gate（lint / format / typecheck / 隔離 / 單元測試）
+        run: make check
+
+      - name: Migration smoke test
+        run: |
+          uv run alembic upgrade head
+          uv run alembic current
+
+      - name: Integration tests（需 PostgreSQL）
+        run: uv run pytest -m integration -q
+
+  # ---------------------------------------------------------------------------
+  # 2. Build 映像並推到 GHCR：只在 main、且測試通過。
+  # ---------------------------------------------------------------------------
+  build-push:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  # 3. 部署到 EC2：只在 main、且映像推好。EC2 只 pull，不 build。
+  # ---------------------------------------------------------------------------
+  deploy:
+    needs: build-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+      packages: read
+
+    # 部署不取消進行中的舊部署，避免半途換版（排隊等前一個跑完）。
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 推送設定並透過 SSH 部署到 EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+          GHCR_ACTOR: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # 釘住 host key 防 MITM；EC2_KNOWN_HOSTS 由 `ssh-keyscan <host>` 取得。
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+          ssh_opts=(-i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=~/.ssh/known_hosts)
+          deploy_dir="/home/ubuntu/app/ai-stock"
+
+          # 1. 確保遠端設定目錄存在（.env.prod 由使用者一次性放置，CI 不碰）。
+          ssh "${ssh_opts[@]}" "$EC2_USER@$EC2_HOST" "mkdir -p '$deploy_dir/nginx'"
+
+          # 2. 推送本次部署的設定檔（compose + nginx）到 EC2——推送式，EC2 不需 git。
+          #    scp 的是 runner checkout 的這個 commit，與下方 IMAGE_TAG 完全一致。
+          scp "${ssh_opts[@]}" docker-compose.prod.yml "$EC2_USER@$EC2_HOST:$deploy_dir/"
+          scp "${ssh_opts[@]}" nginx/nginx.conf "$EC2_USER@$EC2_HOST:$deploy_dir/nginx/"
+
+          # 3. 執行部署。變數隨遠端命令列帶入遠端 bash；GHCR_TOKEN 不落地寫檔，runner 跑完即銷毀。
+          ssh "${ssh_opts[@]}" \
+            "$EC2_USER@$EC2_HOST" \
+            IMAGE_TAG="$IMAGE_TAG" GHCR_ACTOR="$GHCR_ACTOR" GHCR_TOKEN="$GHCR_TOKEN" \
+            'bash -s' < scripts/deploy.sh
