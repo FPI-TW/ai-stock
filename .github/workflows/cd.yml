@@ -86,9 +86,6 @@ jobs:
           APP_NAME: ${{ vars.APP_NAME }}
           APP_VERSION: ${{ vars.APP_VERSION }}
           LOCAL_MODE: ${{ vars.LOCAL_MODE }}
-          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
-          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           REQUEST_ID_HEADER: ${{ vars.REQUEST_ID_HEADER }}
           CORS_ALLOW_ORIGINS: ${{ secrets.CORS_ALLOW_ORIGINS }}
@@ -137,9 +134,6 @@ jobs:
           APP_NAME=${APP_NAME}
           APP_VERSION=${APP_VERSION}
           LOCAL_MODE=${LOCAL_MODE}
-          POSTGRES_DB=${POSTGRES_DB}
-          POSTGRES_USER=${POSTGRES_USER}
-          POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
           DATABASE_URL=${DATABASE_URL}
           REQUEST_ID_HEADER=${REQUEST_ID_HEADER}
           CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}

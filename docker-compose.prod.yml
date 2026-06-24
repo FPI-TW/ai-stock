@@ -1,32 +1,16 @@
-# 正式環境部署：postgres + 一次性 migrate + app(FastAPI HTTP) + worker(背景排程) + nginx 反向代理。
+# 正式環境部署：一次性 migrate + app(FastAPI HTTP) + worker(背景排程) + nginx 反向代理。
+# 資料庫用 AWS RDS / Aurora（由 .env.prod 的 DATABASE_URL 指定），不在 compose 內自架 postgres。
 # 映像由 CI build 後推到 GHCR，EC2 只 pull、不在本機 build（見 .github/workflows/ci-cd.yml）。
 # 手動部署時用法：
-#   1. cp .env.prod.example .env.prod 並填入真實機密（JWT / MFA / DB 密碼 / Shioaji）。
+#   1. cp .env.prod.example .env.prod 並填入真實機密（DATABASE_URL / JWT / MFA / Shioaji）。
 #   2. echo "$GHCR_TOKEN" | docker login ghcr.io -u <github_user> --password-stdin
 #   3. IMAGE_TAG=<commit_sha 或 latest> docker compose -f docker-compose.prod.yml --env-file .env.prod pull
 #   4. IMAGE_TAG=<同上> docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
-# 對外只暴露 nginx（80/443）；app / worker / postgres 留在內部網路。
+# 對外只暴露 nginx（80/443）；app / worker 留在內部網路，資料庫連外部 RDS。
 # 背景排程（TWAP / idempotency cleanup）只在單一 worker process 跑（見 worker service /
 # issue #53），不隨 app 的 uvicorn worker 數放大。
 
 services:
-  postgres:
-    image: postgres:17
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-ai_stock}
-      POSTGRES_USER: ${POSTGRES_USER:-ai_stock}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必填}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ai_stock} -d ${POSTGRES_DB:-ai_stock}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    networks:
-      - backend
-
   # 一次性執行 DB migration，成功後 app 才啟動，避免多 worker 併發跑 alembic。
   # 映像由 CI build 後推到 GHCR；EC2 只 pull，migrate / app / worker 共用同一 IMAGE_TAG。
   migrate:
@@ -37,9 +21,6 @@ services:
       - .env.prod
     environment:
       DATABASE_URL: ${DATABASE_URL}
-    depends_on:
-      postgres:
-        condition: service_healthy
     networks:
       - backend
 
@@ -57,8 +38,6 @@ services:
       TWAP_WORKER_ENABLED: "false"
       IDEMPOTENCY_CLEANUP_ENABLED: "false"
     depends_on:
-      postgres:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     healthcheck:
@@ -89,8 +68,6 @@ services:
       TWAP_WORKER_ENABLED: "true"
       IDEMPOTENCY_CLEANUP_ENABLED: "true"
     depends_on:
-      postgres:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     healthcheck:
@@ -120,9 +97,6 @@ services:
         condition: service_healthy
     networks:
       - backend
-
-volumes:
-  postgres_data:
 
 networks:
   backend:
