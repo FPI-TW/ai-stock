@@ -33,6 +33,10 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
+# shioaji SDK 在 import 時就建 log 檔，預設相對路徑會落在不可寫的 WORKDIR /app；
+# 導到可寫的 /tmp，否則非 root 的 app_runtime 啟動即 PermissionError。
+ENV SJ_LOG_PATH=/tmp/shioaji.log
+
 WORKDIR /app
 
 # 只搬必要產物：venv + 原始碼 + alembic 設定。
