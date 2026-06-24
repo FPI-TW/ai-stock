@@ -80,6 +80,29 @@ jobs:
           GHCR_ACTOR: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_TAG: ${{ github.sha }}
+          # .env.prod 參數：逐項對應一個 GitHub Secret/Variable，於下方組成 .env.prod 後推到 EC2。
+          # 對照範本 .env.prod.example；新增一行就在這裡和下方 heredoc 各補一行。
+          APP_ENV: ${{ vars.APP_ENV }}
+          APP_NAME: ${{ vars.APP_NAME }}
+          APP_VERSION: ${{ vars.APP_VERSION }}
+          LOCAL_MODE: ${{ vars.LOCAL_MODE }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          REQUEST_ID_HEADER: ${{ vars.REQUEST_ID_HEADER }}
+          CORS_ALLOW_ORIGINS: ${{ secrets.CORS_ALLOW_ORIGINS }}
+          TRUSTED_PROXY_IPS: ${{ vars.TRUSTED_PROXY_IPS }}
+          JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
+          MFA_ENCRYPTION_KEY: ${{ secrets.MFA_ENCRYPTION_KEY }}
+          QUOTE_PROVIDER: ${{ vars.QUOTE_PROVIDER }}
+          SHIOAJI_API_KEY: ${{ secrets.SHIOAJI_API_KEY }}
+          SHIOAJI_SECRET_KEY: ${{ secrets.SHIOAJI_SECRET_KEY }}
+          SHIOAJI_MAX_SUBSCRIPTIONS: ${{ vars.SHIOAJI_MAX_SUBSCRIPTIONS }}
+          SHIOAJI_SIMULATION: ${{ vars.SHIOAJI_SIMULATION }}
+          SHIOAJI_DEMO_ALLOWED_SYMBOLS: ${{ secrets.SHIOAJI_DEMO_ALLOWED_SYMBOLS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TIMEOUT_SECONDS: ${{ vars.TELEGRAM_TIMEOUT_SECONDS }}
+          TWAP_WORKER_ENABLED: ${{ vars.TWAP_WORKER_ENABLED }}
+          TWAP_WORKER_INTERVAL_SECONDS: ${{ vars.TWAP_WORKER_INTERVAL_SECONDS }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -94,12 +117,44 @@ jobs:
                     -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3)
           deploy_dir="/home/ubuntu/app/ai-stock"
 
-          # 確保遠端目錄存在（.env.prod 由使用者一次性放置，CI 不碰）。
+          # 確保遠端目錄存在。
           ssh "${ssh_opts[@]}" "$EC2_USER@$EC2_HOST" "mkdir -p '$deploy_dir/nginx'"
 
           # 推送式：把本次 commit 的 compose + nginx 設定 scp 到 EC2（EC2 不需 git）。
           scp "${ssh_opts[@]}" docker-compose.prod.yml "$EC2_USER@$EC2_HOST:$deploy_dir/"
           scp "${ssh_opts[@]}" nginx/nginx.conf "$EC2_USER@$EC2_HOST:$deploy_dir/nginx/"
+
+          # 從 GitHub Secrets/Variables 組出 .env.prod 再推到 EC2（取代過去使用者手放在主機的做法）。
+          # 值先經 step env 帶入再以 heredoc 寫檔（引用 ${VAR} 而非把機密直接內插進 YAML），
+          # 避免含 $ / 反引號等特殊字元的密碼破壞腳本；heredoc 展開出的值不會被再次求值。
+          # umask 077 讓本地落檔即 600；scp 不保留權限，故推完再於遠端 chmod 600。
+          umask 077
+          cat > .env.prod <<EOF
+          APP_ENV=${APP_ENV}
+          APP_NAME=${APP_NAME}
+          APP_VERSION=${APP_VERSION}
+          LOCAL_MODE=${LOCAL_MODE}
+          DATABASE_URL=${DATABASE_URL}
+          REQUEST_ID_HEADER=${REQUEST_ID_HEADER}
+          CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS}
+          TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS}
+          JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}
+          MFA_ENCRYPTION_KEY=${MFA_ENCRYPTION_KEY}
+          QUOTE_PROVIDER=${QUOTE_PROVIDER}
+          SHIOAJI_API_KEY=${SHIOAJI_API_KEY}
+          SHIOAJI_SECRET_KEY=${SHIOAJI_SECRET_KEY}
+          SHIOAJI_MAX_SUBSCRIPTIONS=${SHIOAJI_MAX_SUBSCRIPTIONS}
+          SHIOAJI_SIMULATION=${SHIOAJI_SIMULATION}
+          SHIOAJI_DEMO_ALLOWED_SYMBOLS=${SHIOAJI_DEMO_ALLOWED_SYMBOLS}
+          TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+          TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+          TELEGRAM_TIMEOUT_SECONDS=${TELEGRAM_TIMEOUT_SECONDS}
+          TWAP_WORKER_ENABLED=${TWAP_WORKER_ENABLED}
+          TWAP_WORKER_INTERVAL_SECONDS=${TWAP_WORKER_INTERVAL_SECONDS}
+          EOF
+          scp "${ssh_opts[@]}" .env.prod "$EC2_USER@$EC2_HOST:$deploy_dir/"
+          ssh "${ssh_opts[@]}" "$EC2_USER@$EC2_HOST" "chmod 600 '$deploy_dir/.env.prod'"
+          rm -f .env.prod
 
           # 機密以 stdin（而非遠端命令列引數）餵入遠端 bash：先送一行 export，再接
           # deploy.sh 內文。遠端 argv 僅 `bash -s`，token 不出現在 EC2 的 ps / proc cmdline。

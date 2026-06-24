@@ -13,9 +13,9 @@ export IMAGE_TAG
 
 cd "$deploy_dir"
 
-# 1. 機密設定檔必須存在（由使用者一次性放置，CI 不碰）。
+# 1. 機密設定檔必須存在（由 CI 從 GitHub Secrets 組出並 scp，見 cd.yml deploy job）。
 if [[ ! -f "$env_file" ]]; then
-  echo "錯誤：找不到 $deploy_dir/$env_file，請先在主機放好機密設定再部署。" >&2
+  echo "錯誤：找不到 $deploy_dir/$env_file，CI 應在部署前從 GitHub Secrets 組出並 scp。" >&2
   exit 1
 fi
 
