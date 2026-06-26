@@ -6,7 +6,7 @@
 #   2. echo "$GHCR_TOKEN" | docker login ghcr.io -u <github_user> --password-stdin
 #   3. IMAGE_TAG=<commit_sha 或 latest> docker compose -f docker-compose.prod.yml --env-file .env.prod pull
 #   4. IMAGE_TAG=<同上> docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
-# 對外只暴露 nginx（80/443）；app 留在內部網路，資料庫連外部 RDS。
+# 對外只暴露 nginx（80）；app 留在內部網路，資料庫連外部 RDS。
 # 背景排程（TWAP / idempotency cleanup）在 app 容器內跑（app 為 --workers 1，排程剛好
 # 一份）。原本拆獨立 worker 容器（issue #53）已合回 app，見 app.environment 註解。
 
@@ -59,12 +59,9 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-      - "443:443"
+      # HTTPS 由 Cloudflare 邊緣處理，origin 只跑 80。做 origin HTTPS 時再開 443 + 掛憑證。
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      # TLS 憑證：在 EC2 的 ./nginx/certs/ 放 Cloudflare Origin CA 憑證
-      # （fullchain.pem / privkey.pem），對應 nginx.conf 443 區塊的路徑。不進版控。
-      - ./nginx/certs:/etc/nginx/certs:ro
     depends_on:
       app:
         condition: service_healthy
