@@ -20,3 +20,5 @@ SECURITY_AUDIT.md
 # Logs
 logs/
 *.log
+# TLS 憑證（Cloudflare Origin CA），只放 EC2、絕不進版控
+nginx/certs/
