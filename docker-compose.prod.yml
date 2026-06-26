@@ -59,12 +59,12 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-      # 啟用 TLS 後解除註解，並在 nginx/nginx.conf 補上 443 server 區塊。
-      # - "443:443"
+      - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      # TLS 憑證掛載（自行放置 fullchain.pem / privkey.pem）。
-      # - ./nginx/certs:/etc/nginx/certs:ro
+      # TLS 憑證：在 EC2 的 ./nginx/certs/ 放 Cloudflare Origin CA 憑證
+      # （fullchain.pem / privkey.pem），對應 nginx.conf 443 區塊的路徑。不進版控。
+      - ./nginx/certs:/etc/nginx/certs:ro
     depends_on:
       app:
         condition: service_healthy
