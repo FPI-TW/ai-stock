@@ -1,4 +1,4 @@
-# 正式環境部署：一次性 migrate + app(FastAPI HTTP) + worker(背景排程) + nginx 反向代理。
+# 正式環境部署：一次性 migrate + app(FastAPI HTTP + 背景排程) + nginx 反向代理。
 # 資料庫用 AWS RDS / Aurora（由 .env.prod 的 DATABASE_URL 指定），不在 compose 內自架 postgres。
 # 映像由 CI build 後推到 GHCR，EC2 只 pull、不在本機 build（見 .github/workflows/ci-cd.yml）。
 # 手動部署時用法：
@@ -6,13 +6,13 @@
 #   2. echo "$GHCR_TOKEN" | docker login ghcr.io -u <github_user> --password-stdin
 #   3. IMAGE_TAG=<commit_sha 或 latest> docker compose -f docker-compose.prod.yml --env-file .env.prod pull
 #   4. IMAGE_TAG=<同上> docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
-# 對外只暴露 nginx（80/443）；app / worker 留在內部網路，資料庫連外部 RDS。
-# 背景排程（TWAP / idempotency cleanup）只在單一 worker process 跑（見 worker service /
-# issue #53），不隨 app 的 uvicorn worker 數放大。
+# 對外只暴露 nginx（80/443）；app 留在內部網路，資料庫連外部 RDS。
+# 背景排程（TWAP / idempotency cleanup）在 app 容器內跑（app 為 --workers 1，排程剛好
+# 一份）。原本拆獨立 worker 容器（issue #53）已合回 app，見 app.environment 註解。
 
 services:
   # 一次性執行 DB migration，成功後 app 才啟動，避免多 worker 併發跑 alembic。
-  # 映像由 CI build 後推到 GHCR；EC2 只 pull，migrate / app / worker 共用同一 IMAGE_TAG。
+  # 映像由 CI build 後推到 GHCR；EC2 只 pull，migrate / app 共用同一 IMAGE_TAG。
   migrate:
     image: ghcr.io/fpi-tw/ai-stock:${IMAGE_TAG:-latest}
     restart: "no"
@@ -26,45 +26,18 @@ services:
 
   app:
     # 映像由 CI build 後推到 GHCR；EC2 只 pull，不在本機 build。IMAGE_TAG 由部署腳本帶入
-    # 該次 commit 的 SHA；未設時退回 latest。migrate / app / worker 共用同一 tag。
+    # 該次 commit 的 SHA；未設時退回 latest。migrate / app 共用同一 tag。
     image: ghcr.io/fpi-tw/ai-stock:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file:
       - .env.prod
     environment:
       DATABASE_URL: ${DATABASE_URL}
-      # 背景排程改由下方獨立 worker 跑。app 的多個 uvicorn worker 只服務 HTTP，
-      # 不各起一份排程，避免 ×worker 數放大 TWAP/cleanup 的 DB 輪詢（issue #53）。
-      TWAP_WORKER_ENABLED: "false"
-      IDEMPOTENCY_CLEANUP_ENABLED: "false"
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    healthcheck:
-      test:
-        - "CMD-SHELL"
-        - "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8100/health').status==200 else 1)\""
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    networks:
-      - backend
-
-  # 背景排程專責 worker（單一 process）：TWAP slice 排程 + idempotency cleanup。
-  # 與 app 同 image，但 --workers 1 → 背景排程只跑一份，不隨 app 的 worker 數放大
-  # （issue #53）。不對外、不掛 nginx，只在內網跑排程。
-  worker:
-    # 與 app 同一 GHCR 映像（同 IMAGE_TAG），不自帶 build。
-    image: ghcr.io/fpi-tw/ai-stock:${IMAGE_TAG:-latest}
-    restart: unless-stopped
-    command:
-      ["uvicorn", "app.main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8100", "--workers", "1"]
-    env_file:
-      - .env.prod
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      # 排程只在此 service 開啟（app 已關閉）。
+      # 背景排程（TWAP / idempotency cleanup）就在這個單一容器內跑。Dockerfile 是
+      # --workers 1，排程剛好跑一份，不會放大。原本拆出獨立 worker 容器是為了「app
+      # 未來開多 uvicorn worker 時排程仍只跑一份」（issue #53），但目前 app 就是
+      # 單 process，多開一個 worker 容器只會讓 shioaji 同帳號重複登入、且兩容器各吃
+      # ~325MiB 在 t2.micro(952MiB) 撐爆記憶體 → OOM kill。等真要橫向擴展再拆。
       TWAP_WORKER_ENABLED: "true"
       IDEMPOTENCY_CLEANUP_ENABLED: "true"
     depends_on:
