@@ -1,4 +1,4 @@
-.PHONY: install install-hooks dev lint format format-check typecheck commit-check pre-push-check check migrate downgrade seed bootstrap-admin test test-integration check-shioaji-isolation
+.PHONY: install install-hooks dev lint format format-check typecheck commit-check pre-push-check check migrate downgrade seed bootstrap-admin create-admin test test-integration check-shioaji-isolation
 
 DATABASE_URL ?= postgresql+psycopg://ai_stock:ai_stock@localhost:5434/ai_stock
 
@@ -55,6 +55,10 @@ seed:
 
 bootstrap-admin:
 	PYTHONPATH=src uv run python -m app.db.bootstrap_admin
+
+# 建立單一 admin（可重複執行，每次一個）：make create-admin EMAIL=dev@example.com
+create-admin:
+	PYTHONPATH=src uv run python -m app.db.create_admin --email $(EMAIL)
 
 test:
 	uv run pytest -s

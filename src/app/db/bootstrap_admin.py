@@ -60,7 +60,15 @@ def bootstrap_initial_admin(
     config: BootstrapAdminConfig,
     *,
     now: datetime | None = None,
+    overwrite: bool = True,
 ) -> BootstrapAdminResult:
+    """Create (or, when overwrite=True, update) an active admin.
+
+    overwrite=True (default) keeps the env-driven bootstrap behaviour: an existing
+    email is reset to an active admin. overwrite=False (the per-admin CLI) refuses
+    to touch an existing account, so re-running for an already-provisioned admin
+    can't silently reset their password.
+    """
     if not settings.local_mode and not config.allow_non_local:
         raise RuntimeError("Initial admin bootstrap is disabled outside LOCAL_MODE")
 
@@ -75,6 +83,8 @@ def bootstrap_initial_admin(
     password_hash = hash_password(hasher, config.password)
 
     user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    if user is not None and not overwrite:
+        raise RuntimeError(f"admin already exists, refusing to overwrite: {email}")
     if user is None:
         user = User(
             id=uuid4(),
