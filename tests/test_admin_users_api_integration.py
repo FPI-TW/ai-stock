@@ -267,6 +267,57 @@ def test_resend_is_rate_limited(admin_engine: Engine) -> None:
 
 
 @pytest.mark.integration
+def test_provision_creates_active_user_who_can_log_in(admin_engine: Engine) -> None:
+    client = _admin_client(admin_engine)
+    email = f"provision-{uuid4()}@example.com"
+
+    response = client.post("/admin/users/with-password", json={"email": email, "password": "s3cret-pw", "role": "user"})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "active"
+    with Session(admin_engine) as session:
+        user = session.execute(select(User).where(User.id == UUID(body["id"]))).scalar_one()
+        assert user.status == "active"
+        assert user.password_hash is not None
+        assert user.terms_version_accepted is None
+        audit = session.execute(
+            select(AuditEvent).where(AuditEvent.event_type == "account_provisioned_by_admin")
+        ).scalar_one()
+        assert audit.event_metadata["provisioned_user_id"] == str(user.id)
+        assert "password" not in audit.event_metadata  # never persist the plaintext
+
+    # End-to-end: the admin-set password actually authenticates.
+    login = client.post("/auth/login", json={"email": email, "password": "s3cret-pw"})
+    assert login.status_code == 200
+
+
+@pytest.mark.integration
+def test_provision_rejects_weak_password(admin_engine: Engine) -> None:
+    client = _admin_client(admin_engine)
+
+    response = client.post(
+        "/admin/users/with-password",
+        json={"email": f"weak-{uuid4()}@example.com", "password": "short", "role": "user"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "WEAK_PASSWORD"
+
+
+@pytest.mark.integration
+def test_provision_duplicate_email_is_409(admin_engine: Engine) -> None:
+    client = _admin_client(admin_engine)
+    email = f"dup-{uuid4()}@example.com"
+    _seed_active_user(admin_engine, email)
+
+    response = client.post("/admin/users/with-password", json={"email": email, "password": "s3cret-pw", "role": "user"})
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "EMAIL_ALREADY_EXISTS"
+
+
+@pytest.mark.integration
 def test_list_users_returns_seeded_users(admin_engine: Engine) -> None:
     client = _admin_client(admin_engine)
     email = f"listed-{uuid4()}@example.com"

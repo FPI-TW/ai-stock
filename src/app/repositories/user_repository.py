@@ -82,6 +82,17 @@ class UserRepository:
         self._db.flush()
         return user_id
 
+    def create_active(self, *, email: str, role: str, password_hash: str) -> UUID:
+        """Admin-provisioned user: created active with a password already set (no
+        invitation, terms not yet accepted). Caller pre-checks email uniqueness for a
+        clean error; the DB unique index is the final guard."""
+        user_id = uuid4()
+        self._db.add(
+            User(id=user_id, email=normalize_email(email), role=role, status="active", password_hash=password_hash)
+        )
+        self._db.flush()
+        return user_id
+
     def set_password(self, user_id: UUID, *, password_hash: str, now: datetime) -> None:
         """Replace the password hash (password-reset confirm)."""
         self._db.execute(

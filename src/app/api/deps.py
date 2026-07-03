@@ -10,6 +10,7 @@ from app.commands.account import (
     AcceptInvitationCommand,
     CreateUserCommand,
     DisableUserCommand,
+    ProvisionUserCommand,
     ReactivateUserCommand,
     ResendInvitationCommand,
 )
@@ -541,6 +542,18 @@ def get_create_user_command(
 
 
 CreateUserCommandDep = Annotated[CreateUserCommand, Depends(get_create_user_command)]
+
+
+def get_provision_user_command(
+    db: DatabaseDep,
+    users: UserRepoDep,
+    audit: AuditWriterDep,
+    hasher: PasswordHasherDep,
+) -> ProvisionUserCommand:
+    return ProvisionUserCommand(db, users, audit, hasher)
+
+
+ProvisionUserCommandDep = Annotated[ProvisionUserCommand, Depends(get_provision_user_command)]
 
 
 def get_disable_user_command(

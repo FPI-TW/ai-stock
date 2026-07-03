@@ -19,6 +19,16 @@ class CreateUserResponse(BaseModel):
     status: str
 
 
+class ProvisionUserRequest(BaseModel):
+    """Admin creates an active account with an admin-chosen password (no invitation)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str
+    password: str
+    role: Literal["user", "admin"]
+
+
 class UserSummary(BaseModel):
     id: UUID
     email: str

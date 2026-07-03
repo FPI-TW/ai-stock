@@ -12,6 +12,7 @@ from app.api.deps import (
     AdminUserDep,
     CreateUserCommandDep,
     DisableUserCommandDep,
+    ProvisionUserCommandDep,
     ReactivateUserCommandDep,
     ResendInvitationCommandDep,
     SetKillSwitchCommandDep,
@@ -26,13 +27,20 @@ from app.api.schemas.admin import (
     CreateUserResponse,
     KillSwitchRequest,
     KillSwitchStateResponse,
+    ProvisionUserRequest,
     TwoFactorSetupResponse,
     TwoFactorVerifyRequest,
     TwoFactorVerifyResponse,
     UserListResponse,
     UserSummary,
 )
-from app.commands.account import CreateUserInput, DisableUserInput, ReactivateUserInput, ResendInvitationInput
+from app.commands.account import (
+    CreateUserInput,
+    DisableUserInput,
+    ProvisionUserInput,
+    ReactivateUserInput,
+    ResendInvitationInput,
+)
 from app.commands.kill_switch import SetKillSwitchInput
 from app.commands.two_factor import SetupTwoFactorInput, VerifyTwoFactorInput
 from app.repositories.system_flag_repository import SystemFlagRepository
@@ -41,13 +49,21 @@ from app.services.kill_switch import GLOBAL_TRIGGER_HALT
 router = APIRouter()
 
 
-@router.post("/users", response_model=CreateUserResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/users",
+    response_model=CreateUserResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="建立帳號並寄送邀請信（user 自設密碼）",
+)
 def create_user(
     request: Request,
     body: CreateUserRequest,
     admin: AdminUserDep,
     command: CreateUserCommandDep,
 ) -> CreateUserResponse:
+    """建立 invited 狀態帳號，產生邀請 token 並寄送邀請信；user 點連結後自設密碼並啟用
+    （POST /auth/invitations/accept）。此端點不設定密碼、回傳 status=invited。
+    若要 admin 直接設密碼、免寄信，改用 POST /admin/users/with-password。"""
     created = command.execute(
         CreateUserInput(
             email=body.email,
@@ -58,6 +74,33 @@ def create_user(
         )
     )
     return CreateUserResponse(id=created.user_id, status="invited")
+
+
+@router.post(
+    "/users/with-password",
+    response_model=CreateUserResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="直接建立 active 帳號、由 admin 設定密碼（不寄信）",
+)
+def provision_user(
+    request: Request,
+    body: ProvisionUserRequest,
+    admin: AdminUserDep,
+    command: ProvisionUserCommandDep,
+) -> CreateUserResponse:
+    """admin 直接建立 active 帳號並設定密碼，不走邀請信。admin 把 email+密碼交給 user，
+    user 即可登入，回傳 status=active。對照：POST /admin/users 走邀請信、user 自設密碼。"""
+    created = command.execute(
+        ProvisionUserInput(
+            email=body.email,
+            password=body.password,
+            role=body.role,
+            created_by_admin_id=admin.user_id,
+            now=datetime.now(UTC),
+            request_id=get_request_id(request),
+        )
+    )
+    return CreateUserResponse(id=created.user_id, status="active")
 
 
 @router.get("/users", response_model=UserListResponse)

@@ -63,6 +63,16 @@ class CreatedUser:
 
 
 @dataclass(frozen=True, slots=True)
+class ProvisionUserInput:
+    email: str
+    password: str
+    role: str
+    created_by_admin_id: UUID
+    now: datetime
+    request_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AcceptInvitationInput:
     raw_token: str
     password: str
@@ -144,6 +154,53 @@ class CreateUserCommand:
                 actor_type="admin",
                 actor_id=inp.created_by_admin_id,
                 metadata={"invited_user_id": str(user_id), "role": inp.role},
+                request_id=inp.request_id,
+                now=inp.now,
+            )
+            self._db.commit()
+            return CreatedUser(user_id=user_id)
+        except (AuthError, AccountError):
+            raise
+        except Exception:
+            self._db.rollback()
+            raise
+
+
+class ProvisionUserCommand:
+    """Admin creates an active user with an admin-chosen password — no invitation,
+    no email. The password is set immediately so the user can log in with the
+    credentials the admin hands over. Terms stay unaccepted until the user acts."""
+
+    def __init__(
+        self,
+        db: Session,
+        users: UserRepository,
+        audit: AuditEventWriter,
+        hasher: PasswordHasher,
+    ) -> None:
+        self._db = db
+        self._users = users
+        self._audit = audit
+        self._hasher = hasher
+
+    def execute(self, inp: ProvisionUserInput) -> CreatedUser:
+        try:
+            if self._users.get_by_email(inp.email) is not None:
+                raise EmailAlreadyExistsError()
+            if not is_password_strong_enough(inp.password):
+                raise WeakPasswordError()
+
+            user_id = self._users.create_active(
+                email=inp.email,
+                role=inp.role,
+                password_hash=hash_password(self._hasher, inp.password),
+            )
+            self._audit.write(
+                event_type="account_provisioned_by_admin",
+                actor_type="admin",
+                actor_id=inp.created_by_admin_id,
+                # Never the plaintext password — only non-secret facts.
+                metadata={"provisioned_user_id": str(user_id), "role": inp.role},
                 request_id=inp.request_id,
                 now=inp.now,
             )
