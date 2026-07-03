@@ -4,13 +4,13 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 
 
 class CreateUserRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    email: str
+    email: EmailStr
     role: Literal["user", "admin"]
 
 
@@ -24,7 +24,7 @@ class ProvisionUserRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    email: str
+    email: EmailStr
     password: str
     role: Literal["user", "admin"]
 
