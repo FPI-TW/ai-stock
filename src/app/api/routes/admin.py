@@ -21,7 +21,7 @@ from app.api.deps import (
     UserRepoDep,
     VerifyTwoFactorCommandDep,
 )
-from app.api.errors import get_request_id
+from app.api.errors import ErrorResponse, get_request_id
 from app.api.schemas.admin import (
     CreateUserRequest,
     CreateUserResponse,
@@ -81,6 +81,24 @@ def create_user(
     response_model=CreateUserResponse,
     status_code=status.HTTP_201_CREATED,
     summary="直接建立 active 帳號、由 admin 設定密碼（不寄信）",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "未認證或 session 已失效（UNAUTHENTICATED / SESSION_REVOKED）",
+        },
+        status.HTTP_403_FORBIDDEN: {
+            "model": ErrorResponse,
+            "description": "非 admin、admin 帳號已停用、或未完成 2FA（FORBIDDEN / ACCOUNT_DISABLED / MFA_REQUIRED）",
+        },
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorResponse,
+            "description": "email 已存在（EMAIL_ALREADY_EXISTS）",
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse,
+            "description": "密碼強度不足或請求格式錯誤（WEAK_PASSWORD / VALIDATION_ERROR）",
+        },
+    },
 )
 def provision_user(
     request: Request,
