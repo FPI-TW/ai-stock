@@ -3,13 +3,13 @@ aliases); Python attributes stay snake_case."""
 
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    email: str
+    email: EmailStr
     password: str
 
 
@@ -24,7 +24,7 @@ class AcceptInvitationRequest(BaseModel):
 class PasswordResetRequestRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    email: str
+    email: EmailStr
 
 
 class PasswordResetConfirmRequest(BaseModel):
