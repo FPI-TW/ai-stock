@@ -1,12 +1,22 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, status
 
 from app.api.deps import SymbolServiceDep
+from app.api.errors import ErrorResponse
 from app.schemas.symbol import SingleSymbolResponse, SymbolListResponse, SymbolResponse
 
 router = APIRouter()
 
 
-@router.get("", response_model=SymbolListResponse)
+@router.get(
+    "",
+    response_model=SymbolListResponse,
+    responses={
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse,
+            "description": "查詢參數不合法，例如 limit 超出 1–50（VALIDATION_ERROR）",
+        },
+    },
+)
 def list_symbols(
     service: SymbolServiceDep,
     q: str | None = Query(None, description="symbol prefix 或 display_name contains"),
@@ -16,7 +26,16 @@ def list_symbols(
     return SymbolListResponse(data=[SymbolResponse.model_validate(s) for s in symbols])
 
 
-@router.get("/{symbol}", response_model=SingleSymbolResponse)
+@router.get(
+    "/{symbol}",
+    response_model=SingleSymbolResponse,
+    responses={
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": "找不到此標的代號（UNKNOWN_SYMBOL）",
+        },
+    },
+)
 def get_symbol(
     service: SymbolServiceDep,
     symbol: str,
