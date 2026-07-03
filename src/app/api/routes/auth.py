@@ -10,6 +10,7 @@ Cookie design (spec §13):
 
 import ipaddress
 from datetime import UTC, datetime
+from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request, Response, status
@@ -25,7 +26,7 @@ from app.api.deps import (
     SettingsDep,
     UserRepoDep,
 )
-from app.api.errors import ApiError, ErrorCode, get_request_id
+from app.api.errors import ApiError, ErrorCode, ErrorResponse, get_request_id
 from app.api.schemas.auth import (
     AcceptInvitationRequest,
     LoginRequest,
@@ -41,6 +42,12 @@ from app.core.config import Settings
 from app.domain.auth import CsrfFailedError
 
 router = APIRouter()
+
+
+def _error(description: str) -> dict[str, Any]:
+    """One OpenAPI error-response entry: the standard error envelope + a description."""
+    return {"model": ErrorResponse, "description": description}
+
 
 _REFRESH_COOKIE = "refresh_token"
 _CSRF_COOKIE = "csrf_token"
@@ -151,7 +158,15 @@ def _session_response(issued: IssuedSession, now: datetime) -> SessionTokenRespo
     )
 
 
-@router.post("/login", response_model=SessionTokenResponse)
+@router.post(
+    "/login",
+    response_model=SessionTokenResponse,
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _error("帳號或密碼錯誤（LOGIN_FAILED）"),
+        status.HTTP_422_UNPROCESSABLE_CONTENT: _error("請求格式錯誤（VALIDATION_ERROR）"),
+        status.HTTP_429_TOO_MANY_REQUESTS: _error("登入失敗次數過多、暫時鎖定，附 Retry-After（LOGIN_LOCKED）"),
+    },
+)
 def login(
     request: Request,
     body: LoginRequest,
@@ -174,7 +189,18 @@ def login(
     return _session_response(issued, now)
 
 
-@router.post("/invitations/accept", response_model=SessionTokenResponse)
+@router.post(
+    "/invitations/accept",
+    response_model=SessionTokenResponse,
+    responses={
+        status.HTTP_400_BAD_REQUEST: _error("邀請連結無效或已撤銷（INVITATION_INVALID）"),
+        status.HTTP_409_CONFLICT: _error("邀請連結已被使用（INVITATION_CONSUMED）"),
+        status.HTTP_410_GONE: _error("邀請連結已過期（INVITATION_EXPIRED）"),
+        status.HTTP_422_UNPROCESSABLE_CONTENT: _error(
+            "密碼強度不足、未接受條款、或請求格式錯誤（WEAK_PASSWORD / TERMS_NOT_ACCEPTED / VALIDATION_ERROR）"
+        ),
+    },
+)
 def accept_invitation(
     request: Request,
     body: AcceptInvitationRequest,
@@ -198,7 +224,16 @@ def accept_invitation(
     return _session_response(issued, now)
 
 
-@router.post("/refresh", response_model=SessionTokenResponse)
+@router.post(
+    "/refresh",
+    response_model=SessionTokenResponse,
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _error(
+            "refresh token 無效/過期，或偵測到重用已全數撤銷（REFRESH_INVALID / REFRESH_REUSE_DETECTED）"
+        ),
+        status.HTTP_403_FORBIDDEN: _error("CSRF 驗證失敗（CSRF_FAILED）"),
+    },
+)
 def refresh(
     request: Request,
     command: RefreshCommandDep,
@@ -222,7 +257,14 @@ def refresh(
     return _session_response(issued, now)
 
 
-@router.post("/password-reset/request", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/password-reset/request",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        # 一律回 202（不洩漏 email 是否存在）；唯一的非 2xx 是請求格式錯誤。
+        status.HTTP_422_UNPROCESSABLE_CONTENT: _error("請求格式錯誤（VALIDATION_ERROR）"),
+    },
+)
 def password_reset_request(
     request: Request,
     body: PasswordResetRequestRequest,
@@ -240,7 +282,14 @@ def password_reset_request(
     )
 
 
-@router.post("/password-reset/confirm", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/password-reset/confirm",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        status.HTTP_400_BAD_REQUEST: _error("重設連結無效或已過期（PASSWORD_RESET_INVALID）"),
+        status.HTTP_422_UNPROCESSABLE_CONTENT: _error("密碼強度不足或請求格式錯誤（WEAK_PASSWORD / VALIDATION_ERROR）"),
+    },
+)
 def password_reset_confirm(
     request: Request,
     body: PasswordResetConfirmRequest,
@@ -256,7 +305,13 @@ def password_reset_confirm(
     )
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        status.HTTP_403_FORBIDDEN: _error("CSRF 驗證失敗（CSRF_FAILED）"),
+    },
+)
 def logout(
     request: Request,
     command: LogoutCommandDep,
@@ -276,7 +331,16 @@ def logout(
     _clear_session_cookies(response)
 
 
-@router.get("/me", response_model=MeResponse)
+@router.get(
+    "/me",
+    response_model=MeResponse,
+    responses={
+        status.HTTP_401_UNAUTHORIZED: _error(
+            "未帶/無效 access token，或 session 已失效（UNAUTHENTICATED / SESSION_REVOKED）"
+        ),
+        status.HTTP_403_FORBIDDEN: _error("帳號已停用（ACCOUNT_DISABLED）"),
+    },
+)
 def me(user: ActiveUserDep, users: UserRepoDep) -> MeResponse:
     profile = users.get_by_id(user.user_id)
     if profile is None:
