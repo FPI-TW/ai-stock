@@ -58,6 +58,7 @@ class PasswordResetRequestCommand:
         rate_limiter: RateLimiter,
         audit: AuditEventWriter,
         mailer: Mailer,
+        base_url: str,
     ) -> None:
         self._db = db
         self._users = users
@@ -65,6 +66,7 @@ class PasswordResetRequestCommand:
         self._rate_limiter = rate_limiter
         self._audit = audit
         self._mailer = mailer
+        self._base_url = base_url
 
     def execute(self, inp: PasswordResetRequestInput) -> None:
         """Always succeeds from the caller's view. Side effects (token + mail) happen
@@ -100,7 +102,7 @@ class PasswordResetRequestCommand:
                         MailMessage(
                             to=inp.email,
                             subject="重設密碼",
-                            body=f"請於 30 分鐘內點選連結重設密碼：/reset-password?token={raw_token}",
+                            body=f"請於 30 分鐘內點選連結重設密碼：{self._base_url}/reset-password?token={raw_token}",
                         )
                     )
                     self._audit.write(

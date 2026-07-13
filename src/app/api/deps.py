@@ -1,4 +1,5 @@
 from collections.abc import Callable, Generator
+from functools import lru_cache
 from typing import Annotated
 
 from argon2 import PasswordHasher
@@ -43,7 +44,7 @@ from app.repositories.user_repository import UserRepository
 from app.services.audit import AuditEventWriter
 from app.services.idempotency import IdempotencyManager
 from app.services.kill_switch import KillSwitchProvider
-from app.services.mailer import LoggingMailer, Mailer
+from app.services.mailer import LoggingMailer, Mailer, SesMailer
 from app.services.quote.base import QuoteProvider
 from app.services.quote.current_price import CurrentPriceProvider
 from app.services.symbol import SymbolService
@@ -523,7 +524,12 @@ def get_invitation_repository(db: DatabaseDep) -> InvitationRepository:
 InvitationRepoDep = Annotated[InvitationRepository, Depends(get_invitation_repository)]
 
 
+@lru_cache
 def get_mailer() -> Mailer:
+    # Real SES sender once SMTP is fully configured; logging stub otherwise.
+    config = get_settings().resolved_ses_mailer_config
+    if config is not None:
+        return SesMailer(*config)
     return LoggingMailer()
 
 
@@ -536,8 +542,9 @@ def get_create_user_command(
     invitations: InvitationRepoDep,
     audit: AuditWriterDep,
     mailer: MailerDep,
+    settings: SettingsDep,
 ) -> CreateUserCommand:
-    return CreateUserCommand(db, users, invitations, audit, mailer)
+    return CreateUserCommand(db, users, invitations, audit, mailer, settings.app_base_url)
 
 
 CreateUserCommandDep = Annotated[CreateUserCommand, Depends(get_create_user_command)]
@@ -574,8 +581,9 @@ def get_resend_invitation_command(
     rate_limiter: RateLimiterDep,
     audit: AuditWriterDep,
     mailer: MailerDep,
+    settings: SettingsDep,
 ) -> ResendInvitationCommand:
-    return ResendInvitationCommand(db, users, invitations, rate_limiter, audit, mailer)
+    return ResendInvitationCommand(db, users, invitations, rate_limiter, audit, mailer, settings.app_base_url)
 
 
 ResendInvitationCommandDep = Annotated[ResendInvitationCommand, Depends(get_resend_invitation_command)]
@@ -636,8 +644,9 @@ def get_password_reset_request_command(
     rate_limiter: RateLimiterDep,
     audit: AuditWriterDep,
     mailer: MailerDep,
+    settings: SettingsDep,
 ) -> PasswordResetRequestCommand:
-    return PasswordResetRequestCommand(db, users, password_resets, rate_limiter, audit, mailer)
+    return PasswordResetRequestCommand(db, users, password_resets, rate_limiter, audit, mailer, settings.app_base_url)
 
 
 PasswordResetRequestCommandDep = Annotated[PasswordResetRequestCommand, Depends(get_password_reset_request_command)]

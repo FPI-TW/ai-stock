@@ -97,13 +97,12 @@ class ReactivateUserInput:
     request_id: str | None = None
 
 
-def _send_invitation_mail(mailer: Mailer, email: str, raw_token: str) -> None:
-    # The real Mailer (P3) builds the absolute link; the stub just needs the token.
+def _send_invitation_mail(mailer: Mailer, email: str, raw_token: str, base_url: str) -> None:
     mailer.send(
         MailMessage(
             to=email,
             subject="您的帳號邀請",
-            body=f"請於 24 小時內點選連結設定密碼並啟用帳號：/accept-invitation?token={raw_token}",
+            body=f"請於 24 小時內點選連結設定密碼並啟用帳號：{base_url}/accept-invitation?token={raw_token}",
         )
     )
 
@@ -118,12 +117,14 @@ class CreateUserCommand:
         invitations: InvitationRepository,
         audit: AuditEventWriter,
         mailer: Mailer,
+        base_url: str,
     ) -> None:
         self._db = db
         self._users = users
         self._invitations = invitations
         self._audit = audit
         self._mailer = mailer
+        self._base_url = base_url
 
     def execute(self, inp: CreateUserInput) -> CreatedUser:
         try:
@@ -138,7 +139,7 @@ class CreateUserCommand:
                 expires_at=inp.now + INVITATION_TTL,
                 created_by_admin_id=inp.created_by_admin_id,
             )
-            _send_invitation_mail(self._mailer, inp.email, raw_token)
+            _send_invitation_mail(self._mailer, inp.email, raw_token, self._base_url)
             self._audit.write(
                 event_type="account_invited",
                 actor_type="admin",
@@ -331,6 +332,7 @@ class ResendInvitationCommand:
         rate_limiter: RateLimiter,
         audit: AuditEventWriter,
         mailer: Mailer,
+        base_url: str,
     ) -> None:
         self._db = db
         self._users = users
@@ -338,6 +340,7 @@ class ResendInvitationCommand:
         self._rate_limiter = rate_limiter
         self._audit = audit
         self._mailer = mailer
+        self._base_url = base_url
 
     def execute(self, inp: ResendInvitationInput) -> None:
         try:
@@ -366,7 +369,7 @@ class ResendInvitationCommand:
                 expires_at=inp.now + INVITATION_TTL,
                 created_by_admin_id=inp.actor_admin_id,
             )
-            _send_invitation_mail(self._mailer, user.email, raw_token)
+            _send_invitation_mail(self._mailer, user.email, raw_token, self._base_url)
             self._audit.write(
                 event_type="invitation_resent",
                 actor_type="admin",
