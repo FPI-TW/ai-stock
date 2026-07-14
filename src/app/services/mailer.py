@@ -30,8 +30,8 @@ class LoggingMailer:
 
 class SesMailer:
     """Real sender via AWS SES SMTP endpoint (email-smtp.<region>.amazonaws.com),
-    using SES SMTP credentials over STARTTLS. In the SES sandbox both sender and
-    recipient must be verified identities.
+    using SES SMTP credentials over port 465 implicit TLS (SMTP_SSL). In the SES
+    sandbox both sender and recipient must be verified identities.
     """
 
     def __init__(self, from_address: str, region: str, smtp_username: str, smtp_password: str) -> None:

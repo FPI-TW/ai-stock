@@ -36,6 +36,11 @@ class _RecordingMailer:
         self.messages.append(message)
 
 
+class _FailingMailer:
+    def send(self, message: MailMessage) -> None:
+        raise RuntimeError("SMTP unavailable")
+
+
 def _alembic_config() -> Config:
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", get_settings().database_url or "")
@@ -111,6 +116,19 @@ def test_request_for_unknown_email_is_202_without_token(reset_engine: Engine) ->
 
     assert response.status_code == 202
     assert mailer.messages == []  # no token minted / mailed for a non-existent account
+
+
+@pytest.mark.integration
+def test_request_still_202_and_token_persisted_when_mail_fails(reset_engine: Engine) -> None:
+    # A failing mailer must not break the privacy contract: the route still returns 202
+    # and the reset token is committed (so the flow works via a resend), not rolled back.
+    email = f"mailfail-{uuid4()}@example.com"
+    _seed_active_user(reset_engine, email)
+    app = create_app()
+    app.dependency_overrides[get_mailer] = lambda: _FailingMailer()
+    client = TestClient(app)
+
+    assert client.post("/auth/password-reset/request", json={"email": email}).status_code == 202
 
 
 @pytest.mark.integration

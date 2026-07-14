@@ -98,13 +98,20 @@ class PasswordResetRequestCommand:
                         expires_at=inp.now + RESET_TTL,
                         requested_ip=inp.ip,
                     )
-                    self._mailer.send(
-                        MailMessage(
-                            to=inp.email,
-                            subject="重設密碼",
-                            body=f"請於 30 分鐘內點選連結重設密碼：{self._base_url}/reset-password?token={raw_token}",
+                    reset_link = f"{self._base_url}/reset-password?token={raw_token}"
+                    # 寄信失敗不可打破隱私契約：這裡若 raise 會 rollback token 並讓 route
+                    # 的 202 變成 500，而且只發生在「email 存在且 active」這條路徑，等於洩漏
+                    # 帳號是否存在（帳號列舉）。故吞掉例外、僅記 log，token 照常 commit。
+                    try:
+                        self._mailer.send(
+                            MailMessage(
+                                to=user.email,  # DB canonical value, not raw caller input
+                                subject="重設密碼",
+                                body=f"請於 30 分鐘內點選連結重設密碼：{reset_link}",
+                            )
                         )
-                    )
+                    except Exception:
+                        logger.warning("password reset mail send failed", extra={"user_id": user.id})
                     self._audit.write(
                         event_type="password_reset_requested",
                         actor_type="user",
