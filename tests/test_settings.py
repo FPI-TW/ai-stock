@@ -1,9 +1,12 @@
+import logging
 from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
 
+from app.api.deps import get_mailer
 from app.core.config import Settings, get_settings
+from app.services.mailer import LoggingMailer, SesMailer
 
 
 def test_settings_parses_local_user_id_as_uuid(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -149,6 +152,59 @@ def test_missing_mfa_key_with_local_mode_false_raises(monkeypatch: pytest.Monkey
         Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert "MFA_ENCRYPTION_KEY is required when LOCAL_MODE is false" in str(exc_info.value)
+
+
+def _prime_local_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Isolate from the real .env: get_mailer() calls get_settings() which loads .env by
+    # default, so patch it to build settings from OS env only (SES vars come from setenv).
+    monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    for key in ("SES_FROM_ADDRESS", "SES_REGION", "SES_SMTP_USERNAME", "SES_SMTP_PASSWORD"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr("app.api.deps.get_settings", lambda: Settings(_env_file=None))  # type: ignore[call-arg]
+    get_mailer.cache_clear()
+
+
+def test_get_mailer_warns_on_partial_ses_config(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _prime_local_settings(monkeypatch)
+    monkeypatch.setenv("SES_FROM_ADDRESS", "noreply@example.com")
+    monkeypatch.setenv("SES_REGION", "ap-southeast-2")
+    # username/password left unset → partial
+
+    with caplog.at_level(logging.WARNING):
+        mailer = get_mailer()
+
+    assert isinstance(mailer, LoggingMailer)
+    assert any("SES partially configured" in r.message for r in caplog.records)
+    get_mailer.cache_clear()
+
+
+def test_get_mailer_silent_when_ses_fully_unset(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _prime_local_settings(monkeypatch)
+
+    with caplog.at_level(logging.WARNING):
+        mailer = get_mailer()
+
+    assert isinstance(mailer, LoggingMailer)
+    assert not any("SES partially configured" in r.message for r in caplog.records)
+    get_mailer.cache_clear()
+
+
+def test_get_mailer_returns_ses_when_fully_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    _prime_local_settings(monkeypatch)
+    monkeypatch.setenv("SES_FROM_ADDRESS", "noreply@example.com")
+    monkeypatch.setenv("SES_REGION", "ap-southeast-2")
+    monkeypatch.setenv("SES_SMTP_USERNAME", "user")
+    monkeypatch.setenv("SES_SMTP_PASSWORD", "pass")
+
+    mailer = get_mailer()
+
+    assert isinstance(mailer, SesMailer)
+    get_mailer.cache_clear()
 
 
 def test_cors_allow_origins_list_parses_and_trims(monkeypatch: pytest.MonkeyPatch) -> None:
