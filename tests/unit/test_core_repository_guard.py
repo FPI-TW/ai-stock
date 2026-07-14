@@ -64,3 +64,9 @@ def test_price_strategy_without_target_price_is_rejected() -> None:
     # 這正是會寫出 dedup_key='' 壞列的情形。
     with pytest.raises(ValueError, match="requires a target price"):
         _create("buy_price_alert", target_price_effective=None)
+
+
+def test_twap_is_rejected() -> None:
+    # create() docstring 自述只建非 TWAP；TWAP 落到這裡會以 dedup_key='' 無衛星入庫。
+    with pytest.raises(ValueError, match="create_twap"):
+        _create("twap_order")

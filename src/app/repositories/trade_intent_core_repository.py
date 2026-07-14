@@ -161,6 +161,11 @@ class TradeIntentCoreRepository:
         由 caller 擁有交易邊界；`IntegrityError` 轉 `DuplicateIntentError`。
         """
 
+        # 本方法只建非 TWAP 委託；TWAP 走獨立 create_twap（PR4）。若讓 TWAP 落到這裡，會以
+        # dedup_key='' 且無 twap 衛星入庫成壞列。目前不可達（command 先擋），仍顯式兌現契約。
+        if strategy == TWAP_STRATEGY:
+            raise ValueError("create() 不處理 TWAP；請用 create_twap")
+
         # 拆衛星表後，舊軌 target_price_presence / trailing_fields_presence 兩條跨欄 CHECK
         # 已無單表對應。create() 是新軌唯一寫入口，於此把「策略↔參數」一致性擋回來，避免
         # 錯配參數被靜默丟棄、或寫出無衛星列且 dedup_key='' 的壞列。
@@ -174,7 +179,8 @@ class TradeIntentCoreRepository:
         elif any(param is not None for param in trailing_params):
             raise ValueError(f"{strategy} must not carry trailing params")
 
-        requires_price = not is_trailing and strategy not in MARKET_ORDER_STRATEGIES and strategy != TWAP_STRATEGY
+        # TWAP 已於上方擋掉，此處只餘 trailing / price / market
+        requires_price = not is_trailing and strategy not in MARKET_ORDER_STRATEGIES
         if requires_price and target_price_effective is None:
             raise ValueError(f"{strategy} requires a target price")
         if not requires_price and target_price_effective is not None:
