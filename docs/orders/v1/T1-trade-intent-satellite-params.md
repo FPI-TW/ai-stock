@@ -88,6 +88,7 @@ T1: #55 ✅ #57 ✅ → PR3 cutover（接通暗裝 + 清空舊表）→ PR4 TWAP
 
 - **市價單**（market_order / market_buy_order / market_sell_order）無專屬參數 → 不配任何衛星表。
 - 新增交易手段 = 新增一張窄衛星表，**核心表零變動、舊策略零風險**。
+  - ⚠️ 精確界定：「零變動」指**不再長欄位**（相對舊單表 14 個 nullable 策略欄爆量），不是「連 metadata 都不碰」。核心表仍有一條 `ck_trade_intent_core_strategy` CHECK 枚舉合法策略字串（model 與 migration 各一份、手工同步，承襲舊軌慣例）；加第 N 種策略需一次 ALTER 重建這條 CHECK。此屬 metadata-level、非欄位增長、非舊策略風險，成本低故刻意保留 DB 層驗證（比 app 層更強、擋任何 writer 的非法值），不改參照表（9 個約年動一次的枚舉不值得多一張表 + FK）。
 
 ### 衛星表主鍵設計
 
