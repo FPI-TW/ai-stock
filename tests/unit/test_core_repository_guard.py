@@ -66,6 +66,12 @@ def test_price_strategy_without_target_price_is_rejected() -> None:
         _create("buy_price_alert", target_price_effective=None)
 
 
+def test_price_strategy_with_effective_but_null_original_is_rejected() -> None:
+    # effective 有值、original=None：不擋的話會撞價格衛星 NOT NULL，再被誤轉成 DuplicateIntentError。
+    with pytest.raises(ValueError, match="requires a target price"):
+        _create("buy_price_alert", target_price_effective=Decimal("600"), target_price_original=None)
+
+
 def test_twap_is_rejected() -> None:
     # create() docstring 自述只建非 TWAP；TWAP 落到這裡會以 dedup_key='' 無衛星入庫。
     with pytest.raises(ValueError, match="create_twap"):

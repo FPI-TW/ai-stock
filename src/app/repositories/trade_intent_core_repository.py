@@ -179,11 +179,15 @@ class TradeIntentCoreRepository:
         elif any(param is not None for param in trailing_params):
             raise ValueError(f"{strategy} must not carry trailing params")
 
-        # TWAP 已於上方擋掉，此處只餘 trailing / price / market
+        # TWAP 已於上方擋掉，此處只餘 trailing / price / market。價格衛星兩欄皆 NOT NULL，
+        # 故 original/effective 對稱檢查：只驗 effective 會讓 original=None 撞衛星 NOT NULL，
+        # 再被下方 flush 的 except IntegrityError 誤轉成 DuplicateIntentError（誤導性錯誤）。
         requires_price = not is_trailing and strategy not in MARKET_ORDER_STRATEGIES
-        if requires_price and target_price_effective is None:
-            raise ValueError(f"{strategy} requires a target price")
-        if not requires_price and target_price_effective is not None:
+        price_params = (target_price_original, target_price_effective)
+        if requires_price:
+            if any(param is None for param in price_params):
+                raise ValueError(f"{strategy} requires a target price")
+        elif any(param is not None for param in price_params):
             raise ValueError(f"{strategy} must not carry a target price")
 
         dedup_key = build_dedup_key(
