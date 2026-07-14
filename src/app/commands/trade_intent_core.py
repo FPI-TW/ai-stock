@@ -11,7 +11,6 @@
   與 robot #2 的觸發 persist 同一套，於 robot #2 增量一起做、再回填。
 """
 
-import logging
 from dataclasses import dataclass
 from decimal import Decimal
 from uuid import UUID
@@ -29,8 +28,6 @@ from app.domain.trade_intent import (
 from app.domain.trading_session import TradingSessionService
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.services.symbol import SymbolService
-
-logger = logging.getLogger(__name__)
 
 # V0.5 fixed values（與舊軌一致；新軌自帶一份以保持與舊軌零耦合）
 _EXECUTION_MODE = "notify_only"
