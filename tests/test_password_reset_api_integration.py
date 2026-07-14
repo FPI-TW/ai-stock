@@ -13,13 +13,13 @@ from alembic import command
 from alembic.config import Config
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_mailer
 from app.core.config import get_settings
 from app.core.passwords import hash_password
-from app.db.models.auth import User
+from app.db.models.auth import PasswordReset, User
 from app.main import create_app
 from app.services.mailer import MailMessage
 
@@ -129,6 +129,12 @@ def test_request_still_202_and_token_persisted_when_mail_fails(reset_engine: Eng
     client = TestClient(app)
 
     assert client.post("/auth/password-reset/request", json={"email": email}).status_code == 202
+
+    # The token row survived the failed send (committed, not rolled back with the mailer error).
+    with Session(reset_engine) as session:
+        user_id = session.execute(select(User.id).where(User.email == email)).scalar_one()
+        reset = session.execute(select(PasswordReset).where(PasswordReset.user_id == user_id)).scalar_one_or_none()
+    assert reset is not None
 
 
 @pytest.mark.integration
