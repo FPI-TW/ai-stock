@@ -8,9 +8,10 @@
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, SessionTransaction, selectinload
 from sqlalchemy.sql import Select
@@ -294,11 +295,18 @@ class TradeIntentCoreRepository:
         }
         if baseline_updated_at is not None:
             values["baseline_updated_at"] = baseline_updated_at
-        self._db.execute(
-            update(TradeIntentTrailingParams)
-            .where(TradeIntentTrailingParams.trade_intent_id == intent_id)
-            .values(**values)
+        result = cast(
+            CursorResult[Any],
+            self._db.execute(
+                update(TradeIntentTrailingParams)
+                .where(TradeIntentTrailingParams.trade_intent_id == intent_id)
+                .values(**values)
+            ),
         )
+        # 拆表後這個 UPDATE 對「非 trailing / 不存在」的 intent 只是匹配 0 列，不會像舊軌
+        # 單表那樣撞 CHECK。若靜默返回並照樣 bump updated_at，caller bug 會被遮蔽 → fail loud。
+        if result.rowcount == 0:
+            raise ValueError(f"no trailing params row for intent {intent_id}")
         self._db.execute(update(TradeIntentCore).where(TradeIntentCore.id == intent_id).values(updated_at=func.now()))
 
     # ------------------------------------------------------------------

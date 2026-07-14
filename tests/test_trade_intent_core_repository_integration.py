@@ -295,3 +295,19 @@ def test_system_update_trailing_baseline(repo: TradeIntentCoreRepository) -> Non
     assert intent.baseline == Decimal("610.0000")
     assert intent.dynamic_trigger_price == Decimal("579.5000")
     assert intent.baseline_updated_at == now
+
+
+@pytest.mark.integration
+def test_system_update_trailing_baseline_raises_for_non_trailing_intent(repo: TradeIntentCoreRepository) -> None:
+    # 打到沒有 trailing 衛星列的 intent（如 price alert）應 fail loud，而非靜默 no-op。
+    owner = uuid4()
+    intent_id = _create_price_alert(repo, owner_user_id=owner)
+    repo.commit()
+
+    with pytest.raises(ValueError, match="no trailing params row"):
+        repo.system_update_trailing_baseline(
+            intent_id,
+            baseline=Decimal("610.0000"),
+            dynamic_trigger_price=Decimal("579.5000"),
+            baseline_updated_at=datetime(2026, 5, 12, 1, 30, tzinfo=UTC),
+        )
