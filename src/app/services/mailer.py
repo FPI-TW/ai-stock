@@ -4,7 +4,9 @@ info level in a real sender — the stub logs only a redacted summary.
 """
 
 import logging
+import smtplib
 from dataclasses import dataclass
+from email.message import EmailMessage
 from typing import Protocol
 
 logger = logging.getLogger(__name__)
@@ -41,9 +43,6 @@ class SesMailer:
         self._password = smtp_password
 
     def send(self, message: MailMessage) -> None:
-        import smtplib
-        from email.message import EmailMessage
-
         mail = EmailMessage()
         mail["From"] = self._from
         mail["To"] = message.to
