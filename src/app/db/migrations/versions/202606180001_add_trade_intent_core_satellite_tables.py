@@ -100,6 +100,14 @@ def upgrade() -> None:
         unique=True,
         postgresql_where=sa.text("strategy = 'twap_order' AND status IN ('scheduled', 'active')"),
     )
+    # 有界索引：只涵蓋 live 列，讓 system_list_active_symbols 的 DISTINCT symbol WHERE
+    # status='active' 不必隨終態列累積而全掃。
+    op.create_index(
+        "ix_trade_intent_core_active_symbols",
+        "trade_intent_core",
+        ["symbol"],
+        postgresql_where=sa.text("status IN ('scheduled', 'active')"),
+    )
 
     op.create_table(
         "trade_intent_price_params",
@@ -185,6 +193,7 @@ def downgrade() -> None:
     op.drop_table("trade_intent_twap_params")
     op.drop_table("trade_intent_trailing_params")
     op.drop_table("trade_intent_price_params")
+    op.drop_index("ix_trade_intent_core_active_symbols", table_name="trade_intent_core")
     op.drop_index("uq_trade_intent_core_active_twap_duplicate", table_name="trade_intent_core")
     op.drop_index("uq_trade_intent_core_active_duplicate", table_name="trade_intent_core")
     op.drop_index("ix_trade_intent_core_symbol_status_trading_date", table_name="trade_intent_core")

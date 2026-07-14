@@ -72,6 +72,15 @@ class TradeIntentCore(TimestampMixin, Base):
             "status",
             "trading_date",
         ),
+        # system_list_active_symbols 走 `DISTINCT symbol WHERE status='active'`；上面兩個
+        # composite index 首欄非 status、兩個 partial unique index 謂詞含 strategy 條件皆不被
+        # 蘊含 → 否則 seq scan，成本隨終態列（triggered/expired/cancelled）永久累積無上界。
+        # 此 partial index 只涵蓋 live 列，謂詞被 status='active' 蘊含 → 成本有界。
+        Index(
+            "ix_trade_intent_core_active_symbols",
+            "symbol",
+            postgresql_where=text("status IN ('scheduled', 'active')"),
+        ),
         # 非 TWAP 去重：dedup_key 取代原本橫跨 target_price_effective / trail_mode / trail_value
         # 的多欄索引（語意等價，改看單一鑑別欄）。
         Index(
