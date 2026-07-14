@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, SessionTransaction, selectinload
+from sqlalchemy.orm import Session, SessionTransaction, joinedload
 from sqlalchemy.sql import Select
 
 from app.db.models.core import Symbol
@@ -104,16 +104,18 @@ def _to_domain(core: TradeIntentCore, security_type: SecurityType) -> TradeInten
 
 
 def _core_with_symbol_type() -> Select[tuple[TradeIntentCore, str]]:
-    return select(TradeIntentCore, Symbol.instrument_type).join(Symbol, TradeIntentCore.symbol == Symbol.symbol)
+    """核心 + symbol 型別，並以 joinedload 一次載入 3 張 1:1 衛星，讓 _to_domain 不再逐一
+    lazy load。三者皆 uselist=False（衛星 PK=FK），LEFT JOIN 每列至多對到 1 筆 → 無 row
+    explosion、單一查詢即可（robot 熱路徑每 tick 從 4 條收斂回 1 條），故不需 .unique()。"""
 
-
-def _core_with_symbol_type_loaded() -> Select[tuple[TradeIntentCore, str]]:
-    """As above but eager-loads the 3 satellites to avoid N+1 in list/system reads."""
-
-    return _core_with_symbol_type().options(
-        selectinload(TradeIntentCore.price_params),
-        selectinload(TradeIntentCore.trailing_params),
-        selectinload(TradeIntentCore.twap_params),
+    return (
+        select(TradeIntentCore, Symbol.instrument_type)
+        .join(Symbol, TradeIntentCore.symbol == Symbol.symbol)
+        .options(
+            joinedload(TradeIntentCore.price_params),
+            joinedload(TradeIntentCore.trailing_params),
+            joinedload(TradeIntentCore.twap_params),
+        )
     )
 
 
@@ -331,7 +333,7 @@ class TradeIntentCoreRepository:
         if not symbols:
             return []
         rows = self._db.execute(
-            _core_with_symbol_type_loaded().where(
+            _core_with_symbol_type().where(
                 TradeIntentCore.status == "active",
                 TradeIntentCore.symbol.in_(symbols),
             )
