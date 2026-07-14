@@ -69,8 +69,17 @@ class TrailingStopAlertCreateRequest(_BaseIntentCreateRequest):
 
     @model_validator(mode="after")
     def _validate_percentage_trail_value(self) -> "TrailingStopAlertCreateRequest":
-        if self.trail_mode == "percentage" and self.trail_value > Decimal("10"):
+        if self.trail_mode != "percentage":
+            return self
+        message: str | None = None
+        if self.trail_value > Decimal("10"):
             message = "trailValue must be less than or equal to 10 when trailMode is percentage"
+        elif self.trail_value.quantize(Decimal("0.0001")) != self.trail_value:
+            # trail_value 入庫為 Numeric(9,4)，但 dedup_key 用未捨入輸入建指紋。若容許 >4 位，
+            # 5.00001 與 5.00002 會產生不同 key、雙雙躲過去重，卻都捨入成 5.0000 → 兩筆等價
+            # active intent 並存（違反去重不退化）。故輸入精度對齊儲存精度，超過即拒。
+            message = "trailValue supports at most 4 decimal places"
+        if message is not None:
             raise ValidationError.from_exception_data(
                 self.__class__.__name__,
                 [
