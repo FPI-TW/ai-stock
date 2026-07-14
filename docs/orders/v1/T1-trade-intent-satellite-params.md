@@ -187,3 +187,8 @@ dispatcher 的跨策略熱查詢（`system_list_active_*`、`list_by_owner`、`c
 ### TWAP 增量（獨立）
 
 - `create_twap` + 新 slices 表（FK→`trade_intent_core.id`）+ slice 連動取消；完成後才接 `system_expire_day_intents_through`。
+- ⚠️ **PR4 前需拍板：TWAP 去重「long+short 同 qty 同日」要擋還是放行。**
+  - Legacy 實際擋兩種重複：(a) 同 `position_side`（`uq_trade_intents_active_twap_duplicate`，任意 qty）；(b) **同 qty、任意 side**——因通用索引 `uq_trade_intents_active_duplicate`（core.py:152）**未排除 twap_order** 且 `nulls_not_distinct=True`，TWAP 的 `(owner, symbol, 'twap_order', NULL, NULL, NULL, qty, date)` 會撞鍵。
+  - 新軌通用索引顯式排除 `twap_order`、TWAP 索引只看 `position_side`（無 qty）→ (b) 從被擋變**放行**（long+short 同 qty 同日可並存）。
+  - 這與驗收條件「原兩條索引覆蓋情境重構後仍被擋」衝突。合理懷疑 legacy 的 (b) 是**意外**（通用索引沒打算管 TWAP，卻因缺排除+nulls_not_distinct 附帶擋 qty），且「long+short 同日並存」放行對沖情境可能反而更合理——但**必須顯式決策、不可默默定案**。PR1 create() 現階段顯式 raise 擋 TWAP，故現在零影響。
+  - 決策後在 PR4 的 `create_twap` dedup + 逐情境測試落實（若決定「擋」，TWAP partial unique index 需納入 `quantity_lots`）。
