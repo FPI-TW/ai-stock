@@ -260,7 +260,7 @@ class TradeIntentCoreRepository:
         if result is None:
             raise IntentNotFoundError(intent_id)
         core, instrument_type = result
-        if core is None or core.owner_user_id != owner_user_id:
+        if core.owner_user_id != owner_user_id:
             raise IntentNotFoundError(intent_id)
         return _to_domain(core, SecurityType(instrument_type))
 
@@ -274,7 +274,7 @@ class TradeIntentCoreRepository:
         if result is None:
             raise IntentNotFoundError(intent_id)
         core, instrument_type = result
-        if core is None or core.owner_user_id != owner_user_id:
+        if core.owner_user_id != owner_user_id:
             raise IntentNotFoundError(intent_id)
         if core.status == "cancelled":
             return _to_domain(core, SecurityType(instrument_type))
