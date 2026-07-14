@@ -7,6 +7,12 @@ from app.db.models.auth import (
     User,
 )
 from app.db.models.core import Notification, Symbol, TradeIntent, TriggerEvent, TwapSlice
+from app.db.models.trade_intent_core import (
+    TradeIntentCore,
+    TradeIntentPriceParams,
+    TradeIntentTrailingParams,
+    TradeIntentTwapParams,
+)
 
 __all__ = [
     "AuditEvent",
@@ -17,6 +23,10 @@ __all__ = [
     "RefreshToken",
     "Symbol",
     "TradeIntent",
+    "TradeIntentCore",
+    "TradeIntentPriceParams",
+    "TradeIntentTrailingParams",
+    "TradeIntentTwapParams",
     "TriggerEvent",
     "TwapSlice",
     "User",

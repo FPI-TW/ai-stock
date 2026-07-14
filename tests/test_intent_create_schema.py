@@ -172,6 +172,39 @@ def test_trailing_stop_subschema_percentage_rejects_value_above_ten() -> None:
     assert error["type"] == "value_error"
 
 
+def test_trailing_stop_subschema_percentage_rejects_more_than_four_decimals() -> None:
+    # >4 decimals would round to Numeric(9,4) on store but keep a distinct dedup_key,
+    # letting 5.00001 and 5.00002 both slip past dedup while storing as identical 5.0000.
+    with pytest.raises(ValidationError) as exc:
+        _trailing_adapter.validate_python(
+            {
+                "symbol": "2330",
+                "strategy": "trailing_stop_alert",
+                "quantityLots": 1,
+                "trailMode": "percentage",
+                "trailValue": "5.00001",
+            }
+        )
+
+    error = exc.value.errors()[0]
+    assert error["loc"] == ("trailValue",)
+    assert error["type"] == "value_error"
+
+
+def test_trailing_stop_subschema_percentage_allows_exactly_four_decimals() -> None:
+    request = _trailing_adapter.validate_python(
+        {
+            "symbol": "2330",
+            "strategy": "trailing_stop_alert",
+            "quantityLots": 1,
+            "trailMode": "percentage",
+            "trailValue": "5.1234",
+        }
+    )
+
+    assert request.trail_value == Decimal("5.1234")
+
+
 def test_trailing_stop_subschema_fixed_amount_allows_values_above_percentage_limit() -> None:
     request = _trailing_adapter.validate_python(
         {

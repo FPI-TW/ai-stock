@@ -19,12 +19,17 @@
 - [P5 Admin 監控 + 覆寫 + Kill Switch 完整版](P5-admin-monitoring-overrides-killswitch.md)（[白話說明](P5-白話說明.md)）
 - [P6 資料保留 / 隱私 + SLO](P6-retention-privacy-slo.md)（[白話說明](P6-白話說明.md)）
 
-**技術債 / 重構（V0.5 遺留，上線後可獨立排程）**
+**技術債 / 重構（V0.5 遺留，無功能依賴、可獨立排程）**
+
+- [T1 trade_intents 核心表 + 衛星參數表分層](T1-trade-intent-satellite-params.md) — 解決單表策略專屬欄位爆量（約 14 個 nullable 欄）；核心表凍結，策略參數搬入 1:1 衛星表，加新策略不動核心表（[白話說明](T1-白話說明.md)）
 - [T2 trade_intents create endpoint 按策略拆分](T2-split-trade-intent-create-endpoints.md) — 單一萬用 `POST /trade-intents` 拆成每策略 typed 端點，消除 union getattr；單表不動、legacy 端點保留（[白話說明](T2-白話說明.md)）
+
 
 ## 執行序
 
 L1 → L2 → L3 →【上線】→（P1 ‖ P2 ‖ P4）→ P2.5 → P3 → P5 → P6
 （P2.5 接於 P2 後：`intent_triggered` 需 P2 refactor 後的 outbox transaction）
 
+T1（技術債）無功能依賴；唯一硬閘＝cutover（PR3 會 `TRUNCATE trade_intents`）須在**開放真實使用者前**完成（非「上線後」，閘綁真實資料開始累積、非部署；詳見 T1 工單〈排程與前置決策〉2026-06-22），並避開「會再加 `trade_intents` 欄位」的功能票同時進行以免 migration 衝突。
 T2（技術債）無功能依賴，與 T1（schema 衛星表分層，另分支）為兩件獨立事——T2 只動 API 層、單表不動。
+
