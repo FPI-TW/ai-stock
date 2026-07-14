@@ -24,6 +24,7 @@ from app.domain.trade_intent import (
     SymbolIntentLimitExceededError,
     TradeIntentData,
     UserIntentLimitExceededError,
+    derive_order_side,
 )
 from app.domain.trading_session import TradingSessionService
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
@@ -34,18 +35,6 @@ logger = logging.getLogger(__name__)
 # V0.5 fixed values（與舊軌一致；新軌自帶一份以保持與舊軌零耦合）
 _EXECUTION_MODE = "notify_only"
 _TIME_IN_FORCE = "day"
-
-# trigger price reference by strategy
-_TRIGGER_REF: dict[str, str] = {
-    "buy_price_alert": "ask",
-    "sell_price_alert": "bid",
-    "limit_buy_order": "ask",
-    "limit_sell_order": "bid",
-    "market_order": "ask",
-    "market_buy_order": "ask",
-    "market_sell_order": "bid",
-    "trailing_stop_alert": "bid",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,9 +115,9 @@ class CreateTradeIntentCommand:
             trading_date = self._session_service.get_day_intent_trading_date(now)
             initial_status = self._session_service.get_initial_day_intent_status(now)
 
-            trigger_ref = _TRIGGER_REF.get(inp.strategy)
-            if trigger_ref is None:
-                raise ValueError(f"Unsupported strategy: {inp.strategy}")
+            # 觸發參考價：buy→ask、sell→bid，直接由共用 side helper 導出，不另手抄對照表
+            # （新策略加進 BUY/SELL side-set 時自動涵蓋；未知策略沿用同一 ValueError）。
+            trigger_ref = "ask" if derive_order_side(inp.strategy) == "buy" else "bid"
 
             # 4. §15 建立上限（user cap 先、symbol cap 後）；limits=None → 跳過（測試 wiring）
             if self._limits is not None:
