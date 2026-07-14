@@ -98,6 +98,9 @@ class ReactivateUserInput:
 
 
 def _send_invitation_mail(mailer: Mailer, email: str, raw_token: str, base_url: str) -> None:
+    # 刻意不吞例外：寄信失敗會讓呼叫端交易 rollback（不留孤兒帳號/邀請），admin 收到
+    # 500 後重試即可。與 password_reset 相反——那條為隱私契約必須吞掉失敗仍回 202，
+    # 這條是 admin-facing、非隱私路徑，寄不出去就該讓 admin 知道並重試。
     mailer.send(
         MailMessage(
             to=email,
