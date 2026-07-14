@@ -24,6 +24,7 @@ from app.db.models.trade_intent_core import (
 from app.domain.price import SecurityType, format_price_str
 from app.domain.trade_intent import (
     CANCELLABLE_STATUSES,
+    MARKET_ORDER_STRATEGIES,
     CancelNotAllowedError,
     DuplicateIntentError,
     IntentNotFoundError,
@@ -156,6 +157,25 @@ class TradeIntentCoreRepository:
         與 legacy `IntentRepository.create` 相同的交易語意：不 commit、不 refresh，
         由 caller 擁有交易邊界；`IntegrityError` 轉 `DuplicateIntentError`。
         """
+
+        # 拆衛星表後，舊軌 target_price_presence / trailing_fields_presence 兩條跨欄 CHECK
+        # 已無單表對應。create() 是新軌唯一寫入口，於此把「策略↔參數」一致性擋回來，避免
+        # 錯配參數被靜默丟棄、或寫出無衛星列且 dedup_key='' 的壞列。
+        # ponytail: app 層守衛涵蓋所有 Python caller；若日後要防 raw SQL 寫入，再上
+        # core UNIQUE(id, strategy) + 衛星複合 FK(trade_intent_id, strategy)+CHECK 的 DB 層版本。
+        is_trailing = strategy == TRAILING_STRATEGY
+        trailing_params = (trail_mode, trail_value, baseline, dynamic_trigger_price, baseline_updated_at)
+        if is_trailing:
+            if trail_mode is None or trail_value is None:
+                raise ValueError("trailing_stop_alert requires trail_mode and trail_value")
+        elif any(param is not None for param in trailing_params):
+            raise ValueError(f"{strategy} must not carry trailing params")
+
+        requires_price = not is_trailing and strategy not in MARKET_ORDER_STRATEGIES and strategy != TWAP_STRATEGY
+        if requires_price and target_price_effective is None:
+            raise ValueError(f"{strategy} requires a target price")
+        if not requires_price and target_price_effective is not None:
+            raise ValueError(f"{strategy} must not carry a target price")
 
         dedup_key = build_dedup_key(
             strategy,
