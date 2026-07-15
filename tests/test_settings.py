@@ -162,7 +162,6 @@ def _prime_local_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in ("SES_FROM_ADDRESS", "SES_REGION", "SES_SMTP_USERNAME", "SES_SMTP_PASSWORD"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr("app.api.deps.get_settings", lambda: Settings(_env_file=None))  # type: ignore[call-arg]
-    get_mailer.cache_clear()
 
 
 def test_get_mailer_warns_on_partial_ses_config(
@@ -178,7 +177,6 @@ def test_get_mailer_warns_on_partial_ses_config(
 
     assert isinstance(mailer, LoggingMailer)
     assert any("SES partially configured" in r.message for r in caplog.records)
-    get_mailer.cache_clear()
 
 
 def test_get_mailer_silent_when_ses_fully_unset(
@@ -191,7 +189,6 @@ def test_get_mailer_silent_when_ses_fully_unset(
 
     assert isinstance(mailer, LoggingMailer)
     assert not any("SES partially configured" in r.message for r in caplog.records)
-    get_mailer.cache_clear()
 
 
 def test_get_mailer_returns_ses_when_fully_configured(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -204,7 +201,6 @@ def test_get_mailer_returns_ses_when_fully_configured(monkeypatch: pytest.Monkey
     mailer = get_mailer()
 
     assert isinstance(mailer, SesMailer)
-    get_mailer.cache_clear()
 
 
 def test_cors_allow_origins_list_parses_and_trims(monkeypatch: pytest.MonkeyPatch) -> None:

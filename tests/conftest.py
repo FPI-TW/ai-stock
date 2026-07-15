@@ -14,7 +14,7 @@ from typing import Protocol  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.api.deps import get_database_health_checker  # noqa: E402
+from app.api.deps import get_database_health_checker, get_mailer  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.db.session import get_engine, get_session_factory  # noqa: E402
 from app.main import create_app  # noqa: E402
@@ -66,10 +66,12 @@ def clear_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()
+    get_mailer.cache_clear()
     yield
     get_settings.cache_clear()
     get_engine.cache_clear()
     get_session_factory.cache_clear()
+    get_mailer.cache_clear()
 
 
 @pytest.fixture
