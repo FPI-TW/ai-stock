@@ -43,12 +43,14 @@ from app.services.telegram_notification import dispatch_notification_to_telegram
 
 
 class CoreIntentNotActiveError(TriggerError):
-    """新軌委託在觸發當下已非 active（被取消 / 已觸發 / 競態搶先）。"""
+    """新軌委託在觸發當下已非 active（被取消 / 已觸發 / 競態搶先）。
 
-    def __init__(self, intent_id: UUID, current_status: str) -> None:
+    條件更新（WHERE status='active'）落空時只知道「不再是 active」，拿不到實際
+    狀態，故訊息不假裝知道，避免日誌誤導排查。"""
+
+    def __init__(self, intent_id: UUID) -> None:
         self.intent_id = intent_id
-        self.current_status = current_status
-        super().__init__(f"Intent {intent_id} cannot be triggered: status is {current_status!r}")
+        super().__init__(f"Intent {intent_id} cannot be triggered: no longer active")
 
 
 @dataclass(frozen=True)
@@ -180,7 +182,7 @@ def persist_core_trigger(
             ),
         )
         if result.rowcount == 0:
-            raise CoreIntentNotActiveError(intent.id, "stale")
+            raise CoreIntentNotActiveError(intent.id)
         db.add(notification_row)
         db.flush()
     except IntegrityError as exc:
