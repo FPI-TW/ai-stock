@@ -92,11 +92,12 @@ def _create_price_alert(
     quantity_lots: int = 1,
     trading_date: date | None = None,
     status: str = "active",
+    symbol: str = "2330",
 ) -> UUID:
     ensure_user(repo._db, owner_user_id)
     intent_id = repo.create(
         owner_user_id=owner_user_id,
-        symbol="2330",
+        symbol=symbol,
         strategy="buy_price_alert",
         quantity_lots=quantity_lots,
         target_price_original=Decimal(target_price),
@@ -315,12 +316,23 @@ def test_system_update_trailing_baseline_raises_for_non_trailing_intent(repo: Tr
 
 @pytest.mark.integration
 def test_active_or_scheduled_symbols(repo: TradeIntentCoreRepository) -> None:
+    repo._db.add(
+        Symbol(
+            id=uuid4(),
+            symbol="2454",
+            display_name="聯發科",
+            market="TWSE",
+            instrument_type="stock",
+            tradable_status="tradable",
+        )
+    )
     owner = uuid4()
     _create_price_alert(repo, owner_user_id=owner, target_price="600.0000")
     _create_price_alert(repo, owner_user_id=owner, target_price="620.0000")  # 同 symbol，distinct
+    _create_price_alert(repo, owner_user_id=owner, target_price="900.0000", symbol="2454")  # 跨 symbol 都要出現
     cancelled = _create_price_alert(repo, owner_user_id=owner, target_price="640.0000")
     repo.cancel(cancelled, owner)
     repo.commit()
 
     # 只回非終態（active/scheduled）的 distinct symbol；已取消的不算
-    assert repo.active_or_scheduled_symbols() == {"2330"}
+    assert repo.active_or_scheduled_symbols() == {"2330", "2454"}
