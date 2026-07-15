@@ -91,6 +91,7 @@ def upgrade() -> None:
         ["trade_intent_core_id"],
         ["id"],
     )
+    op.create_index("ix_notifications_trade_intent_core_id", "notifications", ["trade_intent_core_id"])
     # 傳裸名：alembic 會套命名慣例補上 ck_notifications_ 前綴（傳完整名會雙重前綴）
     op.drop_constraint("triggered_notification_intent", "notifications", type_="check")
     op.create_check_constraint(

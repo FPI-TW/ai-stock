@@ -368,6 +368,7 @@ class Notification(Base):
         PG_UUID(as_uuid=True),
         ForeignKey("trade_intent_core.id"),
         nullable=True,
+        index=True,
     )
     type: Mapped[str] = mapped_column(Text, nullable=False)
     rendered_title: Mapped[str] = mapped_column(Text, nullable=False)
