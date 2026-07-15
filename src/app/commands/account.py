@@ -31,6 +31,7 @@ from app.domain.auth import (
     TermsNotAcceptedError,
     UserNotFoundError,
     WeakPasswordError,
+    normalize_email,
 )
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.invitation_repository import InvitationRepository
@@ -131,10 +132,13 @@ class CreateUserCommand:
 
     def execute(self, inp: CreateUserInput) -> CreatedUser:
         try:
-            if self._users.get_by_email(inp.email) is not None:
+            # 正規化一次、全程共用：DB 存的與信寄到的必須是同一個字串，
+            # 否則 " User@Example.com " 會存成 user@example.com 但信寄給原始輸入。
+            email = normalize_email(inp.email)
+            if self._users.get_by_email(email) is not None:
                 raise EmailAlreadyExistsError()
 
-            user_id = self._users.create_invited(email=inp.email, role=inp.role)
+            user_id = self._users.create_invited(email=email, role=inp.role)
             raw_token = generate_url_token()
             self._invitations.create(
                 user_id=user_id,
@@ -142,7 +146,7 @@ class CreateUserCommand:
                 expires_at=inp.now + INVITATION_TTL,
                 created_by_admin_id=inp.created_by_admin_id,
             )
-            _send_invitation_mail(self._mailer, inp.email, raw_token, self._base_url)
+            _send_invitation_mail(self._mailer, email, raw_token, self._base_url)
             self._audit.write(
                 event_type="account_invited",
                 actor_type="admin",
