@@ -215,6 +215,19 @@ def test_reactivate_unknown_user_is_404(admin_engine: Engine) -> None:
 
 
 @pytest.mark.integration
+def test_create_user_mails_normalized_email(admin_engine: Engine) -> None:
+    # DB 存正規化 email（strip+lower）；信必須寄到同一個字串，不能寄給原始輸入。
+    mailer = _RecordingMailer()
+    client = _admin_client(admin_engine, mailer)
+    email = f"norm-{uuid4()}@example.com"
+
+    response = client.post("/admin/users", json={"email": f"  {email.upper()}  ", "role": "user"})
+
+    assert response.status_code == 201
+    assert mailer.messages[-1].to == email
+
+
+@pytest.mark.integration
 def test_resend_invitation_revokes_old_and_mails_new(admin_engine: Engine) -> None:
     mailer = _RecordingMailer()
     client = _admin_client(admin_engine, mailer)

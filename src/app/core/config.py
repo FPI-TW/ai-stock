@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     initial_admin_password: str | None = Field(default=None, alias="INITIAL_ADMIN_PASSWORD")
     initial_admin_allow_non_local: bool = Field(default=False, alias="INITIAL_ADMIN_ALLOW_NON_LOCAL")
     request_id_header: str = Field(default="X-Request-Id", alias="REQUEST_ID_HEADER")
+    # 前端網址，用來把信件裡的相對連結（邀請 / 重設密碼）組成完整絕對連結。結尾不要加斜線。
+    # 前端還沒部署，先用開發預設；前端上線後改 .env 的 APP_BASE_URL 即可（如 https://app.tingfong.com）。
+    app_base_url: str = Field(default="http://localhost:3000", alias="APP_BASE_URL")
     # Comma-separated IPs / CIDRs of the reverse proxies (Nginx / ALB) sitting in
     # front of the app. Empty = direct connections (dev / tests): the peer IP is the
     # client. When set, the per-IP throttles resolve the real client from
@@ -58,6 +61,50 @@ class Settings(BaseSettings):
     shioaji_max_subscriptions: int = Field(default=5, alias="SHIOAJI_MAX_SUBSCRIPTIONS")
     shioaji_simulation: bool = Field(default=False, alias="SHIOAJI_SIMULATION")
     shioaji_demo_allowed_symbols: str | None = Field(default=None, alias="SHIOAJI_DEMO_ALLOWED_SYMBOLS")
+
+    # AWS SES email sending over the SMTP endpoint. A real sender is used only when
+    # all four values are set (see resolved_ses_mailer_config); otherwise the app
+    # falls back to the logging stub. The SMTP username/password are the *SES SMTP
+    # credentials* (SES console → SMTP settings), not IAM access keys. In the SES
+    # sandbox both sender and recipient must be verified identities.
+    ses_from_address: str | None = Field(default=None, alias="SES_FROM_ADDRESS")
+    ses_region: str | None = Field(default=None, alias="SES_REGION")
+    ses_smtp_username: str | None = Field(default=None, alias="SES_SMTP_USERNAME")
+    ses_smtp_password: str | None = Field(default=None, alias="SES_SMTP_PASSWORD")
+
+    def _ses_values(self) -> tuple[tuple[str, str | None], ...]:
+        # 欄位清單唯一出處：resolved_ses_mailer_config 與 _enforce_ses_all_or_none
+        # 都吃這裡，增改 SES 欄位只動這一處，避免兩份清單默默漂移。
+        return (
+            ("SES_FROM_ADDRESS", self.ses_from_address),
+            ("SES_REGION", self.ses_region),
+            ("SES_SMTP_USERNAME", self.ses_smtp_username),
+            ("SES_SMTP_PASSWORD", self.ses_smtp_password),
+        )
+
+    @property
+    def resolved_ses_mailer_config(self) -> tuple[str, str, str, str] | None:
+        """(from, region, smtp_username, smtp_password) when SES is fully configured,
+        else None (the app then uses the logging stub)."""
+        values = tuple(value for _, value in self._ses_values())
+        if all(values):
+            return values  # type: ignore[return-value]  # all() narrows every element to str
+        return None
+
+    @model_validator(mode="after")
+    def _enforce_ses_all_or_none(self) -> "Settings":
+        # Partial SES config is almost always a deploy misconfiguration: mail would
+        # silently fall back to the logging stub while ops thinks it's live. Refuse to
+        # boot so the gap surfaces at deploy time, not on the first send. All-empty is
+        # the intentional stub and stays allowed.
+        values = self._ses_values()
+        if any(value for _, value in values) and not all(value for _, value in values):
+            missing = [env for env, value in values if not value]
+            raise ValueError(
+                f"SES is partially configured; missing {', '.join(missing)}. "
+                "Set all four SES_* values to send real mail, or none to use the logging stub."
+            )
+        return self
 
     # Telegram notification sync is enabled only when both values are present.
     telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")

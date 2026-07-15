@@ -9,6 +9,7 @@ the token, applies the password rule, and revokes every existing session.
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from uuid import UUID
 
 from argon2 import PasswordHasher
 from sqlalchemy.orm import Session
@@ -58,6 +59,7 @@ class PasswordResetRequestCommand:
         rate_limiter: RateLimiter,
         audit: AuditEventWriter,
         mailer: Mailer,
+        base_url: str,
     ) -> None:
         self._db = db
         self._users = users
@@ -65,10 +67,13 @@ class PasswordResetRequestCommand:
         self._rate_limiter = rate_limiter
         self._audit = audit
         self._mailer = mailer
+        self._base_url = base_url
 
     def execute(self, inp: PasswordResetRequestInput) -> None:
         """Always succeeds from the caller's view. Side effects (token + mail) happen
         only for an active account within rate limits."""
+        mail: MailMessage | None = None
+        mail_user_id: UUID | None = None
         try:
             email = normalize_email(inp.email)
             email_ok = self._rate_limiter.consume(
@@ -96,13 +101,13 @@ class PasswordResetRequestCommand:
                         expires_at=inp.now + RESET_TTL,
                         requested_ip=inp.ip,
                     )
-                    self._mailer.send(
-                        MailMessage(
-                            to=inp.email,
-                            subject="重設密碼",
-                            body=f"請於 30 分鐘內點選連結重設密碼：/reset-password?token={raw_token}",
-                        )
+                    reset_link = f"{self._base_url}/reset-password?token={raw_token}"
+                    mail = MailMessage(
+                        to=user.email,  # DB canonical value, not raw caller input
+                        subject="重設密碼",
+                        body=f"請於 30 分鐘內點選連結重設密碼：{reset_link}",
                     )
+                    mail_user_id = user.id
                     self._audit.write(
                         event_type="password_reset_requested",
                         actor_type="user",
@@ -114,6 +119,14 @@ class PasswordResetRequestCommand:
         except Exception:
             self._db.rollback()
             raise
+        # 寄信放在 commit 之後：SMTP 慢或掛掉時不再拖長交易、佔住 DB 連線。
+        # 寄信失敗仍不可打破隱私契約（若 raise，202 變 500 只發生在「email 存在且
+        # active」這條路徑，等於帳號列舉），故吞掉例外、僅記 log；token 已 commit。
+        if mail is not None:
+            try:
+                self._mailer.send(mail)
+            except Exception:
+                logger.warning("password reset mail send failed", extra={"user_id": mail_user_id})
 
 
 class PasswordResetConfirmCommand:

@@ -13,13 +13,13 @@ from alembic import command
 from alembic.config import Config
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_mailer
 from app.core.config import get_settings
 from app.core.passwords import hash_password
-from app.db.models.auth import User
+from app.db.models.auth import PasswordReset, User
 from app.main import create_app
 from app.services.mailer import MailMessage
 
@@ -34,6 +34,11 @@ class _RecordingMailer:
 
     def send(self, message: MailMessage) -> None:
         self.messages.append(message)
+
+
+class _FailingMailer:
+    def send(self, message: MailMessage) -> None:
+        raise RuntimeError("SMTP unavailable")
 
 
 def _alembic_config() -> Config:
@@ -111,6 +116,25 @@ def test_request_for_unknown_email_is_202_without_token(reset_engine: Engine) ->
 
     assert response.status_code == 202
     assert mailer.messages == []  # no token minted / mailed for a non-existent account
+
+
+@pytest.mark.integration
+def test_request_still_202_and_token_persisted_when_mail_fails(reset_engine: Engine) -> None:
+    # A failing mailer must not break the privacy contract: the route still returns 202
+    # and the reset token is committed (so the flow works via a resend), not rolled back.
+    email = f"mailfail-{uuid4()}@example.com"
+    _seed_active_user(reset_engine, email)
+    app = create_app()
+    app.dependency_overrides[get_mailer] = lambda: _FailingMailer()
+    client = TestClient(app)
+
+    assert client.post("/auth/password-reset/request", json={"email": email}).status_code == 202
+
+    # The token row survived the failed send (committed, not rolled back with the mailer error).
+    with Session(reset_engine) as session:
+        user_id = session.execute(select(User.id).where(User.email == email)).scalar_one()
+        reset = session.execute(select(PasswordReset).where(PasswordReset.user_id == user_id)).scalar_one_or_none()
+    assert reset is not None
 
 
 @pytest.mark.integration
