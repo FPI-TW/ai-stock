@@ -88,9 +88,8 @@ def repo(db_session: Session) -> TradeIntentCoreRepository:
     return TradeIntentCoreRepository(db_session)
 
 
-def _input(intent_id: UUID, *, price: str = "600.0000", ref: str = "ask") -> TriggerCoreInput:
+def _input(*, price: str = "600.0000", ref: str = "ask") -> TriggerCoreInput:
     return TriggerCoreInput(
-        intent_id=intent_id,
         trigger_price=Decimal(price),
         trigger_reference_price_type=ref,
         fallback_used=False,
@@ -124,7 +123,7 @@ def test_persist_price_alert_trigger(repo: TradeIntentCoreRepository, db_session
     intent_id = _create_active_price_alert(repo, owner, price="600.0000")
     intent = repo.find_by_id(intent_id, owner)
 
-    persist_core_trigger(db_session, intent, _input(intent_id, price="601.0000"))
+    persist_core_trigger(db_session, intent, _input(price="601.0000"))
     db_session.commit()
 
     # 狀態轉 triggered
@@ -152,7 +151,7 @@ def test_persist_trigger_stale_guard(repo: TradeIntentCoreRepository, db_session
     repo.commit()
 
     with pytest.raises(CoreIntentNotActiveError):
-        persist_core_trigger(db_session, intent, _input(intent_id))
+        persist_core_trigger(db_session, intent, _input())
 
 
 @pytest.mark.integration
@@ -184,7 +183,7 @@ def test_persist_trailing_trigger_records_baseline(repo: TradeIntentCoreReposito
     repo.commit()
     intent = repo.find_by_id(intent_id, owner)
 
-    persist_core_trigger(db_session, intent, _input(intent_id, price="579.0000", ref="bid"))
+    persist_core_trigger(db_session, intent, _input(price="579.0000", ref="bid"))
     db_session.commit()
 
     trigger = db_session.execute(
@@ -221,7 +220,7 @@ def test_persist_trigger_unique_backstop_raises_duplicate(repo: TradeIntentCoreR
 
     # persist 的 trigger_row INSERT 在 status guard 之前 autoflush → UNIQUE 違規 → DuplicateTriggerError
     with pytest.raises(DuplicateTriggerError):
-        persist_core_trigger(db_session, intent, _input(intent_id))
+        persist_core_trigger(db_session, intent, _input())
     db_session.rollback()
 
     # 第二筆 trigger 隨 rollback 消失（只剩預埋那筆）；intent 維持 active、未被誤翻 triggered

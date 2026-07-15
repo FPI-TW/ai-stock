@@ -88,7 +88,6 @@ class TradeIntentCoreDispatcher:
                             db,
                             intent,
                             TriggerCoreInput(
-                                intent_id=intent.id,
                                 trigger_price=result.trigger_price,
                                 trigger_reference_price_type=result.trigger_reference_price_type,
                                 fallback_used=result.fallback_used,

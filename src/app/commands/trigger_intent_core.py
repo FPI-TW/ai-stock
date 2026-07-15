@@ -55,7 +55,6 @@ class CoreIntentNotActiveError(TriggerError):
 
 @dataclass(frozen=True)
 class TriggerCoreInput:
-    intent_id: UUID
     trigger_price: Decimal
     trigger_reference_price_type: str
     fallback_used: bool

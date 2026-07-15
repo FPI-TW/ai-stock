@@ -93,8 +93,8 @@ def test_dispatch_triggers_when_evaluator_says_so(monkeypatch: pytest.MonkeyPatc
     mock_repo.system_list_active_by_symbols.assert_called_once_with(["2330"])
     persist.assert_called_once()
     mock_repo.commit.assert_called_once()
+    assert persist.call_args[0][1] is intent
     trigger_input = persist.call_args[0][2]
-    assert trigger_input.intent_id == intent.id
     assert trigger_input.trigger_price == Decimal("99")
     assert trigger_input.trigger_reference_price_type == "ask"
 
