@@ -538,13 +538,7 @@ def get_mailer() -> Mailer:
     # Partial config (some SES values set but not all four) is almost always a deploy
     # misconfiguration: mail silently goes nowhere while ops thinks it's live. Warn.
     # All-empty is the intentional stub — stay quiet.
-    ses_values = (
-        settings.ses_from_address,
-        settings.ses_region,
-        settings.ses_smtp_username,
-        settings.ses_smtp_password,
-    )
-    if any(ses_values):
+    if settings.has_any_ses_value:
         logger.warning("SES partially configured — falling back to logging stub; no mail will be sent")
     return LoggingMailer()
 

@@ -72,14 +72,25 @@ class Settings(BaseSettings):
     ses_smtp_username: str | None = Field(default=None, alias="SES_SMTP_USERNAME")
     ses_smtp_password: str | None = Field(default=None, alias="SES_SMTP_PASSWORD")
 
+    def _ses_values(self) -> tuple[str | None, str | None, str | None, str | None]:
+        # 欄位清單唯一出處：resolved_ses_mailer_config 與 has_any_ses_value 都吃這裡，
+        # 增改 SES 欄位只動這一處，避免「加了欄位但部分設定警告漏報」的漂移。
+        return (self.ses_from_address, self.ses_region, self.ses_smtp_username, self.ses_smtp_password)
+
     @property
     def resolved_ses_mailer_config(self) -> tuple[str, str, str, str] | None:
         """(from, region, smtp_username, smtp_password) when SES is fully configured,
         else None (the app then uses the logging stub)."""
-        values = (self.ses_from_address, self.ses_region, self.ses_smtp_username, self.ses_smtp_password)
+        values = self._ses_values()
         if all(values):
             return values  # type: ignore[return-value]  # all() narrows every element to str
         return None
+
+    @property
+    def has_any_ses_value(self) -> bool:
+        """True when at least one SES value is set — with resolved_ses_mailer_config None,
+        that means partial (mis)configuration worth warning about."""
+        return any(self._ses_values())
 
     # Telegram notification sync is enabled only when both values are present.
     telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
