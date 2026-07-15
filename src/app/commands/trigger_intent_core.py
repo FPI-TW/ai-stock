@@ -186,9 +186,13 @@ def persist_core_trigger(
         db.add(notification_row)
         db.flush()
     except IntegrityError as exc:
-        # 只有 trade_intent_id UNIQUE 違規是可預期的競態 → 包成具名錯誤讓 caller 安靜跳過；
-        # 其餘整合性違規（FK / CHECK / NOT NULL）是真 bug，原樣往上拋、絕不靜默吞。
-        if isinstance(exc.orig, UniqueViolation):
+        # 只有「同一 intent 已被搶先觸發」的 UNIQUE 違規是可預期的競態 → 包成具名錯誤
+        # 讓 caller 安靜跳過；比對 constraint 名，其餘唯一違規（如 PK 碰撞）與整合性
+        # 違規（FK / CHECK / NOT NULL）都是真 bug，原樣往上拋、絕不靜默吞。
+        if (
+            isinstance(exc.orig, UniqueViolation)
+            and exc.orig.diag.constraint_name == "uq_trade_intent_triggers_trade_intent_id"
+        ):
             raise DuplicateTriggerError(intent.id) from exc
         raise
     dispatch_notification_to_telegram(notification_row)
