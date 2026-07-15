@@ -352,7 +352,7 @@ class Notification(Base):
             "'price_triggered', 'limit_order_triggered', 'trailing_stop_triggered', "
             "'market_order_triggered', 'twap_slice', 'twap_price_followup'"
             ")) "
-            "OR (trade_intent_id IS NOT NULL OR trade_intent_core_id IS NOT NULL)",
+            "OR num_nonnulls(trade_intent_id, trade_intent_core_id) = 1",
             name="triggered_notification_intent",
         ),
         Index("ix_notifications_owner_created_at", "owner_user_id", text("created_at DESC")),

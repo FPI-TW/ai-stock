@@ -10,11 +10,13 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, create_engine, delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.commands.trigger_intent_core import CoreIntentNotActiveError, TriggerCoreInput, persist_core_trigger
 from app.core.config import get_settings
 from app.db.models.core import Notification, Symbol
+from app.db.models.core import TradeIntent as LegacyTradeIntent
 from app.db.models.trade_intent_core import (
     TradeIntentCore,
     TradeIntentPriceParams,
@@ -230,3 +232,45 @@ def test_persist_trigger_unique_backstop_raises_duplicate(repo: TradeIntentCoreR
     )
     assert len(rows) == 1
     assert repo.find_by_id(intent_id, owner).status == "active"
+
+
+@pytest.mark.integration
+def test_notification_cannot_point_to_both_tracks(repo: TradeIntentCoreRepository, db_session: Session) -> None:
+    """CHECK 為 XOR：觸發型通知恰好屬於一軌，trade_intent_id 與 trade_intent_core_id
+    同時非空＝來源歸屬模糊，DB 層直接擋。"""
+
+    owner = uuid4()
+    core_id = _create_active_price_alert(repo, owner)
+    legacy_id = uuid4()
+    db_session.add(
+        LegacyTradeIntent(
+            id=legacy_id,
+            owner_user_id=owner,
+            symbol="2330",
+            strategy="buy_price_alert",
+            execution_mode="notify_only",
+            quantity_lots=1,
+            target_price_original=Decimal("600.0000"),
+            target_price_effective=Decimal("600.0000"),
+            trigger_reference_price_type="ask",
+            trading_date=date(2026, 5, 12),
+            time_in_force="day",
+            status="active",
+        )
+    )
+    db_session.flush()
+
+    db_session.add(
+        Notification(
+            id=uuid4(),
+            owner_user_id=owner,
+            trade_intent_id=legacy_id,
+            trade_intent_core_id=core_id,
+            type="price_triggered",
+            rendered_title="t",
+            rendered_body="b",
+        )
+    )
+    with pytest.raises(IntegrityError, match="triggered_notification_intent"):
+        db_session.flush()
+    db_session.rollback()

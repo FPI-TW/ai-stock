@@ -93,7 +93,9 @@ def upgrade() -> None:
         "triggered_notification_intent",
         "notifications",
         f"(type NOT IN ({_NOTIFICATION_TRIGGER_TYPES})) "
-        "OR (trade_intent_id IS NOT NULL OR trade_intent_core_id IS NOT NULL)",
+        # XOR：一則觸發通知恰好屬於一軌（舊 trade_intents 或新 trade_intent_core），
+        # 兩欄同時非空＝來源歸屬模糊，DB 層直接擋。
+        "OR num_nonnulls(trade_intent_id, trade_intent_core_id) = 1",
     )
 
 
