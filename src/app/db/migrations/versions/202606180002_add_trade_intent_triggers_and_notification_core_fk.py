@@ -104,6 +104,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 新軌通知（只有 trade_intent_core_id）隨新軌退役：不先刪，下面還原的舊 CHECK
+    # （觸發型必須 trade_intent_id 非空）會被既有資料直接打爆。與整表 drop
+    # trade_intent_triggers 同一邏輯——downgrade 即放棄新軌資料。
+    op.execute("DELETE FROM notifications WHERE trade_intent_core_id IS NOT NULL")
     # 傳裸名：alembic 會套命名慣例補上 ck_notifications_ 前綴（傳完整名會雙重前綴）
     op.drop_constraint("triggered_notification_intent", "notifications", type_="check")
     op.create_check_constraint(
