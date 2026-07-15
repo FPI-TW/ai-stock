@@ -1,4 +1,3 @@
-import logging
 from uuid import UUID
 
 import pytest
@@ -164,31 +163,23 @@ def _prime_local_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.api.deps.get_settings", lambda: Settings(_env_file=None))  # type: ignore[call-arg]
 
 
-def test_get_mailer_warns_on_partial_ses_config(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_partial_ses_config_refuses_to_boot(monkeypatch: pytest.MonkeyPatch) -> None:
     _prime_local_settings(monkeypatch)
     monkeypatch.setenv("SES_FROM_ADDRESS", "noreply@example.com")
     monkeypatch.setenv("SES_REGION", "ap-southeast-2")
     # username/password left unset → partial
 
-    with caplog.at_level(logging.WARNING):
-        mailer = get_mailer()
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(_env_file=None)  # type: ignore[call-arg]
 
-    assert isinstance(mailer, LoggingMailer)
-    assert any("SES partially configured" in r.message for r in caplog.records)
+    assert "SES is partially configured" in str(exc_info.value)
+    assert "SES_SMTP_USERNAME, SES_SMTP_PASSWORD" in str(exc_info.value)
 
 
-def test_get_mailer_silent_when_ses_fully_unset(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_get_mailer_returns_stub_when_ses_fully_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     _prime_local_settings(monkeypatch)
 
-    with caplog.at_level(logging.WARNING):
-        mailer = get_mailer()
-
-    assert isinstance(mailer, LoggingMailer)
-    assert not any("SES partially configured" in r.message for r in caplog.records)
+    assert isinstance(get_mailer(), LoggingMailer)
 
 
 def test_get_mailer_returns_ses_when_fully_configured(monkeypatch: pytest.MonkeyPatch) -> None:

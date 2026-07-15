@@ -72,25 +72,39 @@ class Settings(BaseSettings):
     ses_smtp_username: str | None = Field(default=None, alias="SES_SMTP_USERNAME")
     ses_smtp_password: str | None = Field(default=None, alias="SES_SMTP_PASSWORD")
 
-    def _ses_values(self) -> tuple[str | None, str | None, str | None, str | None]:
-        # 欄位清單唯一出處：resolved_ses_mailer_config 與 has_any_ses_value 都吃這裡，
-        # 增改 SES 欄位只動這一處，避免「加了欄位但部分設定警告漏報」的漂移。
-        return (self.ses_from_address, self.ses_region, self.ses_smtp_username, self.ses_smtp_password)
+    def _ses_values(self) -> tuple[tuple[str, str | None], ...]:
+        # 欄位清單唯一出處：resolved_ses_mailer_config 與 _enforce_ses_all_or_none
+        # 都吃這裡，增改 SES 欄位只動這一處，避免兩份清單默默漂移。
+        return (
+            ("SES_FROM_ADDRESS", self.ses_from_address),
+            ("SES_REGION", self.ses_region),
+            ("SES_SMTP_USERNAME", self.ses_smtp_username),
+            ("SES_SMTP_PASSWORD", self.ses_smtp_password),
+        )
 
     @property
     def resolved_ses_mailer_config(self) -> tuple[str, str, str, str] | None:
         """(from, region, smtp_username, smtp_password) when SES is fully configured,
         else None (the app then uses the logging stub)."""
-        values = self._ses_values()
+        values = tuple(value for _, value in self._ses_values())
         if all(values):
             return values  # type: ignore[return-value]  # all() narrows every element to str
         return None
 
-    @property
-    def has_any_ses_value(self) -> bool:
-        """True when at least one SES value is set — with resolved_ses_mailer_config None,
-        that means partial (mis)configuration worth warning about."""
-        return any(self._ses_values())
+    @model_validator(mode="after")
+    def _enforce_ses_all_or_none(self) -> "Settings":
+        # Partial SES config is almost always a deploy misconfiguration: mail would
+        # silently fall back to the logging stub while ops thinks it's live. Refuse to
+        # boot so the gap surfaces at deploy time, not on the first send. All-empty is
+        # the intentional stub and stays allowed.
+        values = self._ses_values()
+        if any(value for _, value in values) and not all(value for _, value in values):
+            missing = [env for env, value in values if not value]
+            raise ValueError(
+                f"SES is partially configured; missing {', '.join(missing)}. "
+                "Set all four SES_* values to send real mail, or none to use the logging stub."
+            )
+        return self
 
     # Telegram notification sync is enabled only when both values are present.
     telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")

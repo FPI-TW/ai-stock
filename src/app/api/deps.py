@@ -1,4 +1,3 @@
-import logging
 from collections.abc import Callable, Generator
 from functools import lru_cache
 from typing import Annotated
@@ -525,21 +524,13 @@ def get_invitation_repository(db: DatabaseDep) -> InvitationRepository:
 InvitationRepoDep = Annotated[InvitationRepository, Depends(get_invitation_repository)]
 
 
-logger = logging.getLogger(__name__)
-
-
 @lru_cache
 def get_mailer() -> Mailer:
-    # Real SES sender once SMTP is fully configured; logging stub otherwise.
-    settings = get_settings()
-    config = settings.resolved_ses_mailer_config
+    # Real SES sender once SMTP is fully configured; logging stub otherwise. Partial
+    # config never reaches here — Settings._enforce_ses_all_or_none refuses to boot.
+    config = get_settings().resolved_ses_mailer_config
     if config is not None:
         return SesMailer(*config)
-    # Partial config (some SES values set but not all four) is almost always a deploy
-    # misconfiguration: mail silently goes nowhere while ops thinks it's live. Warn.
-    # All-empty is the intentional stub — stay quiet.
-    if settings.has_any_ses_value:
-        logger.warning("SES partially configured — falling back to logging stub; no mail will be sent")
     return LoggingMailer()
 
 
