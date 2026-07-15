@@ -4,8 +4,8 @@
 - 新建 `trade_intent_triggers`（對應 legacy trigger_events，FK→trade_intent_core），
   委託內部稽核、隨新軌退役。
 - `notifications` 共用（收件匣跨功能）：additive 加 nullable `trade_intent_core_id`
-  FK→trade_intent_core，並放寬 `triggered_notification_intent` CHECK 成「兩個 intent
-  欄至少一個非空」。對舊資料 / 舊行為零影響。
+  FK→trade_intent_core，並改寫 `triggered_notification_intent` CHECK 成「兩個 intent
+  欄恰好一個非空（XOR）」。對舊資料 / 舊行為零影響。
 
 完全不碰 `trade_intents`。
 
@@ -48,25 +48,29 @@ def upgrade() -> None:
         sa.Column("dynamic_trigger_price_at_trigger", sa.Numeric(9, 4), nullable=True),
         sa.Column("triggered_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        # CheckConstraint 傳裸名：ck convention 含 %(constraint_name)s token，明確給
+        # 完整名會被再套模板變雙前綴（ck_<table>_ck_<table>_...）並截斷；裸名經
+        # convention 展開後才與 model 產出的名字一致。fk/pk/uq convention 不含該
+        # token，完整名原樣使用，不受影響。
         sa.CheckConstraint(
             "trigger_reference_price_type IN ('ask', 'bid', 'last_fallback')",
-            name="ck_trade_intent_triggers_trigger_reference_price_type",
+            name="trigger_reference_price_type",
         ),
         sa.CheckConstraint(
             "((trigger_reference_price_type = 'last_fallback' AND fallback_used = true) "
             "OR (trigger_reference_price_type IN ('ask', 'bid') AND fallback_used = false))",
-            name="ck_trade_intent_triggers_fallback_consistency",
+            name="fallback_consistency",
         ),
-        sa.CheckConstraint("target_price_effective > 0", name="ck_trade_intent_triggers_target_price_effective"),
-        sa.CheckConstraint("trigger_price > 0", name="ck_trade_intent_triggers_trigger_price"),
-        sa.CheckConstraint("filled_quantity_lots >= 0", name="ck_trade_intent_triggers_filled_quantity_lots"),
+        sa.CheckConstraint("target_price_effective > 0", name="target_price_effective"),
+        sa.CheckConstraint("trigger_price > 0", name="trigger_price"),
+        sa.CheckConstraint("filled_quantity_lots >= 0", name="filled_quantity_lots"),
         sa.CheckConstraint(
             "baseline_at_trigger IS NULL OR baseline_at_trigger > 0",
-            name="ck_trade_intent_triggers_baseline_at_trigger",
+            name="baseline_at_trigger",
         ),
         sa.CheckConstraint(
             "dynamic_trigger_price_at_trigger IS NULL OR dynamic_trigger_price_at_trigger > 0",
-            name="ck_trade_intent_triggers_dynamic_trigger_price_at_trigger",
+            name="dynamic_trigger_price_at_trigger",
         ),
         sa.ForeignKeyConstraint(["trade_intent_id"], ["trade_intent_core.id"], name="fk_trade_intent_triggers_intent"),
         sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], name="fk_trade_intent_triggers_owner"),
