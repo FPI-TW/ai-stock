@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 from decimal import Decimal
+from itertools import product
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -405,3 +406,54 @@ class TestUnsupportedStrategy:
         result = evaluator.evaluate(_snapshot(ask_price=Decimal("99")), intent, SESSION_NOW)
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.UNSUPPORTED_STRATEGY
+
+
+class TestTriggerInvariant:
+    """不變量：`should_trigger=True` 必然帶齊 `trigger_price` 與
+    `trigger_reference_price_type`。dispatcher 靠這條把「到價」翻成觸發寫入；一旦
+    某分支說到價卻不給價，dispatcher 會拋 RuntimeError 中斷整條 symbol 的處理（毒單）。
+    這裡在源頭釘死，讓未來新增策略 / 重構誤破不變量時，測試先炸而非上線後炸。"""
+
+    def _intent_for(self, strategy: str) -> TradeIntentData:
+        if strategy == "trailing_stop_alert":
+            # 帶 baseline/dynamic 才可能走到觸發分支；baseline 高於掃描價上限，
+            # 不會在掃描中被抬高，dynamic 維持可被跌破。
+            return make_intent(
+                strategy=strategy,
+                target=None,
+                trail_mode="percentage",
+                trail_value=Decimal("5"),
+                baseline=Decimal("110"),
+                dynamic_trigger_price=Decimal("100"),
+            )
+        return make_intent(strategy=strategy, target=Decimal("100"))
+
+    def test_should_trigger_always_carries_price(self, evaluator: QuoteEvaluator) -> None:
+        strategies = (
+            "buy_price_alert",
+            "limit_buy_order",
+            "sell_price_alert",
+            "limit_sell_order",
+            "market_order",
+            "market_buy_order",
+            "market_sell_order",
+            "trailing_stop_alert",
+        )
+        prices: tuple[Decimal | None, ...] = (None, Decimal("95"), Decimal("100"), Decimal("105"))
+
+        triggered = 0
+        for strategy in strategies:
+            intent = self._intent_for(strategy)
+            for bid, ask, last in product(prices, prices, prices):
+                result = evaluator.evaluate(
+                    _snapshot(bid_price=bid, ask_price=ask, last_price=last), intent, SESSION_NOW
+                )
+                if result.should_trigger:
+                    triggered += 1
+                    assert result.trigger_price is not None, f"{strategy} triggered without trigger_price: {result}"
+                    assert result.trigger_reference_price_type is not None, (
+                        f"{strategy} triggered without reference_price_type: {result}"
+                    )
+
+        # 掃描確實踩到觸發分支（否則不變量恆真、測試空過）。
+        assert triggered > 0
