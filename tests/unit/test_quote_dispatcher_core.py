@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.domain.quote_evaluation import EvaluationResult
+from app.domain.quote_evaluation import EvaluationResult, QuoteEvaluator
 from app.domain.trade_intent import TradeIntentData
 from app.domain.trading_session import TradingSessionService
 from app.domain.trigger_event import DuplicateTriggerError
@@ -62,12 +62,16 @@ def mock_session() -> MagicMock:
 
 
 def _dispatcher(
-    *, mock_session: MagicMock, evaluator: MagicMock, kill_switch: MagicMock | None = None
+    *,
+    mock_session: MagicMock,
+    evaluator: MagicMock | QuoteEvaluator,
+    kill_switch: MagicMock | None = None,
+    session_service: TradingSessionService | None = None,
 ) -> TradeIntentCoreDispatcher:
     return TradeIntentCoreDispatcher(
         session_factory=lambda: mock_session,
         evaluator=evaluator,
-        session_service=TradingSessionService(),
+        session_service=session_service or TradingSessionService(),
         kill_switch=kill_switch,
     )
 
@@ -164,6 +168,88 @@ def test_dispatch_skipped_when_kill_switch_halted(monkeypatch: pytest.MonkeyPatc
     kill_switch.is_halted.assert_called_once()
     mock_repo.system_list_active_by_symbols.assert_not_called()
     evaluator.evaluate.assert_not_called()
+
+
+# --- trailing：同一 snapshot 同時抬 baseline 又觸發 -------------------------------
+# 用真 evaluator（非 Mock）跑，順帶釘死「這情境真的到得了」：last 創高抬 baseline，
+# 同一筆的 bid 已在新 dynamic 之下 → update + trigger 同時發生。
+
+TRAILING_NOW = datetime(2026, 5, 12, 10, 0, tzinfo=TAIPEI)  # 週二盤中，quote_time 與 now 對齊
+
+
+def _trailing_intent(*, baseline: Decimal | None, dynamic_trigger_price: Decimal | None) -> TradeIntentData:
+    return TradeIntentData(
+        id=uuid4(),
+        owner_user_id=uuid4(),
+        symbol="2330",
+        strategy="trailing_stop_alert",
+        execution_mode="notify_only",
+        quantity_lots=1,
+        target_price_original=None,
+        target_price_effective=None,
+        trigger_reference_price_type="bid",
+        trading_date=date(2026, 5, 12),
+        time_in_force="day",
+        status="active",
+        created_at=TRAILING_NOW,
+        updated_at=TRAILING_NOW,
+        trail_mode="fixed_amount",
+        trail_value=Decimal("0.5"),
+        baseline=baseline,
+        dynamic_trigger_price=dynamic_trigger_price,
+    )
+
+
+def _trailing_snapshot() -> QuoteSnapshot:
+    # last 120 創高 → baseline=120、dynamic=round_down(119.5)=119.5；bid 119.5 <= 119.5 → 觸發
+    return QuoteSnapshot(
+        symbol="2330",
+        bid_price=Decimal("119.5"),
+        ask_price=Decimal("120.5"),
+        last_price=Decimal("120"),
+        quote_time=TRAILING_NOW,
+        received_at=TRAILING_NOW,
+    )
+
+
+@pytest.mark.parametrize(
+    "old_baseline, old_dynamic",
+    [
+        (Decimal("118"), Decimal("117.5")),  # 已有 baseline：舊值會讓稽核寫成「119.5 跌破 117.5」的矛盾紀錄
+        (None, None),  # 新建單 baseline 尚未初始化：舊值會讓 persist 直接 RuntimeError
+    ],
+)
+def test_dispatch_trailing_passes_updated_baseline_to_persist(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_session: MagicMock,
+    old_baseline: Decimal | None,
+    old_dynamic: Decimal | None,
+) -> None:
+    intent = _trailing_intent(baseline=old_baseline, dynamic_trigger_price=old_dynamic)
+    mock_repo = MagicMock()
+    mock_repo.system_list_active_by_symbols.return_value = [intent]
+    persist = MagicMock()
+    monkeypatch.setattr("app.services.quote_dispatcher_core.TradeIntentCoreRepository", lambda db: mock_repo)
+    monkeypatch.setattr("app.services.quote_dispatcher_core.persist_core_trigger", persist)
+
+    session_service = TradingSessionService(clock=lambda: TRAILING_NOW)
+    _dispatcher(
+        mock_session=mock_session,
+        evaluator=QuoteEvaluator(session_service),
+        session_service=session_service,
+    ).dispatch(_trailing_snapshot())
+
+    # baseline 更新與觸發同一筆報價一起發生
+    mock_repo.system_update_trailing_baseline.assert_called_once_with(
+        intent.id, Decimal("120"), Decimal("119.5"), TRAILING_NOW
+    )
+    persist.assert_called_once()
+    # persist 讀 intent 上的 trailing 狀態寫稽核/通知 → 必須是這筆報價算出的新值，不是舊值
+    persisted_intent = persist.call_args[0][1]
+    assert persisted_intent.baseline == Decimal("120")
+    assert persisted_intent.dynamic_trigger_price == Decimal("119.5")
+    assert persist.call_args[0][2].trigger_price == Decimal("119.5")
+    mock_repo.commit.assert_called_once()
 
 
 def test_dispatch_swallows_unexpected_exception(monkeypatch: pytest.MonkeyPatch, mock_session: MagicMock) -> None:

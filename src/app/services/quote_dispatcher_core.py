@@ -15,6 +15,7 @@
 
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 
 from sqlalchemy.orm import Session
 
@@ -76,6 +77,16 @@ class TradeIntentCoreDispatcher:
                         result.baseline,
                         result.dynamic_trigger_price,
                         result.baseline_updated_at,
+                    )
+                    # 同一 snapshot 可能既抬 baseline 又觸發（last 創高 → 新 dynamic；bid 已在其下）。
+                    # persist 讀的是 intent 上的 trailing 狀態 → 不換掉會拿舊值寫稽核/通知；
+                    # baseline 初始為 NULL 的單首 tick 就觸發時更會直接 RuntimeError。
+                    # 舊軌靠 stage 重新 SELECT 讀回，新軌傳攤平 data → 在此接回。
+                    intent = replace(
+                        intent,
+                        baseline=result.baseline,
+                        dynamic_trigger_price=result.dynamic_trigger_price,
+                        baseline_updated_at=result.baseline_updated_at,
                     )
                     has_pending_writes = True
                 if not result.should_trigger:
