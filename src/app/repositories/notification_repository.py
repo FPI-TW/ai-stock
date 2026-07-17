@@ -12,7 +12,10 @@ def _to_domain(row: Notification) -> NotificationData:
     return NotificationData(
         id=row.id,
         owner_user_id=row.owner_user_id,
-        trade_intent_id=row.trade_intent_id,
+        # 收件匣跨兩軌：舊軌填 trade_intent_id、新軌填 trade_intent_core_id，
+        # `triggered_notification_intent` CHECK 保證恰好一個非空 → 對外收斂成單一 ID。
+        # 舊軌退役後 trade_intent_id 欄消失，這裡跟著改讀單欄。
+        trade_intent_id=row.trade_intent_id or row.trade_intent_core_id,
         type=row.type,
         rendered_title=row.rendered_title,
         rendered_body=row.rendered_body,
