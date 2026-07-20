@@ -2,7 +2,7 @@
 
 只驗本 command 自己的職責：§15 限額邊界、策略驗證、以及用正確參數呼叫新 repo。
 建單即觸發（PR3 補上）在此一律走「取不到報價」分支短路掉——那條路徑由
-test_create_intent_core_inline_trigger.py 專門覆蓋。
+tests/test_create_immediate_trigger_integration.py（integration）覆蓋。
 """
 
 from datetime import UTC, datetime
