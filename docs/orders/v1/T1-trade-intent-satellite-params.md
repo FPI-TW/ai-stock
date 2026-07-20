@@ -188,6 +188,17 @@ dispatcher 的跨策略熱查詢（`system_list_active_*`、`list_by_owner`、`c
 
 - [x] **create endpoint 寫新表後要同步 `provider.subscribe(symbol)`**（PR3 已補：新軌 create
   在 commit 前呼叫 `reconcile_on_create`，訂閱失敗連同委託回滾；cancel 也補上 Phase B 退訂）：新軌目前只有 lifespan 啟動 reconcile 訂閱（`main.py`）；舊軌 create 路徑有做盤中訂閱、新軌沒有 → cutover 後盤中新建的單在下次重啟前收不到報價、robot #2 靜默不觸發。PR2 無 writer 故現在打不到。
+- [ ] **部署前置：確認舊表無 active/scheduled 列（任何策略，含 TWAP）**。取消路徑的
+  `reconcile_after_terminal_transition` 只數新表殘量 → 若舊表還有同 symbol 的非終態單，
+  取消一張新軌單會把訂閱退掉，讓那張舊單靜默收不到報價、該響不響。空窗期 TWAP 刻意留在
+  舊表，故 TWAP 也在此列。無人使用時本來就是空的，上線前跑一句確認即可：
+
+  ```sql
+  SELECT status, strategy, count(*) FROM trade_intents
+  WHERE status IN ('active', 'scheduled') GROUP BY status, strategy;
+  ```
+
+  有列就先取消/清掉再上線。PR4 之後舊軌整組退役，這條隨之消失。
 - [x] **robot #2 查詢索引已驗證，無需動作**：`system_list_active_by_symbols`（`symbol IN (...) AND status='active'`）被 `ix_trade_intent_core_symbol_status_trading_date` 首欄 symbol 涵蓋，不會全表掃。
 
 ### PR3 已知空窗：TWAP（2026-07-20 與使用者確認）
