@@ -210,6 +210,22 @@ PR3 之後 `twap/confirm` 仍寫舊表，但清單 / 詳情 / 取消已只查新
 - 舊表**不 TRUNCATE**：舊軌仍是 TWAP 的唯一寫入路徑，清庫留到 PR4 之後的退役一起做。
 - PR4 把 TWAP 接到新軌時，這個空窗自然消失。
 
+**空窗的第二個面向：舊表 lifecycle 不再由通用 API 路徑驅動。**
+`get_intent_lifecycle_command` 改吃新軌 repo 後，`GET /trade-intents`、`GET /{id}`、
+`POST /{id}/cancel` 跑的是**新表**的啟用/到期。舊表仍有三條驅動路徑，不是完全沒人管：
+
+| 路徑 | 位置 | 驅動時機 |
+|---|---|---|
+| 啟動 reconcile | `main.py:76` | 每次部署 / 重啟 |
+| TWAP endpoint | `commands/twap.py:159`、`:179` | preview / confirm 被呼叫時 |
+| legacy dispatcher | `quote_dispatcher.py:92` | 每筆報價 tick（需該 symbol 仍被訂閱） |
+
+空窗期舊表只剩 TWAP，而 TWAP endpoint 自己就會跑舊軌 lifecycle → 實務上蓋得到。
+但 dispatcher 那條依賴「symbol 仍被訂閱」，而訂閱決策已只看新表（見上方部署前置），
+故不要把它當保證。**PR4 提醒**：TWAP 接到新軌後，`commands/twap.py` 的兩處
+`IntentLifecycleCommand(IntentRepository(...))` 要一併改吃新 repo，否則舊軌 lifecycle
+會變成真的只剩 dispatcher tick。
+
 PR3 另補回的舊軌方法（附錄對應表可劃掉）：`list_by_owner`、
 `count_active_or_scheduled_for_symbol`、`system_activate_scheduled_day_intents`、
 `cancel_active_for_owner`。`system_expire_day_intents_through` 已補但**不含 TWAP slice
