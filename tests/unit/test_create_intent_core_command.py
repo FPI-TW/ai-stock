@@ -15,6 +15,7 @@ import pytest
 from app.commands.trade_intent_core import CreateTradeIntentCommand, CreateTradeIntentInput, IntentLimits
 from app.domain.trade_intent import SymbolIntentLimitExceededError, UserIntentLimitExceededError
 from app.domain.trading_session import TradingSessionService
+from app.services.quote.base import QuoteProviderUnavailableError
 
 # Monday 10:00 Taipei (02:00 UTC) → 盤中，建單落 active
 MONDAY = datetime(2026, 5, 11, 2, 0, tzinfo=UTC)
@@ -125,3 +126,35 @@ def test_trailing_passes_trail_value_to_repo() -> None:
     assert kwargs["trail_mode"] == "percentage"
     assert kwargs["trail_value"] == Decimal("5")
     assert kwargs["target_price_effective"] is None
+
+
+def test_provider_error_from_get_quotes_does_not_block_create() -> None:
+    """報價端任何失敗都不該擋建單——委託照樣以 active 落地，等 robot #2 下次補觸發。
+
+    只 catch QuoteUnavailableError 的話，別種 QuoteProviderError（provider 未啟動、
+    demo allowlist、訂閱額度）會把整筆建單回滾，與 command docstring 的契約相反。
+    """
+
+    repo = MagicMock()
+    repo.create.return_value = uuid4()
+    symbol_service = MagicMock()
+    symbol_service.get_tradable_symbol.return_value = MagicMock(instrument_type="stock")
+    quote_provider = MagicMock()
+    quote_provider.get_quotes.side_effect = QuoteProviderUnavailableError("shioaji", "provider not started")
+    db = MagicMock()
+    command = CreateTradeIntentCommand(
+        symbol_service,
+        TradingSessionService(clock=lambda: MONDAY),
+        repo,
+        quote_provider,
+        MagicMock(),  # evaluator（報價取不到 → 不會被呼叫）
+        db,
+        None,
+        None,
+    )
+
+    command.execute(_input())
+
+    repo.create.assert_called_once()
+    db.commit.assert_called_once()
+    db.rollback.assert_not_called()

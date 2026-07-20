@@ -35,7 +35,7 @@ from app.domain.trading_session import TradingSessionService
 from app.domain.trigger_event import quote_snapshot_to_jsonb
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.services.kill_switch import KillSwitchProvider
-from app.services.quote.base import QuoteProvider, QuoteProviderError, QuoteSnapshot, QuoteUnavailableError
+from app.services.quote.base import QuoteProvider, QuoteProviderError, QuoteSnapshot
 from app.services.quote.current_price import CurrentPriceProvider
 from app.services.quote.intent_reconciler import reconcile_after_terminal_transition, reconcile_on_create
 from app.services.symbol import SymbolService
@@ -261,7 +261,11 @@ class CreateTradeIntentCommand:
                 pass
         try:
             quotes = self._quote_provider.get_quotes([symbol])
-        except QuoteUnavailableError as exc:
+        # 廣義 QuoteProviderError 而非只有 QuoteUnavailableError：本方法的契約是「取不到報價
+        # 不擋建單」，任何 provider 端失敗都該讓委託以 active 落地、交給 robot #2 下次補觸發。
+        # 收窄成 Unavailable 會讓別種 provider 錯誤把整筆建單回滾（舊軌市價單路徑即為廣義 catch）。
+        # 訂閱失敗仍會擋建單——那是上面 reconcile_on_create 的事，與這裡無關。
+        except QuoteProviderError as exc:
             logger.warning("create: quote unavailable for %s, intent %s stays active: %s", symbol, intent_id, exc)
             return None
         if not quotes:
