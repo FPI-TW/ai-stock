@@ -1,0 +1,275 @@
+"""Integration tests for persist_core_trigger (新軌觸發 persist) against real PostgreSQL."""
+
+from collections.abc import Generator
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from pathlib import Path
+from uuid import UUID, uuid4
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import Engine, create_engine, delete, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.commands.trigger_intent_core import CoreIntentNotActiveError, TriggerCoreInput, persist_core_trigger
+from app.core.config import get_settings
+from app.db.models.core import Notification, Symbol
+from app.db.models.core import TradeIntent as LegacyTradeIntent
+from app.db.models.trade_intent_core import (
+    TradeIntentCore,
+    TradeIntentPriceParams,
+    TradeIntentTrailingParams,
+    TradeIntentTrigger,
+    TradeIntentTwapParams,
+)
+from app.domain.trigger_event import DuplicateTriggerError
+from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
+from tests.db_helpers import ensure_user
+
+QUOTE_TIME = datetime(2026, 5, 12, 1, 30, tzinfo=UTC)
+
+
+def _alembic_config() -> Config:
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", get_settings().database_url or "")
+    return config
+
+
+@pytest.fixture(scope="module")
+def int_engine() -> Generator[Engine]:
+    config = _alembic_config()
+    command.downgrade(config, "base")
+    command.upgrade(config, "head")
+    engine = create_engine(get_settings().database_url or "")
+    with Session(engine) as session:
+        session.add(
+            Symbol(
+                id=uuid4(),
+                symbol="2330",
+                display_name="台積電",
+                market="TWSE",
+                instrument_type="stock",
+                tradable_status="tradable",
+            )
+        )
+        session.commit()
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        command.downgrade(config, "base")
+
+
+def _wipe(session: Session) -> None:
+    session.execute(delete(Notification))
+    session.execute(delete(TradeIntentTrigger))
+    session.execute(delete(TradeIntentPriceParams))
+    session.execute(delete(TradeIntentTrailingParams))
+    session.execute(delete(TradeIntentTwapParams))
+    session.execute(delete(TradeIntentCore))
+    session.commit()
+
+
+@pytest.fixture
+def db_session(int_engine: Engine) -> Generator[Session]:
+    session = Session(int_engine)
+    try:
+        _wipe(session)
+        yield session
+    finally:
+        _wipe(session)
+        session.close()
+
+
+@pytest.fixture
+def repo(db_session: Session) -> TradeIntentCoreRepository:
+    return TradeIntentCoreRepository(db_session)
+
+
+def _input(*, price: str = "600.0000", ref: str = "ask") -> TriggerCoreInput:
+    return TriggerCoreInput(
+        trigger_price=Decimal(price),
+        trigger_reference_price_type=ref,
+        fallback_used=False,
+        quote_snapshot={"last_price": price},
+        quote_time=QUOTE_TIME,
+    )
+
+
+def _create_active_price_alert(repo: TradeIntentCoreRepository, owner: UUID, *, price: str = "600.0000") -> UUID:
+    ensure_user(repo._db, owner)
+    intent_id = repo.create(
+        owner_user_id=owner,
+        symbol="2330",
+        strategy="buy_price_alert",
+        quantity_lots=1,
+        target_price_original=Decimal(price),
+        target_price_effective=Decimal(price),
+        trigger_reference_price_type="ask",
+        trading_date=date(2026, 5, 12),
+        time_in_force="day",
+        execution_mode="notify_only",
+        status="active",
+    )
+    repo.commit()
+    return intent_id
+
+
+@pytest.mark.integration
+def test_persist_price_alert_trigger(repo: TradeIntentCoreRepository, db_session: Session) -> None:
+    owner = uuid4()
+    intent_id = _create_active_price_alert(repo, owner, price="600.0000")
+    intent = repo.find_by_id(intent_id, owner)
+
+    persist_core_trigger(db_session, intent, _input(price="601.0000"))
+    db_session.commit()
+
+    # 狀態轉 triggered
+    assert repo.find_by_id(intent_id, owner).status == "triggered"
+    # 觸發稽核寫進新表
+    trigger = db_session.execute(
+        select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == intent_id)
+    ).scalar_one()
+    assert trigger.trigger_price == Decimal("601.0000")
+    assert trigger.target_price_effective == Decimal("600.0000")
+    # 通知寫進共用表，指向新軌（trade_intent_core_id），舊欄為空
+    note = db_session.execute(select(Notification).where(Notification.trade_intent_core_id == intent_id)).scalar_one()
+    assert note.type == "price_triggered"
+    assert note.trade_intent_id is None
+    assert note.owner_user_id == owner
+
+
+@pytest.mark.integration
+def test_persist_trigger_stale_guard(repo: TradeIntentCoreRepository, db_session: Session) -> None:
+    owner = uuid4()
+    intent_id = _create_active_price_alert(repo, owner)
+    intent = repo.find_by_id(intent_id, owner)
+    # 取消 → 已非 active
+    repo.cancel(intent_id, owner)
+    repo.commit()
+
+    with pytest.raises(CoreIntentNotActiveError):
+        persist_core_trigger(db_session, intent, _input())
+
+
+@pytest.mark.integration
+def test_persist_trailing_trigger_records_baseline(repo: TradeIntentCoreRepository, db_session: Session) -> None:
+    owner = uuid4()
+    ensure_user(repo._db, owner)
+    intent_id = repo.create(
+        owner_user_id=owner,
+        symbol="2330",
+        strategy="trailing_stop_alert",
+        quantity_lots=1,
+        target_price_original=None,
+        target_price_effective=None,
+        trigger_reference_price_type="bid",
+        trading_date=date(2026, 5, 12),
+        time_in_force="day",
+        execution_mode="notify_only",
+        status="active",
+        trail_mode="percentage",
+        trail_value=Decimal("5"),
+    )
+    repo.commit()
+    repo.system_update_trailing_baseline(
+        intent_id,
+        baseline=Decimal("610.0000"),
+        dynamic_trigger_price=Decimal("579.5000"),
+        baseline_updated_at=QUOTE_TIME,
+    )
+    repo.commit()
+    intent = repo.find_by_id(intent_id, owner)
+
+    persist_core_trigger(db_session, intent, _input(price="579.0000", ref="bid"))
+    db_session.commit()
+
+    trigger = db_session.execute(
+        select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == intent_id)
+    ).scalar_one()
+    assert trigger.baseline_at_trigger == Decimal("610.0000")
+    assert trigger.dynamic_trigger_price_at_trigger == Decimal("579.5000")
+    note = db_session.execute(select(Notification).where(Notification.trade_intent_core_id == intent_id)).scalar_one()
+    assert note.type == "trailing_stop_triggered"
+
+
+@pytest.mark.integration
+def test_persist_trigger_unique_backstop_raises_duplicate(repo: TradeIntentCoreRepository, db_session: Session) -> None:
+    """trade_intent_id UNIQUE 違規（競態：他執行緒已寫 trigger row、本 session 仍看到 active）
+    要被就地辨識成 DuplicateTriggerError，而非裸 IntegrityError 漏給上層。"""
+
+    owner = uuid4()
+    intent_id = _create_active_price_alert(repo, owner, price="600.0000")
+    intent = repo.find_by_id(intent_id, owner)
+    # 預埋一筆 trigger row，但刻意不翻 status → 模擬本 session 讀到的 intent 仍是 active
+    db_session.add(
+        TradeIntentTrigger(
+            id=uuid4(),
+            trade_intent_id=intent_id,
+            owner_user_id=owner,
+            symbol="2330",
+            quote_snapshot={"last_price": "600.0000"},
+            target_price_effective=Decimal("600.0000"),
+            trigger_price=Decimal("600.0000"),
+            trigger_reference_price_type="ask",
+        )
+    )
+    db_session.commit()
+
+    # persist 的 trigger_row INSERT 在 status guard 之前 autoflush → UNIQUE 違規 → DuplicateTriggerError
+    with pytest.raises(DuplicateTriggerError):
+        persist_core_trigger(db_session, intent, _input())
+    db_session.rollback()
+
+    # 第二筆 trigger 隨 rollback 消失（只剩預埋那筆）；intent 維持 active、未被誤翻 triggered
+    rows = (
+        db_session.execute(select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == intent_id))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert repo.find_by_id(intent_id, owner).status == "active"
+
+
+@pytest.mark.integration
+def test_notification_cannot_point_to_both_tracks(repo: TradeIntentCoreRepository, db_session: Session) -> None:
+    """CHECK 為 XOR：觸發型通知恰好屬於一軌，trade_intent_id 與 trade_intent_core_id
+    同時非空＝來源歸屬模糊，DB 層直接擋。"""
+
+    owner = uuid4()
+    core_id = _create_active_price_alert(repo, owner)
+    legacy_id = uuid4()
+    db_session.add(
+        LegacyTradeIntent(
+            id=legacy_id,
+            owner_user_id=owner,
+            symbol="2330",
+            strategy="buy_price_alert",
+            execution_mode="notify_only",
+            quantity_lots=1,
+            target_price_original=Decimal("600.0000"),
+            target_price_effective=Decimal("600.0000"),
+            trigger_reference_price_type="ask",
+            trading_date=date(2026, 5, 12),
+            time_in_force="day",
+            status="active",
+        )
+    )
+    db_session.flush()
+
+    db_session.add(
+        Notification(
+            id=uuid4(),
+            owner_user_id=owner,
+            trade_intent_id=legacy_id,
+            trade_intent_core_id=core_id,
+            type="price_triggered",
+            rendered_title="t",
+            rendered_body="b",
+        )
+    )
+    with pytest.raises(IntegrityError, match="triggered_notification_intent"):
+        db_session.flush()
+    db_session.rollback()

@@ -2,7 +2,8 @@
 
 Covers:
 - Startup reconcile: lifespan reads active/scheduled intents from DB and
-  subscribes their symbols on the (in-memory) quote provider.
+  subscribes their symbols on the (in-memory) quote provider. 兩軌各一案例
+  （模式丙：新軌 symbol 沒訂到 → robot #2 收不到報價 → 靜默不觸發）。
 - Cancel reconcile: `POST /trade-intents/{id}/cancel` releases the broker
   subscription when no other intent on the same symbol stays active.
 
@@ -27,8 +28,10 @@ from app.api.deps import get_active_user, get_current_user, get_idempotency_key
 from app.core.config import get_settings
 from app.core.security import RequestUser
 from app.db.models.core import Symbol, TradeIntent
+from app.db.models.trade_intent_core import TradeIntentCore, TradeIntentPriceParams
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
+from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.services.quote.in_memory import InMemoryQuoteProvider
 from tests.db_helpers import ensure_user
 
@@ -71,17 +74,23 @@ def int_engine() -> Generator[Engine]:
         command.downgrade(config, "base")
 
 
+def _wipe_intents(session: Session) -> None:
+    session.execute(delete(TradeIntent))
+    # 新軌：衛星先於核心（FK）。啟動 reconcile 掃兩張表 → 殘留任一軌都會污染訂閱集斷言。
+    session.execute(delete(TradeIntentPriceParams))
+    session.execute(delete(TradeIntentCore))
+    session.commit()
+
+
 @pytest.fixture
 def db_session(int_engine: Engine) -> Generator[Session]:
     session = Session(int_engine)
     try:
         # Each test starts with a clean intent table to make startup reconcile deterministic.
-        session.execute(delete(TradeIntent))
-        session.commit()
+        _wipe_intents(session)
         yield session
     finally:
-        session.execute(delete(TradeIntent))
-        session.commit()
+        _wipe_intents(session)
         session.close()
 
 
@@ -118,6 +127,48 @@ def test_lifespan_subscribes_active_intents_on_startup(db_session: Session) -> N
         provider = app.state.quote_provider
         assert isinstance(provider, InMemoryQuoteProvider)
         assert provider.active_subscriptions() == {"2330"}
+
+
+def _seed_core_intent(session: Session, *, owner_id: UUID, symbol: str = "2330", status: str = "active") -> UUID:
+    """新軌（trade_intent_core）建單，走 repo 以帶齊 dedup_key / 衛星列。"""
+    ensure_user(session, owner_id)
+    repo = TradeIntentCoreRepository(session)
+    intent_id = repo.create(
+        owner_user_id=owner_id,
+        symbol=symbol,
+        strategy="buy_price_alert",
+        quantity_lots=1,
+        target_price_original=Decimal("600.0000"),
+        target_price_effective=Decimal("600.0000"),
+        trigger_reference_price_type="ask",
+        trading_date=_current_trading_date(),
+        time_in_force="day",
+        execution_mode="notify_only",
+        status=status,
+    )
+    repo.commit()
+    return intent_id
+
+
+@pytest.mark.integration
+def test_lifespan_subscribes_core_track_intents_on_startup(db_session: Session) -> None:
+    """新軌單的 symbol 也要在啟動時訂到，否則 robot #2 收不到報價 → 整條新軌靜默不觸發。"""
+    _seed_core_intent(db_session, owner_id=uuid4())
+
+    app = create_app()
+    with TestClient(app):
+        provider = app.state.quote_provider
+        assert provider.active_subscriptions() == {"2330"}
+
+
+@pytest.mark.integration
+def test_lifespan_ignores_terminal_core_track_intents(db_session: Session) -> None:
+    _seed_core_intent(db_session, owner_id=uuid4(), status="cancelled")
+
+    app = create_app()
+    with TestClient(app):
+        provider = app.state.quote_provider
+        assert provider.active_subscriptions() == set()
 
 
 @pytest.mark.integration

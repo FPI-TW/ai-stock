@@ -22,10 +22,12 @@ from app.core.security_headers import SecurityHeadersMiddleware
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
+from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.services.idempotency_cleanup import IdempotencyCleanupScheduler
 from app.services.kill_switch import KillSwitchProvider
 from app.services.quote import build_quote_provider
 from app.services.quote_dispatcher import QuoteEvaluationDispatcher
+from app.services.quote_dispatcher_core import TradeIntentCoreDispatcher
 from app.services.twap_scheduler import TwapSliceScheduler
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             IntentLifecycleCommand(intent_repo, session_service).run()
             for symbol in intent_repo.active_or_scheduled_symbols():
                 provider.subscribe(symbol)
+            # 模式丙：新軌（trade_intent_core）的 symbol 也要訂閱，否則 robot #2 收不到
+            # 報價。subscribe 對重複 symbol 為 idempotent，新舊軌共用同一訂閱集。
+            for symbol in TradeIntentCoreRepository(db).active_or_scheduled_symbols():
+                provider.subscribe(symbol)
         logger.info(
             "quote provider startup reconcile complete",
             extra={"active_subscriptions": sorted(provider.active_subscriptions())},
@@ -91,6 +97,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             kill_switch=app.state.kill_switch_provider,
         )
         provider.add_quote_listener(dispatcher.dispatch)
+
+        # 模式丙 robot #2：新軌的報價→觸發 dispatcher，作為第二個 listener 並行掛上。
+        # 每筆報價兩台各掃各表（舊 trade_intents / 新 trade_intent_core），一張單只存在
+        # 一張表 → 不會重複觸發。共用 evaluator / kill switch。
+        core_dispatcher = TradeIntentCoreDispatcher(
+            session_factory=session_factory,
+            evaluator=QuoteEvaluator(session_service),
+            session_service=session_service,
+            kill_switch=app.state.kill_switch_provider,
+        )
+        provider.add_quote_listener(core_dispatcher.dispatch)
 
         if settings.twap_worker_enabled:
             scheduler = TwapSliceScheduler(

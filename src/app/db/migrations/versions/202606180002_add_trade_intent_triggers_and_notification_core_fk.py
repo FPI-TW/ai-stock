@@ -1,0 +1,121 @@
+"""add trade_intent_triggers + notifications.trade_intent_core_id (模式丙 PR2)
+
+新軌觸發下游：
+- 新建 `trade_intent_triggers`（對應 legacy trigger_events，FK→trade_intent_core），
+  委託內部稽核、隨新軌退役。
+- `notifications` 共用（收件匣跨功能）：additive 加 nullable `trade_intent_core_id`
+  FK→trade_intent_core，並改寫 `triggered_notification_intent` CHECK 成「兩個 intent
+  欄恰好一個非空（XOR）」。對舊資料 / 舊行為零影響。
+
+完全不碰 `trade_intents`。
+
+Revision ID: 202606180002
+Revises: 202606180001
+Create Date: 2026-06-18 00:02:00
+"""
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects import postgresql
+
+revision: str = "202606180002"
+down_revision: str | None = "202606180001"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+_NOTIFICATION_TRIGGER_TYPES = (
+    "'price_triggered', 'limit_order_triggered', 'trailing_stop_triggered', "
+    "'market_order_triggered', 'twap_slice', 'twap_price_followup'"
+)
+
+
+def upgrade() -> None:
+    op.create_table(
+        "trade_intent_triggers",
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("trade_intent_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("owner_user_id", postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("symbol", sa.Text(), nullable=False),
+        sa.Column("quote_snapshot", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("target_price_effective", sa.Numeric(9, 4), nullable=False),
+        sa.Column("trigger_price", sa.Numeric(9, 4), nullable=False),
+        sa.Column("trigger_reference_price_type", sa.Text(), nullable=False),
+        sa.Column("fallback_used", sa.Boolean(), server_default=sa.text("false"), nullable=False),
+        sa.Column("filled_quantity_lots", sa.Integer(), server_default=sa.text("0"), nullable=False),
+        sa.Column("baseline_at_trigger", sa.Numeric(9, 4), nullable=True),
+        sa.Column("dynamic_trigger_price_at_trigger", sa.Numeric(9, 4), nullable=True),
+        sa.Column("triggered_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        # CheckConstraint 傳裸名：ck convention 含 %(constraint_name)s token，明確給
+        # 完整名會被再套模板變雙前綴（ck_<table>_ck_<table>_...）並截斷；裸名經
+        # convention 展開後才與 model 產出的名字一致。fk/pk/uq convention 不含該
+        # token，完整名原樣使用，不受影響。
+        sa.CheckConstraint(
+            "trigger_reference_price_type IN ('ask', 'bid', 'last_fallback')",
+            name="trigger_reference_price_type",
+        ),
+        sa.CheckConstraint(
+            "((trigger_reference_price_type = 'last_fallback' AND fallback_used = true) "
+            "OR (trigger_reference_price_type IN ('ask', 'bid') AND fallback_used = false))",
+            name="fallback_consistency",
+        ),
+        sa.CheckConstraint("target_price_effective > 0", name="target_price_effective"),
+        sa.CheckConstraint("trigger_price > 0", name="trigger_price"),
+        sa.CheckConstraint("filled_quantity_lots >= 0", name="filled_quantity_lots"),
+        sa.CheckConstraint(
+            "baseline_at_trigger IS NULL OR baseline_at_trigger > 0",
+            name="baseline_at_trigger",
+        ),
+        sa.CheckConstraint(
+            "dynamic_trigger_price_at_trigger IS NULL OR dynamic_trigger_price_at_trigger > 0",
+            name="dynamic_trigger_price_at_trigger",
+        ),
+        sa.ForeignKeyConstraint(["trade_intent_id"], ["trade_intent_core.id"], name="fk_trade_intent_triggers_intent"),
+        sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], name="fk_trade_intent_triggers_owner"),
+        sa.ForeignKeyConstraint(["symbol"], ["symbols.symbol"], name="fk_trade_intent_triggers_symbol"),
+        sa.PrimaryKeyConstraint("id", name="pk_trade_intent_triggers"),
+        sa.UniqueConstraint("trade_intent_id", name="uq_trade_intent_triggers_trade_intent_id"),
+    )
+
+    # notifications 共用：additive 加欄 + 放寬 CHECK（不碰舊資料）
+    op.add_column(
+        "notifications",
+        sa.Column("trade_intent_core_id", postgresql.UUID(as_uuid=True), nullable=True),
+    )
+    op.create_foreign_key(
+        "fk_notifications_trade_intent_core_id_trade_intent_core",
+        "notifications",
+        "trade_intent_core",
+        ["trade_intent_core_id"],
+        ["id"],
+    )
+    op.create_index("ix_notifications_trade_intent_core_id", "notifications", ["trade_intent_core_id"])
+    # 傳裸名：alembic 會套命名慣例補上 ck_notifications_ 前綴（傳完整名會雙重前綴）
+    op.drop_constraint("triggered_notification_intent", "notifications", type_="check")
+    op.create_check_constraint(
+        "triggered_notification_intent",
+        "notifications",
+        f"(type NOT IN ({_NOTIFICATION_TRIGGER_TYPES})) "
+        # XOR：一則觸發通知恰好屬於一軌（舊 trade_intents 或新 trade_intent_core），
+        # 兩欄同時非空＝來源歸屬模糊，DB 層直接擋。
+        "OR num_nonnulls(trade_intent_id, trade_intent_core_id) = 1",
+    )
+
+
+def downgrade() -> None:
+    # 新軌通知（只有 trade_intent_core_id）隨新軌退役：不先刪，下面還原的舊 CHECK
+    # （觸發型必須 trade_intent_id 非空）會被既有資料直接打爆。與整表 drop
+    # trade_intent_triggers 同一邏輯——downgrade 即放棄新軌資料。
+    op.execute("DELETE FROM notifications WHERE trade_intent_core_id IS NOT NULL")
+    # 傳裸名：alembic 會套命名慣例補上 ck_notifications_ 前綴（傳完整名會雙重前綴）
+    op.drop_constraint("triggered_notification_intent", "notifications", type_="check")
+    op.create_check_constraint(
+        "triggered_notification_intent",
+        "notifications",
+        f"(type NOT IN ({_NOTIFICATION_TRIGGER_TYPES})) OR (trade_intent_id IS NOT NULL)",
+    )
+    op.drop_constraint("fk_notifications_trade_intent_core_id_trade_intent_core", "notifications", type_="foreignkey")
+    op.drop_column("notifications", "trade_intent_core_id")
+    op.drop_table("trade_intent_triggers")

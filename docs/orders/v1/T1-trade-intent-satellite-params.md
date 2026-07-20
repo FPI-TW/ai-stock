@@ -184,6 +184,11 @@ dispatcher 的跨策略熱查詢（`system_list_active_*`、`list_by_owner`、`c
 | `system_expire_day_intents_through` | 新生命週期排程（**接在 TWAP 增量後**） | 到期要連動取消 TWAP slices，須等新 slices 表，否則是半成品 | `commands/intent_lifecycle.py:25` |
 | `cancel_active_for_owner` | 帳號停用連動新表 | caller＝改過的 account command，屬跨軌整合、尚未決定 | `commands/account.py:258` |
 
+### PR3 cutover checklist 追加（來自 #57 review，2026-07-17）
+
+- [ ] **create endpoint 寫新表後要同步 `provider.subscribe(symbol)`**：新軌目前只有 lifespan 啟動 reconcile 訂閱（`main.py`）；舊軌 create 路徑有做盤中訂閱、新軌沒有 → cutover 後盤中新建的單在下次重啟前收不到報價、robot #2 靜默不觸發。PR2 無 writer 故現在打不到。
+- [x] **robot #2 查詢索引已驗證，無需動作**：`system_list_active_by_symbols`（`symbol IN (...) AND status='active'`）被 `ix_trade_intent_core_symbol_status_trading_date` 首欄 symbol 涵蓋，不會全表掃。
+
 ### TWAP 增量（獨立）
 
 - `create_twap` + 新 slices 表（FK→`trade_intent_core.id`）+ slice 連動取消；完成後才接 `system_expire_day_intents_through`。

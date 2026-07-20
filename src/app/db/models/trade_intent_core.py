@@ -11,9 +11,11 @@ trailing→`mode:value`、twap→position_side、market→空字串），讓「�
 
 from datetime import date, datetime, time
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -23,8 +25,10 @@ from sqlalchemy import (
     Numeric,
     Text,
     Time,
+    func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -225,3 +229,62 @@ class TradeIntentTwapParams(Base):
     twap_materialized_slice_count: Mapped[int] = mapped_column(Integer, nullable=False)
 
     intent: Mapped[TradeIntentCore] = relationship(back_populates="twap_params")
+
+
+class TradeIntentTrigger(Base):
+    """新軌觸發事件（對應 legacy `trigger_events`，FK→trade_intent_core）。
+
+    委託內部的觸發稽核，屬新軌、隨新軌一起退役（與 `notifications` 不同——後者是
+    跨功能的使用者收件匣，共用一張表，見 core.Notification 的 trade_intent_core_id）。
+    表名用 `trade_intent_triggers`（非 `..._core_trigger_events`）以免衍生約束名超過
+    PG 63 字上限。
+    """
+
+    __tablename__ = "trade_intent_triggers"
+    __table_args__ = (
+        CheckConstraint(
+            "trigger_reference_price_type IN ('ask', 'bid', 'last_fallback')",
+            name="trigger_reference_price_type",
+        ),
+        CheckConstraint(
+            "((trigger_reference_price_type = 'last_fallback' AND fallback_used = true) "
+            "OR (trigger_reference_price_type IN ('ask', 'bid') AND fallback_used = false))",
+            name="fallback_consistency",
+        ),
+        CheckConstraint("target_price_effective > 0", name="target_price_effective"),
+        CheckConstraint("trigger_price > 0", name="trigger_price"),
+        CheckConstraint("filled_quantity_lots >= 0", name="filled_quantity_lots"),
+        CheckConstraint("baseline_at_trigger IS NULL OR baseline_at_trigger > 0", name="baseline_at_trigger"),
+        CheckConstraint(
+            "dynamic_trigger_price_at_trigger IS NULL OR dynamic_trigger_price_at_trigger > 0",
+            name="dynamic_trigger_price_at_trigger",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    trade_intent_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("trade_intent_core.id", name="fk_trade_intent_triggers_intent"),
+        nullable=False,
+        unique=True,
+    )
+    owner_user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", name="fk_trade_intent_triggers_owner"),
+        nullable=False,
+    )
+    symbol: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("symbols.symbol", name="fk_trade_intent_triggers_symbol"),
+        nullable=False,
+    )
+    quote_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    target_price_effective: Mapped[Decimal] = mapped_column(Numeric(9, 4), nullable=False)
+    trigger_price: Mapped[Decimal] = mapped_column(Numeric(9, 4), nullable=False)
+    trigger_reference_price_type: Mapped[str] = mapped_column(Text, nullable=False)
+    fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    filled_quantity_lots: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    baseline_at_trigger: Mapped[Decimal | None] = mapped_column(Numeric(9, 4), nullable=True)
+    dynamic_trigger_price_at_trigger: Mapped[Decimal | None] = mapped_column(Numeric(9, 4), nullable=True)
+    triggered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
