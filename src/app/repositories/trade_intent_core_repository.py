@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import CursorResult, and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, SessionTransaction, joinedload
 from sqlalchemy.sql import Select
@@ -26,9 +26,11 @@ from app.domain.price import SecurityType, format_price_str
 from app.domain.trade_intent import (
     CANCELLABLE_STATUSES,
     MARKET_ORDER_STRATEGIES,
+    TERMINAL_STATUSES,
     CancelNotAllowedError,
     DuplicateIntentError,
     IntentNotFoundError,
+    InvalidCursorError,
     TradeIntentData,
 )
 from app.domain.twap import TWAP_STRATEGY
@@ -379,3 +381,148 @@ class TradeIntentCoreRepository:
             )
         )
         return int(self._db.execute(stmt).scalar_one())
+
+    def count_active_or_scheduled_for_symbol(self, symbol: str) -> int:
+        """跨 owner 統計某 symbol 的非終態委託——訂閱是 broker-wide，退訂只在**沒有任何**
+        使用者還要這檔時才能發生（取消後的 reconcile 用）。"""
+
+        stmt = (
+            select(func.count())
+            .select_from(TradeIntentCore)
+            .where(
+                TradeIntentCore.symbol == symbol,
+                TradeIntentCore.status.in_(CANCELLABLE_STATUSES),
+            )
+        )
+        return int(self._db.execute(stmt).scalar_one())
+
+    def list_by_owner(
+        self,
+        owner_user_id: UUID,
+        statuses: list[str] | None,
+        trading_date: date | None,
+        cursor: str | None,
+        page_size: int,
+    ) -> tuple[list[TradeIntentData], str | None]:
+        """擁有者清單 + cursor 分頁（與 legacy `IntentRepository.list_by_owner` 等價）。
+
+        排序規則沿用舊軌：只查終態時以 `updated_at desc` 為主（最近變動優先），否則以
+        `trading_date asc, created_at desc` 排。cursor 是上一頁最後一筆的 id，anchor 讀回
+        它的排序欄再組 keyset 條件——排序欄非唯一，故一律以 `id` 收尾打破平手。
+        """
+
+        effective_statuses = set(statuses) if statuses else None
+        is_terminal_only = effective_statuses is not None and effective_statuses.issubset(TERMINAL_STATUSES)
+
+        stmt = _core_with_symbol_type().where(TradeIntentCore.owner_user_id == owner_user_id)
+        if statuses:
+            stmt = stmt.where(TradeIntentCore.status.in_(statuses))
+        if trading_date is not None:
+            stmt = stmt.where(TradeIntentCore.trading_date == trading_date)
+
+        if is_terminal_only:
+            stmt = stmt.order_by(TradeIntentCore.updated_at.desc(), TradeIntentCore.id.asc())
+        else:
+            stmt = stmt.order_by(
+                TradeIntentCore.trading_date.asc(),
+                TradeIntentCore.created_at.desc(),
+                TradeIntentCore.id.asc(),
+            )
+
+        if cursor:
+            cursor_id = UUID(cursor)  # 格式已由 route 層驗過
+            anchor = self._db.execute(
+                select(TradeIntentCore).where(
+                    TradeIntentCore.id == cursor_id,
+                    TradeIntentCore.owner_user_id == owner_user_id,
+                )
+            ).scalar_one_or_none()
+            if anchor is None:
+                raise InvalidCursorError(cursor_id)
+            if is_terminal_only:
+                stmt = stmt.where(
+                    or_(
+                        TradeIntentCore.updated_at < anchor.updated_at,
+                        and_(TradeIntentCore.updated_at == anchor.updated_at, TradeIntentCore.id > anchor.id),
+                    )
+                )
+            else:
+                stmt = stmt.where(
+                    or_(
+                        TradeIntentCore.trading_date > anchor.trading_date,
+                        and_(
+                            TradeIntentCore.trading_date == anchor.trading_date,
+                            TradeIntentCore.created_at < anchor.created_at,
+                        ),
+                        and_(
+                            TradeIntentCore.trading_date == anchor.trading_date,
+                            TradeIntentCore.created_at == anchor.created_at,
+                            TradeIntentCore.id > anchor.id,
+                        ),
+                    )
+                )
+
+        rows = list(self._db.execute(stmt.limit(page_size + 1)).all())
+        has_more = len(rows) > page_size
+        page = rows[:page_size]
+
+        next_cursor = str(page[-1][0].id) if has_more and page else None
+        return [_to_domain(core, SecurityType(instrument_type)) for core, instrument_type in page], next_cursor
+
+    # ------------------------------------------------------------------
+    # lifecycle / 帳號停用連動（caller：IntentLifecycleCommand、DisableUserCommand）
+    # ------------------------------------------------------------------
+
+    def system_activate_scheduled_day_intents(self, trading_date: date, now: datetime) -> int:
+        """把當日 scheduled 單轉入 active 監控。不 commit。"""
+
+        result = cast(
+            CursorResult[Any],
+            self._db.execute(
+                update(TradeIntentCore)
+                .where(
+                    TradeIntentCore.status == "scheduled",
+                    TradeIntentCore.trading_date == trading_date,
+                )
+                .values(status="active", updated_at=now)
+            ),
+        )
+        return int(result.rowcount or 0)
+
+    def system_expire_day_intents_through(self, cutoff_date: date, now: datetime) -> int:
+        """讓已不可能再觸發的當沖單到期。不 commit。
+
+        ponytail: 舊軌在此會連動取消 pending 的 TWAP slices；新軌 slices 表要到 PR4 才存在，
+        且 PR3 期間新表不可能有 TWAP 單（`create()` 明確擋掉），故此處無 slice 連動。
+        PR4 建好新 slices 表時要補回——工單附錄已把本方法標成「接在 TWAP 增量後」。
+        """
+
+        result = cast(
+            CursorResult[Any],
+            self._db.execute(
+                update(TradeIntentCore)
+                .where(
+                    TradeIntentCore.status.in_(CANCELLABLE_STATUSES),
+                    TradeIntentCore.trading_date <= cutoff_date,
+                )
+                .values(status="expired", updated_at=now)
+            ),
+        )
+        return int(result.rowcount or 0)
+
+    def cancel_active_for_owner(self, owner_user_id: UUID, *, status: str, now: datetime) -> int:
+        """帳號停用連動：整批取消該擁有者的非終態委託，回傳筆數。不 commit。"""
+
+        result = cast(
+            CursorResult[Any],
+            self._db.execute(
+                update(TradeIntentCore)
+                .where(
+                    TradeIntentCore.owner_user_id == owner_user_id,
+                    TradeIntentCore.status.in_(CANCELLABLE_STATUSES),
+                )
+                .values(status=status, cancelled_at=now, updated_at=now),
+                execution_options={"synchronize_session": False},
+            ),
+        )
+        return int(result.rowcount or 0)

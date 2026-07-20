@@ -78,7 +78,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 provider.subscribe(symbol)
             # 模式丙：新軌（trade_intent_core）的 symbol 也要訂閱，否則 robot #2 收不到
             # 報價。subscribe 對重複 symbol 為 idempotent，新舊軌共用同一訂閱集。
-            for symbol in TradeIntentCoreRepository(db).active_or_scheduled_symbols():
+            core_repo = TradeIntentCoreRepository(db)
+            IntentLifecycleCommand(core_repo, session_service).run()
+            for symbol in core_repo.active_or_scheduled_symbols():
                 provider.subscribe(symbol)
         logger.info(
             "quote provider startup reconcile complete",

@@ -1,7 +1,8 @@
 """Unit tests for the minimal new-slice CreateTradeIntentCommand (commands/trade_intent_core).
 
 只驗本 command 自己的職責：§15 限額邊界、策略驗證、以及用正確參數呼叫新 repo。
-觸發 / 訂閱不在最小版範圍（見 T1 工單附錄），故不需要 quote_provider / evaluator。
+建單即觸發（PR3 補上）在此一律走「取不到報價」分支短路掉——那條路徑由
+test_create_intent_core_inline_trigger.py 專門覆蓋。
 """
 
 from datetime import UTC, datetime
@@ -22,11 +23,16 @@ MONDAY = datetime(2026, 5, 11, 2, 0, tzinfo=UTC)
 def _command(repo: MagicMock, *, limits: IntentLimits | None) -> CreateTradeIntentCommand:
     symbol_service = MagicMock()
     symbol_service.get_tradable_symbol.return_value = MagicMock(instrument_type="stock")
+    quote_provider = MagicMock()
+    quote_provider.get_quotes.return_value = []  # 無報價 → inline 觸發短路，本檔只看建單本身
     return CreateTradeIntentCommand(
         symbol_service,
         TradingSessionService(clock=lambda: MONDAY),
         repo,
+        quote_provider,
+        MagicMock(),  # evaluator（因無報價而不會被呼叫）
         MagicMock(),  # db
+        None,  # kill_switch
         limits,
     )
 

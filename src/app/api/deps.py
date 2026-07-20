@@ -19,7 +19,9 @@ from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.commands.kill_switch import SetKillSwitchCommand
 from app.commands.notification import MarkNotificationReadCommand
 from app.commands.password_reset import PasswordResetConfirmCommand, PasswordResetRequestCommand
-from app.commands.trade_intent import CancelTradeIntentCommand, CreateTradeIntentCommand, IntentLimits
+from app.commands.trade_intent import IntentLimits
+from app.commands.trade_intent_core import CancelTradeIntentCommand, CreateTradeIntentCommand
+from app.commands.trade_intent_core import IntentLimits as CoreIntentLimits
 from app.commands.trigger_intent import TriggerIntentCommand
 from app.commands.twap import TwapConfirmCommand, TwapPlanCommand, TwapSliceWorkerCommand
 from app.commands.two_factor import SetupTwoFactorCommand, VerifyTwoFactorCommand
@@ -40,6 +42,7 @@ from app.repositories.password_reset_repository import PasswordResetRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.repositories.system_flag_repository import SystemFlagRepository
+from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.repositories.user_repository import UserRepository
 from app.services.audit import AuditEventWriter
 from app.services.idempotency import IdempotencyManager
@@ -169,6 +172,13 @@ def get_intent_repository(db: DatabaseDep) -> IntentRepository:
 IntentRepoDep = Annotated[IntentRepository, Depends(get_intent_repository)]
 
 
+def get_trade_intent_core_repository(db: DatabaseDep) -> TradeIntentCoreRepository:
+    return TradeIntentCoreRepository(db)
+
+
+TradeIntentCoreRepoDep = Annotated[TradeIntentCoreRepository, Depends(get_trade_intent_core_repository)]
+
+
 def get_trading_session_service() -> TradingSessionService:
     return TradingSessionService()
 
@@ -177,7 +187,7 @@ TradingSessionServiceDep = Annotated[TradingSessionService, Depends(get_trading_
 
 
 def get_intent_lifecycle_command(
-    intent_repo: IntentRepoDep,
+    intent_repo: TradeIntentCoreRepoDep,
     session_service: TradingSessionServiceDep,
 ) -> IntentLifecycleCommand:
     return IntentLifecycleCommand(intent_repo, session_service)
@@ -276,22 +286,33 @@ QuoteEvaluatorDep = Annotated[QuoteEvaluator, Depends(get_quote_evaluator)]
 
 def get_intent_limits(settings: SettingsDep) -> IntentLimits:
     """§15 creation caps from env defaults. P5 overrides this dependency to source
-    admin-tunable limits without touching the command."""
+    admin-tunable limits without touching the command.
+
+    Legacy 型別，現在只剩 TWAP（舊軌）在用；新軌走 `get_core_intent_limits`。
+    兩份 dataclass 內容相同但分屬兩軌（新軌不 import 舊軌），舊軌退役時本函式一併刪。
+    """
     return IntentLimits(per_user=settings.intent_limit_per_user, per_symbol=settings.intent_limit_per_symbol)
 
 
 IntentLimitsDep = Annotated[IntentLimits, Depends(get_intent_limits)]
 
 
+def get_core_intent_limits(settings: SettingsDep) -> CoreIntentLimits:
+    return CoreIntentLimits(per_user=settings.intent_limit_per_user, per_symbol=settings.intent_limit_per_symbol)
+
+
+CoreIntentLimitsDep = Annotated[CoreIntentLimits, Depends(get_core_intent_limits)]
+
+
 def get_create_trade_intent_command(
     symbol_service: SymbolServiceDep,
     session_service: TradingSessionServiceDep,
-    intent_repo: IntentRepoDep,
+    intent_repo: TradeIntentCoreRepoDep,
     quote_provider: QuoteProviderDep,
     evaluator: QuoteEvaluatorDep,
     db: DatabaseDep,
     kill_switch: KillSwitchProviderDep,
-    limits: IntentLimitsDep,
+    limits: CoreIntentLimitsDep,
 ) -> CreateTradeIntentCommand:
     return CreateTradeIntentCommand(
         symbol_service,
@@ -309,7 +330,7 @@ CreateTradeIntentCommandDep = Annotated[CreateTradeIntentCommand, Depends(get_cr
 
 
 def get_cancel_trade_intent_command(
-    intent_repo: IntentRepoDep,
+    intent_repo: TradeIntentCoreRepoDep,
     quote_provider: QuoteProviderDep,
     db: DatabaseDep,
 ) -> CancelTradeIntentCommand:
@@ -555,10 +576,11 @@ def get_disable_user_command(
     db: DatabaseDep,
     users: UserRepoDep,
     intents: IntentRepoDep,
+    core_intents: TradeIntentCoreRepoDep,
     refresh_tokens: RefreshTokenRepoDep,
     audit: AuditWriterDep,
 ) -> DisableUserCommand:
-    return DisableUserCommand(db, users, intents, refresh_tokens, audit)
+    return DisableUserCommand(db, users, intents, core_intents, refresh_tokens, audit)
 
 
 DisableUserCommandDep = Annotated[DisableUserCommand, Depends(get_disable_user_command)]

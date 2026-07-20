@@ -36,6 +36,7 @@ from app.domain.auth import (
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.invitation_repository import InvitationRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
+from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.repositories.user_repository import UserRepository
 from app.services.audit import AuditEventWriter
 from app.services.mailer import Mailer, MailMessage
@@ -247,12 +248,14 @@ class DisableUserCommand:
         db: Session,
         users: UserRepository,
         intents: IntentRepository,
+        core_intents: TradeIntentCoreRepository,
         refresh_tokens: RefreshTokenRepository,
         audit: AuditEventWriter,
     ) -> None:
         self._db = db
         self._users = users
         self._intents = intents
+        self._core_intents = core_intents
         self._refresh = refresh_tokens
         self._audit = audit
 
@@ -263,9 +266,11 @@ class DisableUserCommand:
                 raise UserNotFoundError()
 
             self._users.disable(user.id, now=inp.now)
+            # 兩軌都要取消：cutover 後新單落 trade_intent_core，但舊表仍是 TWAP 的唯一
+            # 寫入路徑（PR4 才切）——只取消一邊，被停用帳號的殘單會繼續觸發、繼續發通知。
             cancelled = self._intents.cancel_active_for_owner(
                 user.id, status=ACCOUNT_DISABLED_INTENT_STATUS, now=inp.now
-            )
+            ) + self._core_intents.cancel_active_for_owner(user.id, status=ACCOUNT_DISABLED_INTENT_STATUS, now=inp.now)
             revoked = self._refresh.revoke_all_active_for_user(user.id, reason="account_disabled", now=inp.now)
             self._audit.write(
                 event_type="account_disabled",

@@ -24,9 +24,9 @@ from app.api.deps import (
     get_current_user,
     get_idempotency_key,
     get_idempotency_manager,
-    get_intent_repository,
+    get_trade_intent_core_repository,
 )
-from app.commands.trade_intent import CreateTradeIntentInput
+from app.commands.trade_intent_core import CreateTradeIntentInput
 from app.core.security import RequestUser
 from app.domain.trade_intent import TradeIntentData
 from app.main import create_app
@@ -82,7 +82,7 @@ def client(mock_create_command: MagicMock) -> Generator[TestClient]:
     app.dependency_overrides[enforce_mutation_rate_limit] = lambda: None
     app.dependency_overrides[get_idempotency_key] = lambda: "test-idempotency-key"
     app.dependency_overrides[get_idempotency_manager] = lambda: _PassthroughIdempotency()
-    app.dependency_overrides[get_intent_repository] = lambda: MagicMock()
+    app.dependency_overrides[get_trade_intent_core_repository] = lambda: MagicMock()
     app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")
     app.dependency_overrides[get_active_user] = lambda: RequestUser(user_id=_OWNER_ID, role="user")
     yield TestClient(app)

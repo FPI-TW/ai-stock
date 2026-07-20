@@ -186,8 +186,23 @@ dispatcher 的跨策略熱查詢（`system_list_active_*`、`list_by_owner`、`c
 
 ### PR3 cutover checklist 追加（來自 #57 review，2026-07-17）
 
-- [ ] **create endpoint 寫新表後要同步 `provider.subscribe(symbol)`**：新軌目前只有 lifespan 啟動 reconcile 訂閱（`main.py`）；舊軌 create 路徑有做盤中訂閱、新軌沒有 → cutover 後盤中新建的單在下次重啟前收不到報價、robot #2 靜默不觸發。PR2 無 writer 故現在打不到。
+- [x] **create endpoint 寫新表後要同步 `provider.subscribe(symbol)`**（PR3 已補：新軌 create
+  在 commit 前呼叫 `reconcile_on_create`，訂閱失敗連同委託回滾；cancel 也補上 Phase B 退訂）：新軌目前只有 lifespan 啟動 reconcile 訂閱（`main.py`）；舊軌 create 路徑有做盤中訂閱、新軌沒有 → cutover 後盤中新建的單在下次重啟前收不到報價、robot #2 靜默不觸發。PR2 無 writer 故現在打不到。
 - [x] **robot #2 查詢索引已驗證，無需動作**：`system_list_active_by_symbols`（`symbol IN (...) AND status='active'`）被 `ix_trade_intent_core_symbol_status_trading_date` 首欄 symbol 涵蓋，不會全表掃。
+
+### PR3 已知空窗：TWAP（2026-07-20 與使用者確認）
+
+PR3 之後 `twap/confirm` 仍寫舊表，但清單 / 詳情 / 取消已只查新表 → **TWAP 單在 PR3~PR4
+之間看不到也取消不了**。使用者確認目前無人使用任何功能（含 TWAP），故：
+
+- 不做 endpoint 停用、不做雙軌讀取分流（都是用完即丟的複雜度）。
+- 舊表**不 TRUNCATE**：舊軌仍是 TWAP 的唯一寫入路徑，清庫留到 PR4 之後的退役一起做。
+- PR4 把 TWAP 接到新軌時，這個空窗自然消失。
+
+PR3 另補回的舊軌方法（附錄對應表可劃掉）：`list_by_owner`、
+`count_active_or_scheduled_for_symbol`、`system_activate_scheduled_day_intents`、
+`cancel_active_for_owner`。`system_expire_day_intents_through` 已補但**不含 TWAP slice
+連動**——新 slices 表要到 PR4 才存在，屆時須回頭補上。
 
 ### TWAP 增量（獨立）
 

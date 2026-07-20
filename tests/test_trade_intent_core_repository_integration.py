@@ -24,7 +24,12 @@ from app.db.models.trade_intent_core import (
     TradeIntentTwapParams,
 )
 from app.domain.price import SecurityType
-from app.domain.trade_intent import CancelNotAllowedError, DuplicateIntentError, IntentNotFoundError
+from app.domain.trade_intent import (
+    CancelNotAllowedError,
+    DuplicateIntentError,
+    IntentNotFoundError,
+    InvalidCursorError,
+)
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from tests.db_helpers import ensure_user
 
@@ -336,3 +341,116 @@ def test_active_or_scheduled_symbols(repo: TradeIntentCoreRepository) -> None:
 
     # 只回非終態（active/scheduled）的 distinct symbol；已取消的不算
     assert repo.active_or_scheduled_symbols() == {"2330", "2454"}
+
+
+# ------------------------------------------------------------------
+# T1 PR3 cutover 補上的方法
+# ------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_count_active_or_scheduled_for_symbol_is_owner_agnostic(repo: TradeIntentCoreRepository) -> None:
+    """退訂決策看的是「還有沒有人要這檔」，不是「這個人還要不要」。"""
+
+    owner = uuid4()
+    other = uuid4()
+    _create_price_alert(repo, owner_user_id=owner, target_price="600.0000")
+    other_intent = _create_price_alert(repo, owner_user_id=other, target_price="620.0000")
+
+    assert repo.count_active_or_scheduled_for_symbol("2330") == 2
+
+    repo.cancel(other_intent, other)
+    repo.commit()
+    assert repo.count_active_or_scheduled_for_symbol("2330") == 1
+
+
+@pytest.mark.integration
+def test_list_by_owner_scopes_to_owner_and_paginates(repo: TradeIntentCoreRepository) -> None:
+    owner = uuid4()
+    other = uuid4()
+    for price in ("600.0000", "620.0000", "640.0000"):
+        _create_price_alert(repo, owner_user_id=owner, target_price=price)
+    _create_price_alert(repo, owner_user_id=other, target_price="600.0000")
+
+    page1, cursor = repo.list_by_owner(owner, statuses=None, trading_date=None, cursor=None, page_size=2)
+    assert len(page1) == 2
+    assert cursor is not None
+    # 衛星參數要跟著組回來，否則清單的 targetPrice 會整排是 null
+    assert all(item.target_price_effective is not None for item in page1)
+
+    page2, cursor2 = repo.list_by_owner(owner, statuses=None, trading_date=None, cursor=cursor, page_size=2)
+    assert len(page2) == 1
+    assert cursor2 is None
+    ids = {item.id for item in page1 + page2}
+    assert len(ids) == 3  # 三筆不重不漏，且不含 other 的單
+
+
+@pytest.mark.integration
+def test_list_by_owner_filters_by_status_and_trading_date(repo: TradeIntentCoreRepository) -> None:
+    owner = uuid4()
+    active_id = _create_price_alert(repo, owner_user_id=owner, target_price="600.0000")
+    cancelled_id = _create_price_alert(repo, owner_user_id=owner, target_price="620.0000")
+    repo.cancel(cancelled_id, owner)
+    repo.commit()
+    other_day = _create_price_alert(repo, owner_user_id=owner, target_price="640.0000", trading_date=date(2026, 5, 13))
+
+    active_only, _ = repo.list_by_owner(owner, statuses=["active"], trading_date=None, cursor=None, page_size=50)
+    assert {i.id for i in active_only} == {active_id, other_day}
+
+    # 純終態查詢走另一組排序（updated_at desc），確認它也能正常回列
+    terminal_only, _ = repo.list_by_owner(owner, statuses=["cancelled"], trading_date=None, cursor=None, page_size=50)
+    assert [i.id for i in terminal_only] == [cancelled_id]
+
+    by_day, _ = repo.list_by_owner(owner, statuses=None, trading_date=date(2026, 5, 13), cursor=None, page_size=50)
+    assert [i.id for i in by_day] == [other_day]
+
+
+@pytest.mark.integration
+def test_list_by_owner_rejects_foreign_cursor(repo: TradeIntentCoreRepository) -> None:
+    owner = uuid4()
+    other = uuid4()
+    _create_price_alert(repo, owner_user_id=owner, target_price="600.0000")
+    foreign = _create_price_alert(repo, owner_user_id=other, target_price="600.0000")
+
+    with pytest.raises(InvalidCursorError):
+        repo.list_by_owner(owner, statuses=None, trading_date=None, cursor=str(foreign), page_size=50)
+
+
+@pytest.mark.integration
+def test_lifecycle_activates_scheduled_and_expires_past_days(repo: TradeIntentCoreRepository) -> None:
+    owner = uuid4()
+    now = datetime(2026, 5, 12, 2, 0, tzinfo=UTC)
+    scheduled_id = _create_price_alert(
+        repo, owner_user_id=owner, target_price="600.0000", trading_date=date(2026, 5, 12), status="scheduled"
+    )
+    stale_id = _create_price_alert(repo, owner_user_id=owner, target_price="620.0000", trading_date=date(2026, 5, 11))
+
+    assert repo.system_activate_scheduled_day_intents(date(2026, 5, 12), now) == 1
+    repo.commit()
+    assert repo.find_by_id(scheduled_id, owner).status == "active"
+
+    assert repo.system_expire_day_intents_through(date(2026, 5, 11), now) == 1
+    repo.commit()
+    assert repo.find_by_id(stale_id, owner).status == "expired"
+    # 當日單不該被掃到
+    assert repo.find_by_id(scheduled_id, owner).status == "active"
+
+
+@pytest.mark.integration
+def test_cancel_active_for_owner_only_touches_that_owner(repo: TradeIntentCoreRepository) -> None:
+    owner = uuid4()
+    other = uuid4()
+    now = datetime(2026, 5, 12, 2, 0, tzinfo=UTC)
+    mine = _create_price_alert(repo, owner_user_id=owner, target_price="600.0000")
+    already_cancelled = _create_price_alert(repo, owner_user_id=owner, target_price="620.0000")
+    repo.cancel(already_cancelled, owner)
+    repo.commit()
+    theirs = _create_price_alert(repo, owner_user_id=other, target_price="600.0000")
+
+    # 已終態的不再重算，故只有 1 筆
+    assert repo.cancel_active_for_owner(owner, status="cancelled_by_account_disabled", now=now) == 1
+    repo.commit()
+
+    assert repo.find_by_id(mine, owner).status == "cancelled_by_account_disabled"
+    assert repo.find_by_id(already_cancelled, owner).status == "cancelled"
+    assert repo.find_by_id(theirs, other).status == "active"

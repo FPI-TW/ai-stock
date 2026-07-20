@@ -18,7 +18,7 @@ caller commit 前就送出。若 caller 把多筆觸發批次成單一 commit、
 的既有特性；長線解法是改 outbox（交易內寫 row、commit 後才送）。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, cast
@@ -31,8 +31,10 @@ from sqlalchemy.orm import Session
 
 from app.db.models.core import Notification as NotificationRow
 from app.db.models.trade_intent_core import TradeIntentCore, TradeIntentTrigger
+from app.domain.quote_evaluation import EvaluationResult
 from app.domain.trade_intent import MARKET_ORDER_STRATEGIES, TradeIntentData
 from app.domain.trigger_event import DuplicateTriggerError, TriggerError
+from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.services.notification_template import (
     render_limit_order_triggered,
     render_market_order_triggered,
@@ -196,3 +198,31 @@ def persist_core_trigger(
         raise
     dispatch_notification_to_telegram(notification_row)
     return trigger_row, notification_row
+
+
+def apply_trailing_baseline_update(
+    repo: TradeIntentCoreRepository,
+    intent: TradeIntentData,
+    result: EvaluationResult,
+) -> TradeIntentData:
+    """把 evaluator 算出的新 trailing baseline 寫回 DB，並回傳 rebind 後的 intent。
+
+    寫回與 rebind **必須成對**：同一報價可能既抬 baseline 又觸發（last 創高 → 新 dynamic，
+    bid 已在其下）。`persist_core_trigger` 讀的是傳進去的 `intent`，只寫 DB 不換掉手上的
+    值，稽核/通知就會記到舊 baseline；而 baseline 初始為 NULL 的單首 tick 就觸發時更會直接
+    RuntimeError。舊軌靠 stage 重新 SELECT 讀回，新軌傳攤平 data → 在此接回。
+    （dispatcher 與建單即觸發兩條路徑共用，避免其中一條漏掉 rebind。）
+    """
+
+    repo.system_update_trailing_baseline(
+        intent.id,
+        result.baseline,
+        result.dynamic_trigger_price,
+        result.baseline_updated_at,
+    )
+    return replace(
+        intent,
+        baseline=result.baseline,
+        dynamic_trigger_price=result.dynamic_trigger_price,
+        baseline_updated_at=result.baseline_updated_at,
+    )

@@ -20,14 +20,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.api.deps import (
     enforce_mutation_rate_limit,
     get_active_user,
+    get_core_intent_limits,
     get_current_user,
     get_db,
     get_idempotency_key,
     get_idempotency_manager,
-    get_intent_limits,
-    get_intent_repository,
     get_quote_provider,
     get_symbol_service,
+    get_trade_intent_core_repository,
 )
 from app.core.security import RequestUser
 from app.domain.trade_intent import TradeIntentData
@@ -108,11 +108,11 @@ def client(
     app = create_app()
     app.dependency_overrides[get_quote_provider] = lambda: shioaji_provider
     app.dependency_overrides[get_symbol_service] = lambda: mock_symbol_service
-    app.dependency_overrides[get_intent_repository] = lambda: mock_intent_repo
+    app.dependency_overrides[get_trade_intent_core_repository] = lambda: mock_intent_repo
     app.dependency_overrides[get_db] = lambda: MagicMock()
     # mock_intent_repo returns MagicMocks from the §15 count queries → disable limit
     # enforcement here (this suite exercises quote reconcile, not creation caps).
-    app.dependency_overrides[get_intent_limits] = lambda: None
+    app.dependency_overrides[get_core_intent_limits] = lambda: None
     app.dependency_overrides[enforce_mutation_rate_limit] = lambda: None
     app.dependency_overrides[get_idempotency_key] = lambda: "test-idempotency-key"
     app.dependency_overrides[get_idempotency_manager] = lambda: _PassthroughIdempotency()

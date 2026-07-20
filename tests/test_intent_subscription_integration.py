@@ -184,8 +184,9 @@ def test_lifespan_ignores_terminal_intents(db_session: Session) -> None:
 
 @pytest.mark.integration
 def test_cancel_releases_subscription_when_no_peers_remain(db_session: Session) -> None:
+    # T1 cutover 後 cancel endpoint 讀新軌，故單子種在 trade_intent_core
     owner = uuid4()
-    intent_id = _seed_intent(db_session, owner_id=owner)
+    intent_id = _seed_core_intent(db_session, owner_id=owner)
 
     app = create_app()
     principal = RequestUser(user_id=owner, role="local")
@@ -206,8 +207,8 @@ def test_cancel_releases_subscription_when_no_peers_remain(db_session: Session) 
 def test_cancel_keeps_subscription_when_other_intent_still_active(db_session: Session) -> None:
     owner_a = uuid4()
     owner_b = uuid4()
-    intent_a = _seed_intent(db_session, owner_id=owner_a)
-    _seed_intent(db_session, owner_id=owner_b)  # peer intent on the same symbol
+    intent_a = _seed_core_intent(db_session, owner_id=owner_a)
+    _seed_core_intent(db_session, owner_id=owner_b)  # peer intent on the same symbol
 
     app = create_app()
     principal = RequestUser(user_id=owner_a, role="local")
