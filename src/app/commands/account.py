@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from argon2 import PasswordHasher
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.commands.auth import IssuedSession, issue_session
@@ -43,6 +44,17 @@ logger = logging.getLogger(__name__)
 
 INVITATION_TTL = timedelta(hours=24)
 ACCOUNT_DISABLED_INTENT_STATUS = "cancelled_by_account_disabled"
+
+
+def _is_email_unique_violation(exc: IntegrityError) -> bool:
+    """The `get_by_email` pre-check is a fast path, not a lock: two concurrent creates
+    can both pass it, and the loser hits the `uq_users_email` unique index at flush.
+    Recognise exactly that constraint so the race resolves to a clean 409 instead of a
+    500, without swallowing other integrity errors."""
+    diag = getattr(exc.orig, "diag", None)
+    return getattr(diag, "constraint_name", None) == "uq_users_email"
+
+
 # Invitation resend throttle: 3 per hour per invited user.
 _RESEND_CAPACITY = 3.0
 _RESEND_REFILL_PER_SECOND = 3.0 / 3600.0
@@ -161,6 +173,11 @@ class CreateUserCommand:
             return CreatedUser(user_id=user_id)
         except (AuthError, AccountError):
             raise
+        except IntegrityError as exc:
+            self._db.rollback()
+            if _is_email_unique_violation(exc):
+                raise EmailAlreadyExistsError() from exc
+            raise
         except Exception:
             self._db.rollback()
             raise
@@ -207,6 +224,11 @@ class ProvisionUserCommand:
             self._db.commit()
             return CreatedUser(user_id=user_id)
         except (AuthError, AccountError):
+            raise
+        except IntegrityError as exc:
+            self._db.rollback()
+            if _is_email_unique_violation(exc):
+                raise EmailAlreadyExistsError() from exc
             raise
         except Exception:
             self._db.rollback()

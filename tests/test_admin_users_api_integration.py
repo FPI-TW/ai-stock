@@ -318,6 +318,24 @@ def test_provision_duplicate_email_is_409(admin_engine: Engine) -> None:
 
 
 @pytest.mark.integration
+def test_provision_email_race_at_flush_is_409(admin_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Concurrent creates: both pass the `get_by_email` pre-check, the loser hits the
+    unique index at flush. Simulate by forcing the pre-check to miss an existing email —
+    the flush must still resolve to 409, not a 500."""
+    from app.repositories.user_repository import UserRepository
+
+    monkeypatch.setattr(UserRepository, "get_by_email", lambda self, email: None)
+    client = _admin_client(admin_engine)
+    email = f"race-{uuid4()}@example.com"
+    _seed_active_user(admin_engine, email)
+
+    response = client.post("/admin/users/with-password", json={"email": email, "password": "s3cret-pw", "role": "user"})
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "EMAIL_ALREADY_EXISTS"
+
+
+@pytest.mark.integration
 def test_list_users_returns_seeded_users(admin_engine: Engine) -> None:
     client = _admin_client(admin_engine)
     email = f"listed-{uuid4()}@example.com"
