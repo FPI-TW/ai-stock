@@ -52,7 +52,6 @@ V0.5 已建立、必須延續的不變式：
 - `status text not null check (status in ('invited','active','disabled'))`
 - `mfa_enabled boolean not null default false`
 - `mfa_secret_encrypted bytea null`（user 不開，admin 用）
-- `terms_version_accepted text null` / `terms_accepted_at timestamptz null`
 - `created_at` / `updated_at` / `disabled_at timestamptz null`
 
 Indexes：`email unique`、`(status, role)`。
@@ -97,7 +96,7 @@ Indexes：`email unique`、`(status, role)`。
 ## API（介面契約）
 
 ### 使用者 auth
-- `POST /auth/invitations/accept` `{token, password, termsVersion}` → 驗 token、套密碼規則(≥8)、寫 hash(argon2id)+`status=active`+terms、建第一筆 refresh、回 access+CSRF。Audit `account_activated`。Errors：`INVITATION_INVALID`/`INVITATION_EXPIRED`/`INVITATION_CONSUMED`/`WEAK_PASSWORD`/`TERMS_NOT_ACCEPTED`。
+- `POST /auth/invitations/accept` `{token, password}` → 驗 token、套密碼規則(≥8)、寫 hash(argon2id)+`status=active`、建第一筆 refresh、回 access+CSRF。Audit `account_activated`。Errors：`INVITATION_INVALID`/`INVITATION_EXPIRED`/`INVITATION_CONSUMED`/`WEAK_PASSWORD`。
 - `POST /auth/login` `{email, password}` → 同 email 連 5 失敗鎖 15min（token-bucket，回 `LOGIN_LOCKED`）；成功回 access + set refresh/CSRF cookie；非 active 或密碼錯一律 `LOGIN_FAILED`（不洩漏存在）。Audit `login_success`/`login_failed`。
 - `POST /auth/refresh` → cookie 取 refresh、驗 CSRF、rotation、reuse 偵測。Errors `REFRESH_INVALID`/`REFRESH_REUSE_DETECTED`。
 - `POST /auth/logout` → revoke 當前 refresh（`logout`）、clear cookies、無 token 也回 204。
