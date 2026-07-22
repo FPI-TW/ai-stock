@@ -245,7 +245,7 @@ def test_resend_invitation_revokes_old_and_mails_new(admin_engine: Engine) -> No
     # The original token is now revoked and cannot be accepted.
     accept = client.post(
         "/auth/invitations/accept",
-        json={"token": first_token, "password": "password123", "termsVersion": "2026-01"},
+        json={"token": first_token, "password": "password123"},
     )
     assert accept.status_code == 400
     assert accept.json()["error"]["code"] == "INVITATION_INVALID"

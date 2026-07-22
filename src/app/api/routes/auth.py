@@ -187,7 +187,6 @@ def accept_invitation(
         AcceptInvitationInput(
             raw_token=body.token,
             password=body.password,
-            terms_version=body.terms_version,
             now=now,
             user_agent=request.headers.get("User-Agent"),
             ip=_client_ip(request, settings),
