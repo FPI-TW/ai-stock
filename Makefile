@@ -25,9 +25,9 @@ format-check:
 typecheck:
 	uv run mypy src tests
 
-commit-check: format lint format-check typecheck
+commit-check: format-check typecheck
 
-pre-push-check: test
+pre-push-check: format-check typecheck test
 
 check: lint format-check typecheck check-shioaji-isolation test
 

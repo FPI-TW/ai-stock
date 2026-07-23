@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from argon2 import PasswordHasher
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.commands.auth import IssuedSession, issue_session
@@ -43,6 +44,17 @@ logger = logging.getLogger(__name__)
 
 INVITATION_TTL = timedelta(hours=24)
 ACCOUNT_DISABLED_INTENT_STATUS = "cancelled_by_account_disabled"
+
+
+def _is_email_unique_violation(exc: IntegrityError) -> bool:
+    """The `get_by_email` pre-check is a fast path, not a lock: two concurrent creates
+    can both pass it, and the loser hits the `uq_users_email` unique index at flush.
+    Recognise exactly that constraint so the race resolves to a clean 409 instead of a
+    500, without swallowing other integrity errors."""
+    diag = getattr(exc.orig, "diag", None)
+    return getattr(diag, "constraint_name", None) == "uq_users_email"
+
+
 # Invitation resend throttle: 3 per hour per invited user.
 _RESEND_CAPACITY = 3.0
 _RESEND_REFILL_PER_SECOND = 3.0 / 3600.0
@@ -60,6 +72,16 @@ class CreateUserInput:
 @dataclass(frozen=True, slots=True)
 class CreatedUser:
     user_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisionUserInput:
+    email: str
+    password: str
+    role: str
+    created_by_admin_id: UUID
+    now: datetime
+    request_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +178,63 @@ class CreateUserCommand:
             self._db.commit()
             return CreatedUser(user_id=user_id)
         except (AuthError, AccountError):
+            raise
+        except IntegrityError as exc:
+            self._db.rollback()
+            if _is_email_unique_violation(exc):
+                raise EmailAlreadyExistsError() from exc
+            raise
+        except Exception:
+            self._db.rollback()
+            raise
+
+
+class ProvisionUserCommand:
+    """Admin creates an active user with an admin-chosen password — no invitation,
+    no email. The password is set immediately so the user can log in with the
+    credentials the admin hands over. Terms stay unaccepted until the user acts."""
+
+    def __init__(
+        self,
+        db: Session,
+        users: UserRepository,
+        audit: AuditEventWriter,
+        hasher: PasswordHasher,
+    ) -> None:
+        self._db = db
+        self._users = users
+        self._audit = audit
+        self._hasher = hasher
+
+    def execute(self, inp: ProvisionUserInput) -> CreatedUser:
+        try:
+            if self._users.get_by_email(inp.email) is not None:
+                raise EmailAlreadyExistsError()
+            if not is_password_strong_enough(inp.password):
+                raise WeakPasswordError()
+
+            user_id = self._users.create_active(
+                email=inp.email,
+                role=inp.role,
+                password_hash=hash_password(self._hasher, inp.password),
+            )
+            self._audit.write(
+                event_type="account_provisioned_by_admin",
+                actor_type="admin",
+                actor_id=inp.created_by_admin_id,
+                # Never the plaintext password — only non-secret facts.
+                metadata={"provisioned_user_id": str(user_id), "role": inp.role},
+                request_id=inp.request_id,
+                now=inp.now,
+            )
+            self._db.commit()
+            return CreatedUser(user_id=user_id)
+        except (AuthError, AccountError):
+            raise
+        except IntegrityError as exc:
+            self._db.rollback()
+            if _is_email_unique_violation(exc):
+                raise EmailAlreadyExistsError() from exc
             raise
         except Exception:
             self._db.rollback()

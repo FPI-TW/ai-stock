@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.domain.auth import (
@@ -180,6 +181,20 @@ def _default_message(code: ErrorCode | str) -> str:
 
 def get_request_id(request: Request) -> str:
     return getattr(request.state, "request_id", "")
+
+
+class ErrorBody(BaseModel):
+    code: str
+    message: str
+    details: dict[str, Any] = {}
+    request_id: str | None = Field(default=None, serialization_alias="requestId")
+
+
+class ErrorResponse(BaseModel):
+    """OpenAPI schema for the standard error envelope emitted by build_error_response.
+    Reference it from a route's `responses=` so non-2xx bodies are documented."""
+
+    error: ErrorBody
 
 
 def build_error_response(

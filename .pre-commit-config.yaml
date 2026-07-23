@@ -1,57 +1,17 @@
 repos:
   - repo: local
     hooks:
-      - id: ruff-check-fix
-        name: ruff check --fix
-        entry: uv run ruff check --fix .
+      - id: commit-check
+        name: commit check (format and types)
+        entry: make commit-check
         language: system
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
 
-      - id: ruff-format
-        name: ruff format
-        entry: uv run ruff format .
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-commit]
-
-      - id: ruff-check
-        name: ruff check
-        entry: uv run ruff check .
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-commit]
-
-      - id: ruff-format-check
-        name: ruff format --check
-        entry: uv run ruff format --check .
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-commit]
-
-      - id: mypy
-        name: mypy
-        entry: uv run mypy src tests
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-commit]
-
-      - id: check-shioaji-isolation
-        name: check shioaji_demo isolation
-        entry: make check-shioaji-isolation
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-commit]
-
-      - id: pytest
-        name: pytest
-        entry: uv run pytest -s
+      - id: pre-push-check
+        name: push check (format, types, and tests)
+        entry: make pre-push-check
         language: system
         pass_filenames: false
         always_run: true
