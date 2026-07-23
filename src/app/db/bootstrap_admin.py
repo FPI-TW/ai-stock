@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from email_validator import EmailNotValidError, validate_email
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -75,6 +76,12 @@ def bootstrap_initial_admin(
     email = normalize_email(config.email)
     if not email:
         raise RuntimeError("INITIAL_ADMIN_EMAIL must not be blank")
+    try:
+        # Same rule the auth API enforces via EmailStr, so a bootstrapped admin can
+        # never be a format the login/password-reset schemas would 422 on. No DNS.
+        validate_email(email, check_deliverability=False)
+    except EmailNotValidError as exc:
+        raise RuntimeError(f"INITIAL_ADMIN_EMAIL is not a valid email: {email!r}") from exc
     if not is_password_strong_enough(config.password):
         raise RuntimeError("INITIAL_ADMIN_PASSWORD must be at least 8 characters")
 

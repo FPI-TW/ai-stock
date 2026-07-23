@@ -245,6 +245,24 @@ def test_bootstrap_initial_admin_rejects_blank_email(monkeypatch: pytest.MonkeyP
     assert fake_db.commits == 0
 
 
+def test_bootstrap_initial_admin_rejects_malformed_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Guards the gap PR #67 opened: the auth API now validates login/password-reset
+    # email via EmailStr, so an admin whose email has no @-sign would be creatable
+    # here yet locked out of login. Reject it at the source instead.
+    settings = _settings(monkeypatch)
+    fake_db = _FakeSession()
+
+    with pytest.raises(RuntimeError, match="not a valid email"):
+        bootstrap_initial_admin(
+            cast(Session, fake_db),
+            settings,
+            BootstrapAdminConfig(email="admin", password="password123", allow_non_local=False),
+        )
+
+    assert fake_db.commits == 0
+    assert fake_db.added == []
+
+
 def test_bootstrap_initial_admin_rejects_weak_password(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(monkeypatch)
     fake_db = _FakeSession()
