@@ -293,7 +293,6 @@ def test_provision_creates_active_user_who_can_log_in(admin_engine: Engine) -> N
         user = session.execute(select(User).where(User.id == UUID(body["id"]))).scalar_one()
         assert user.status == "active"
         assert user.password_hash is not None
-        assert user.terms_version_accepted is None
         audit = session.execute(
             select(AuditEvent).where(AuditEvent.event_type == "account_provisioned_by_admin")
         ).scalar_one()

@@ -192,7 +192,7 @@ class CreateUserCommand:
 class ProvisionUserCommand:
     """Admin creates an active user with an admin-chosen password — no invitation,
     no email. The password is set immediately so the user can log in with the
-    credentials the admin hands over. Terms stay unaccepted until the user acts."""
+    credentials the admin hands over."""
 
     def __init__(
         self,

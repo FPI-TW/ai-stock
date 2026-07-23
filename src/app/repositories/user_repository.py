@@ -83,8 +83,8 @@ class UserRepository:
 
     def create_active(self, *, email: str, role: str, password_hash: str) -> UUID:
         """Admin-provisioned user: created active with a password already set (no
-        invitation, terms not yet accepted). Caller pre-checks email uniqueness for a
-        clean error; the DB unique index is the final guard."""
+        invitation). Caller pre-checks email uniqueness for a clean error; the DB
+        unique index is the final guard."""
         user_id = uuid4()
         self._db.add(
             User(id=user_id, email=normalize_email(email), role=role, status="active", password_hash=password_hash)
