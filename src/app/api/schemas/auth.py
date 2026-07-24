@@ -18,7 +18,6 @@ class AcceptInvitationRequest(BaseModel):
 
     token: str
     password: str
-    terms_version: str = Field(validation_alias="termsVersion")
 
 
 class PasswordResetRequestRequest(BaseModel):

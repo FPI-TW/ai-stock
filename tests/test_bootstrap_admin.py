@@ -10,7 +10,6 @@ from app.core.passwords import build_password_hasher, verify_password
 from app.db.bootstrap_admin import (
     DEFAULT_LOCAL_ADMIN_EMAIL,
     DEFAULT_LOCAL_ADMIN_PASSWORD,
-    DEFAULT_TERMS_VERSION,
     BootstrapAdminConfig,
     bootstrap_initial_admin,
     resolve_bootstrap_admin_config,
@@ -155,8 +154,6 @@ def test_bootstrap_initial_admin_creates_active_admin(monkeypatch: pytest.Monkey
     assert created.email == "admin@tingfong.com"
     assert created.role == "admin"
     assert created.status == "active"
-    assert created.terms_version_accepted == DEFAULT_TERMS_VERSION
-    assert created.terms_accepted_at == now
     assert created.password_hash is not None
     assert verify_password(build_password_hasher(settings), created.password_hash, "password123") is True
 
@@ -195,40 +192,9 @@ def test_bootstrap_initial_admin_updates_existing_user(monkeypatch: pytest.Monke
     assert existing.mfa_enabled is False
     assert existing.mfa_secret_encrypted is None
     assert existing.disabled_at is None
-    assert existing.terms_version_accepted == DEFAULT_TERMS_VERSION
-    assert existing.terms_accepted_at == now
     assert existing.updated_at == now
     assert existing.password_hash is not None
     assert verify_password(build_password_hasher(settings), existing.password_hash, "newpass123") is True
-
-
-def test_bootstrap_initial_admin_preserves_existing_terms_acceptance(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = _settings(monkeypatch)
-    accepted_at = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
-    existing = User(
-        id=uuid4(),
-        email="admin@tingfong.com",
-        password_hash=None,
-        role="user",
-        status="active",
-        terms_version_accepted="v1",
-        terms_accepted_at=accepted_at,
-    )
-    fake_db = _FakeSession(existing)
-    now = datetime(2026, 6, 17, 10, 30, tzinfo=UTC)
-
-    bootstrap_initial_admin(
-        cast(Session, fake_db),
-        settings,
-        BootstrapAdminConfig(email="admin@tingfong.com", password="newpass123", allow_non_local=False),
-        now=now,
-    )
-
-    assert existing.terms_version_accepted == "v1"
-    assert existing.terms_accepted_at == accepted_at
-    assert existing.updated_at == now
 
 
 def test_bootstrap_initial_admin_rejects_blank_email(monkeypatch: pytest.MonkeyPatch) -> None:

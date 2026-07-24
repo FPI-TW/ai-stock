@@ -22,7 +22,6 @@ from app.domain.auth import normalize_email
 
 DEFAULT_LOCAL_ADMIN_EMAIL = "admin@example.com"
 DEFAULT_LOCAL_ADMIN_PASSWORD = "password123"
-DEFAULT_TERMS_VERSION = "local-bootstrap"
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +84,7 @@ def bootstrap_initial_admin(
     if not is_password_strong_enough(config.password):
         raise RuntimeError("INITIAL_ADMIN_PASSWORD must be at least 8 characters")
 
-    accepted_at = now or datetime.now(UTC)
+    now_ts = now or datetime.now(UTC)
     hasher = build_password_hasher(settings)
     password_hash = hash_password(hasher, config.password)
 
@@ -99,8 +98,6 @@ def bootstrap_initial_admin(
             password_hash=password_hash,
             role="admin",
             status="active",
-            terms_version_accepted=DEFAULT_TERMS_VERSION,
-            terms_accepted_at=accepted_at,
         )
         db.add(user)
         user_id = str(user.id)
@@ -113,9 +110,7 @@ def bootstrap_initial_admin(
     user.mfa_enabled = False
     user.mfa_secret_encrypted = None
     user.disabled_at = None
-    user.terms_version_accepted = user.terms_version_accepted or DEFAULT_TERMS_VERSION
-    user.terms_accepted_at = user.terms_accepted_at or accepted_at
-    user.updated_at = accepted_at
+    user.updated_at = now_ts
     user_id = str(user.id)
     db.commit()
     return BootstrapAdminResult(action="updated", email=email, user_id=user_id)

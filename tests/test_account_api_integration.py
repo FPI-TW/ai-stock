@@ -86,10 +86,10 @@ def test_invite_accept_login_full_chain(account_engine: Engine) -> None:
     assert created.json()["status"] == "invited"
     token = _extract_token(mailer.messages[-1].body)
 
-    # Invitee accepts: sets password, accepts terms, and is logged in.
+    # Invitee accepts: sets password and is logged in.
     accepted = client.post(
         "/auth/invitations/accept",
-        json={"token": token, "password": "password123", "termsVersion": "2026-01"},
+        json={"token": token, "password": "password123"},
     )
     assert accepted.status_code == 200
     assert accepted.json()["accessToken"]
@@ -101,7 +101,7 @@ def test_invite_accept_login_full_chain(account_engine: Engine) -> None:
     # The invitation token cannot be reused.
     reused = client.post(
         "/auth/invitations/accept",
-        json={"token": token, "password": "password123", "termsVersion": "2026-01"},
+        json={"token": token, "password": "password123"},
     )
     assert reused.status_code == 409
     assert reused.json()["error"]["code"] == "INVITATION_CONSUMED"
@@ -146,7 +146,7 @@ def test_accept_with_invalid_token_is_rejected(account_engine: Engine) -> None:
     app = create_app()
     response = TestClient(app).post(
         "/auth/invitations/accept",
-        json={"token": "not-a-real-token", "password": "password123", "termsVersion": "2026-01"},
+        json={"token": "not-a-real-token", "password": "password123"},
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVITATION_INVALID"
@@ -162,7 +162,7 @@ def test_accept_with_weak_password_is_rejected(account_engine: Engine) -> None:
 
     response = client.post(
         "/auth/invitations/accept",
-        json={"token": token, "password": "short", "termsVersion": "2026-01"},
+        json={"token": token, "password": "short"},
     )
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "WEAK_PASSWORD"

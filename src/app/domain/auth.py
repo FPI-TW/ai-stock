@@ -26,7 +26,6 @@ class UserData:
     status: str
     mfa_enabled: bool
     password_hash: str | None
-    terms_version_accepted: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -141,10 +140,6 @@ class InvitationConsumedError(AccountError):
 
 class WeakPasswordError(AccountError):
     """Password fails the MVP length rule (spec §13: >= 8 chars)."""
-
-
-class TermsNotAcceptedError(AccountError):
-    """Activation attempted without accepting the required terms version."""
 
 
 class PasswordResetInvalidError(AccountError):

@@ -56,8 +56,6 @@ class User(TimestampMixin, Base):
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     # Admin TOTP secret, encrypted at rest. Users do not enable MFA in V1.
     mfa_secret_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
-    terms_version_accepted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

@@ -29,7 +29,6 @@ from app.domain.auth import (
     InvitationExpiredError,
     InvitationInvalidError,
     RateLimitedError,
-    TermsNotAcceptedError,
     UserNotFoundError,
     WeakPasswordError,
     normalize_email,
@@ -89,7 +88,6 @@ class ProvisionUserInput:
 class AcceptInvitationInput:
     raw_token: str
     password: str
-    terms_version: str
     now: datetime
     user_agent: str | None = None
     ip: str | None = None
@@ -194,7 +192,7 @@ class CreateUserCommand:
 class ProvisionUserCommand:
     """Admin creates an active user with an admin-chosen password — no invitation,
     no email. The password is set immediately so the user can log in with the
-    credentials the admin hands over. Terms stay unaccepted until the user acts."""
+    credentials the admin hands over."""
 
     def __init__(
         self,
@@ -244,8 +242,8 @@ class ProvisionUserCommand:
 
 
 class AcceptInvitationCommand:
-    """Invitee consumes the invitation: set first password, accept terms, activate,
-    and receive a logged-in session."""
+    """Invitee consumes the invitation: set first password, activate, and receive a
+    logged-in session."""
 
     def __init__(
         self,
@@ -277,8 +275,6 @@ class AcceptInvitationCommand:
 
             if not is_password_strong_enough(inp.password):
                 raise WeakPasswordError()
-            if not inp.terms_version.strip():
-                raise TermsNotAcceptedError()
 
             user = self._users.get_by_id(invitation.user_id)
             if user is None or user.status != "invited":
@@ -287,7 +283,6 @@ class AcceptInvitationCommand:
             self._users.activate(
                 user.id,
                 password_hash=hash_password(self._hasher, inp.password),
-                terms_version=inp.terms_version,
                 now=inp.now,
             )
             self._invitations.consume(invitation.id, now=inp.now)

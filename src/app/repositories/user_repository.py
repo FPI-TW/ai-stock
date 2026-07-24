@@ -18,7 +18,6 @@ def _to_domain(row: User) -> UserData:
         status=row.status,
         mfa_enabled=row.mfa_enabled,
         password_hash=row.password_hash,
-        terms_version_accepted=row.terms_version_accepted,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -84,8 +83,8 @@ class UserRepository:
 
     def create_active(self, *, email: str, role: str, password_hash: str) -> UUID:
         """Admin-provisioned user: created active with a password already set (no
-        invitation, terms not yet accepted). Caller pre-checks email uniqueness for a
-        clean error; the DB unique index is the final guard."""
+        invitation). Caller pre-checks email uniqueness for a clean error; the DB
+        unique index is the final guard."""
         user_id = uuid4()
         self._db.add(
             User(id=user_id, email=normalize_email(email), role=role, status="active", password_hash=password_hash)
@@ -100,16 +99,14 @@ class UserRepository:
             execution_options={"synchronize_session": False},
         )
 
-    def activate(self, user_id: UUID, *, password_hash: str, terms_version: str, now: datetime) -> None:
-        """Move an invited user to active, setting their first password + accepted terms."""
+    def activate(self, user_id: UUID, *, password_hash: str, now: datetime) -> None:
+        """Move an invited user to active, setting their first password."""
         self._db.execute(
             update(User)
             .where(User.id == user_id)
             .values(
                 password_hash=password_hash,
                 status="active",
-                terms_version_accepted=terms_version,
-                terms_accepted_at=now,
                 updated_at=now,
             ),
             execution_options={"synchronize_session": False},
