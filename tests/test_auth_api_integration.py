@@ -90,6 +90,16 @@ def test_login_me_and_refresh_flow(auth_api_engine: Engine) -> None:
 
 
 @pytest.mark.integration
+def test_login_malformed_email_is_422(auth_api_engine: Engine) -> None:
+    client = TestClient(create_app())
+
+    response = client.post("/auth/login", json={"email": "notanemail", "password": _PASSWORD})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.integration
 def test_protected_endpoint_without_token_is_401(auth_api_engine: Engine) -> None:
     client = TestClient(create_app())
 

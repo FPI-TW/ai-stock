@@ -138,6 +138,18 @@ def test_request_still_202_and_token_persisted_when_mail_fails(reset_engine: Eng
 
 
 @pytest.mark.integration
+def test_request_with_malformed_email_is_422(reset_engine: Engine) -> None:
+    mailer = _RecordingMailer()
+    client = _client(mailer)
+
+    response = client.post("/auth/password-reset/request", json={"email": "notanemail"})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert mailer.messages == []
+
+
+@pytest.mark.integration
 def test_confirm_with_invalid_token_is_400(reset_engine: Engine) -> None:
     client = _client(_RecordingMailer())
 
