@@ -34,6 +34,10 @@ def list_symbols(
             "model": ErrorResponse,
             "description": "找不到此標的代號（UNKNOWN_SYMBOL）",
         },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse,
+            "description": "請求資料不合法（VALIDATION_ERROR）",
+        },
     },
 )
 def get_symbol(
