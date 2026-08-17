@@ -21,11 +21,13 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_active_user, get_current_user, get_trading_session_service
 from app.core.config import get_settings
 from app.core.security import RequestUser
-from app.db.models.core import Symbol, TradeIntent
+from app.db.models.core import Symbol
+from app.db.models.trade_intent_core import TradeIntentCore
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
 from app.repositories.idempotency_repository import IdempotencyRepository
 from app.services.idempotency_cleanup import IdempotencyCleanupScheduler
+from tests.db_helpers import INTENT_TABLES
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 SESSION_NOW_UTC = datetime(2026, 5, 11, 10, 0, tzinfo=TAIPEI).astimezone(UTC)  # Monday in-session
@@ -61,7 +63,7 @@ def engine() -> Generator[Engine]:
         yield eng
     finally:
         with eng.begin() as conn:
-            conn.execute(text("TRUNCATE notifications, trigger_events, trade_intents, idempotency_keys CASCADE"))
+            conn.execute(text(f"TRUNCATE {INTENT_TABLES}, idempotency_keys CASCADE"))
         eng.dispose()
         command.downgrade(config, "base")
 
@@ -69,7 +71,7 @@ def engine() -> Generator[Engine]:
 @pytest.fixture
 def db_session(engine: Engine) -> Generator[Session]:
     session = Session(engine)
-    session.execute(text("TRUNCATE notifications, trigger_events, trade_intents, idempotency_keys CASCADE"))
+    session.execute(text(f"TRUNCATE {INTENT_TABLES}, idempotency_keys CASCADE"))
     session.commit()
     try:
         yield session
@@ -92,7 +94,7 @@ def _payload(target: str = "100") -> dict[str, object]:
 
 
 def _intent_count(db_session: Session) -> int:
-    return int(db_session.execute(select(func.count()).select_from(TradeIntent)).scalar_one())
+    return int(db_session.execute(select(func.count()).select_from(TradeIntentCore)).scalar_one())
 
 
 @pytest.mark.integration

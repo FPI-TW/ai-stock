@@ -1,7 +1,23 @@
 from dataclasses import dataclass
+from datetime import date, datetime
+from typing import Protocol
 
 from app.domain.trading_session import TradingDayPhase, TradingSessionService
-from app.repositories.intent_repository import IntentRepository
+
+
+class DayIntentLifecycleStore(Protocol):
+    """生命週期只用得到的三個 repo 方法。
+
+    T1 cutover 期間兩軌並存：新軌 `TradeIntentCoreRepository`（API / robot #2）與舊軌
+    `IntentRepository`（legacy dispatcher / TWAP）都要跑同一套啟用/到期規則，故參數型別
+    取這個最小介面而非綁死其中一個 repo。舊軌退役後可直接改標新 repo 具體型別。
+    """
+
+    def system_expire_day_intents_through(self, cutoff_date: date, now: datetime) -> int: ...
+
+    def system_activate_scheduled_day_intents(self, trading_date: date, now: datetime) -> int: ...
+
+    def commit(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -13,7 +29,7 @@ class IntentLifecycleOutput:
 class IntentLifecycleCommand:
     def __init__(
         self,
-        intent_repo: IntentRepository,
+        intent_repo: DayIntentLifecycleStore,
         session_service: TradingSessionService,
     ) -> None:
         self._intent_repo = intent_repo

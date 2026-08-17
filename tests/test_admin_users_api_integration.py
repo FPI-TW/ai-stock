@@ -20,6 +20,7 @@ from app.core.config import get_settings
 from app.core.security import RequestUser
 from app.db.models.auth import AuditEvent, RefreshToken, User
 from app.db.models.core import Symbol, TradeIntent
+from app.db.models.trade_intent_core import TradeIntentCore, TradeIntentPriceParams
 from app.main import create_app
 from app.services.mailer import MailMessage
 
@@ -64,7 +65,7 @@ def admin_engine() -> Generator[Engine]:
         # Remove intents first: the disable test leaves cancelled_by_account_disabled
         # rows, which would trip the 202605290002 downgrade guard.
         with engine.begin() as conn:
-            conn.execute(text("DELETE FROM trade_intents"))
+            conn.execute(text("TRUNCATE trade_intents, trade_intent_core CASCADE"))
         engine.dispose()
         command.downgrade(config, "base")
 
@@ -123,6 +124,37 @@ def _seed_intent(engine: Engine, owner_id: UUID, *, status: str = "active") -> U
     return intent_id
 
 
+def _seed_core_intent(engine: Engine, owner_id: UUID, *, status: str = "active") -> UUID:
+    """新軌委託（T1 cutover 後 endpoint 建出來的就是這種）。"""
+
+    intent_id = uuid4()
+    with Session(engine) as session:
+        session.add(
+            TradeIntentCore(
+                id=intent_id,
+                owner_user_id=owner_id,
+                symbol="2330",
+                strategy="buy_price_alert",
+                execution_mode="notify_only",
+                quantity_lots=1,
+                trigger_reference_price_type="ask",
+                trading_date=date(2026, 1, 1),
+                time_in_force="day",
+                status=status,
+                dedup_key="100.0000",
+            )
+        )
+        session.add(
+            TradeIntentPriceParams(
+                trade_intent_id=intent_id,
+                target_price_original=Decimal("100.0000"),
+                target_price_effective=Decimal("100.0000"),
+            )
+        )
+        session.commit()
+    return intent_id
+
+
 def _seed_refresh_token(engine: Engine, user_id: UUID) -> UUID:
     token_id = uuid4()
     with Session(engine) as session:
@@ -143,6 +175,7 @@ def test_disable_cascades_to_intents_and_tokens(admin_engine: Engine) -> None:
     client = _admin_client(admin_engine)
     user_id = _seed_active_user(admin_engine, f"disable-{uuid4()}@example.com")
     intent_id = _seed_intent(admin_engine, user_id, status="active")
+    core_intent_id = _seed_core_intent(admin_engine, user_id, status="active")
     token_id = _seed_refresh_token(admin_engine, user_id)
 
     response = client.post(f"/admin/users/{user_id}/disable")
@@ -151,10 +184,13 @@ def test_disable_cascades_to_intents_and_tokens(admin_engine: Engine) -> None:
     with Session(admin_engine) as session:
         user = session.execute(select(User).where(User.id == user_id)).scalar_one()
         intent = session.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one()
+        core_intent = session.execute(select(TradeIntentCore).where(TradeIntentCore.id == core_intent_id)).scalar_one()
         token = session.execute(select(RefreshToken).where(RefreshToken.id == token_id)).scalar_one()
         assert user.status == "disabled"
         assert user.disabled_at is not None
         assert intent.status == "cancelled_by_account_disabled"
+        # 兩軌都要斷：只取消舊表的話，cutover 後被停用帳號的單會繼續觸發、繼續發通知
+        assert core_intent.status == "cancelled_by_account_disabled"
         assert token.revoked_at is not None
         assert token.revoked_reason == "account_disabled"
 
@@ -174,6 +210,7 @@ def test_reactivate_restores_disabled_user_without_restoring_intents(admin_engin
     client = _admin_client(admin_engine)
     user_id = _seed_active_user(admin_engine, f"reactivate-{uuid4()}@example.com")
     intent_id = _seed_intent(admin_engine, user_id, status="active")
+    core_intent_id = _seed_core_intent(admin_engine, user_id, status="active")
 
     assert client.post(f"/admin/users/{user_id}/disable").status_code == 204
 
@@ -183,10 +220,12 @@ def test_reactivate_restores_disabled_user_without_restoring_intents(admin_engin
     with Session(admin_engine) as session:
         user = session.execute(select(User).where(User.id == user_id)).scalar_one()
         intent = session.execute(select(TradeIntent).where(TradeIntent.id == intent_id)).scalar_one()
+        core_intent = session.execute(select(TradeIntentCore).where(TradeIntentCore.id == core_intent_id)).scalar_one()
         assert user.status == "active"
         assert user.disabled_at is None
-        # spec §13: old intents are NOT restored by reactivation.
+        # spec §13: old intents are NOT restored by reactivation.（兩軌皆然）
         assert intent.status == "cancelled_by_account_disabled"
+        assert core_intent.status == "cancelled_by_account_disabled"
         reactivated = session.execute(
             select(AuditEvent).where(AuditEvent.event_type == "account_reactivated")
         ).scalar_one()

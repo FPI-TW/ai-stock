@@ -260,3 +260,25 @@ def test_dispatch_swallows_unexpected_exception(monkeypatch: pytest.MonkeyPatch,
 
     monkeypatch.setattr("app.services.quote_dispatcher_core.TradeIntentCoreRepository", raising_repo)
     _dispatcher(mock_session=mock_session, evaluator=MagicMock()).dispatch(_snapshot())  # must not raise
+
+
+def test_dispatch_runs_lifecycle_before_listing_actives(
+    monkeypatch: pytest.MonkeyPatch, mock_session: MagicMock
+) -> None:
+    """scheduled 單只有先被啟用成 active 才進得了 system_list_active_by_symbols。
+
+    生命週期不掛在這裡的話，沒人打 API 的日子開盤後單子會整天停在 scheduled。
+    """
+
+    mock_repo = MagicMock()
+    mock_repo.system_activate_scheduled_day_intents.return_value = 1
+    mock_repo.system_expire_day_intents_through.return_value = 0
+    mock_repo.system_list_active_by_symbols.return_value = []
+    monkeypatch.setattr("app.services.quote_dispatcher_core.TradeIntentCoreRepository", lambda db: mock_repo)
+
+    # 盤中時刻，否則 lifecycle 不會走啟用分支
+    session_service = TradingSessionService(clock=lambda: datetime(2026, 5, 11, 10, 30, tzinfo=TAIPEI))
+    _dispatcher(mock_session=mock_session, evaluator=MagicMock(), session_service=session_service).dispatch(_snapshot())
+
+    mock_repo.system_activate_scheduled_day_intents.assert_called_once()
+    mock_repo.system_expire_day_intents_through.assert_called_once()

@@ -1,7 +1,8 @@
 """Unit tests for the minimal new-slice CreateTradeIntentCommand (commands/trade_intent_core).
 
 只驗本 command 自己的職責：§15 限額邊界、策略驗證、以及用正確參數呼叫新 repo。
-觸發 / 訂閱不在最小版範圍（見 T1 工單附錄），故不需要 quote_provider / evaluator。
+建單即觸發（PR3 補上）在此一律走「取不到報價」分支短路掉——那條路徑由
+tests/test_create_immediate_trigger_integration.py（integration）覆蓋。
 """
 
 from datetime import UTC, datetime
@@ -14,6 +15,7 @@ import pytest
 from app.commands.trade_intent_core import CreateTradeIntentCommand, CreateTradeIntentInput, IntentLimits
 from app.domain.trade_intent import SymbolIntentLimitExceededError, UserIntentLimitExceededError
 from app.domain.trading_session import TradingSessionService
+from app.services.quote.base import QuoteProviderUnavailableError
 
 # Monday 10:00 Taipei (02:00 UTC) → 盤中，建單落 active
 MONDAY = datetime(2026, 5, 11, 2, 0, tzinfo=UTC)
@@ -22,11 +24,16 @@ MONDAY = datetime(2026, 5, 11, 2, 0, tzinfo=UTC)
 def _command(repo: MagicMock, *, limits: IntentLimits | None) -> CreateTradeIntentCommand:
     symbol_service = MagicMock()
     symbol_service.get_tradable_symbol.return_value = MagicMock(instrument_type="stock")
+    quote_provider = MagicMock()
+    quote_provider.get_quotes.return_value = []  # 無報價 → inline 觸發短路，本檔只看建單本身
     return CreateTradeIntentCommand(
         symbol_service,
         TradingSessionService(clock=lambda: MONDAY),
         repo,
+        quote_provider,
+        MagicMock(),  # evaluator（因無報價而不會被呼叫）
         MagicMock(),  # db
+        None,  # kill_switch
         limits,
     )
 
@@ -119,3 +126,35 @@ def test_trailing_passes_trail_value_to_repo() -> None:
     assert kwargs["trail_mode"] == "percentage"
     assert kwargs["trail_value"] == Decimal("5")
     assert kwargs["target_price_effective"] is None
+
+
+def test_provider_error_from_get_quotes_does_not_block_create() -> None:
+    """報價端任何失敗都不該擋建單——委託照樣以 active 落地，等 robot #2 下次補觸發。
+
+    只 catch QuoteUnavailableError 的話，別種 QuoteProviderError（provider 未啟動、
+    demo allowlist、訂閱額度）會把整筆建單回滾，與 command docstring 的契約相反。
+    """
+
+    repo = MagicMock()
+    repo.create.return_value = uuid4()
+    symbol_service = MagicMock()
+    symbol_service.get_tradable_symbol.return_value = MagicMock(instrument_type="stock")
+    quote_provider = MagicMock()
+    quote_provider.get_quotes.side_effect = QuoteProviderUnavailableError("shioaji", "provider not started")
+    db = MagicMock()
+    command = CreateTradeIntentCommand(
+        symbol_service,
+        TradingSessionService(clock=lambda: MONDAY),
+        repo,
+        quote_provider,
+        MagicMock(),  # evaluator（報價取不到 → 不會被呼叫）
+        db,
+        None,
+        None,
+    )
+
+    command.execute(_input())
+
+    repo.create.assert_called_once()
+    db.commit.assert_called_once()
+    db.rollback.assert_not_called()

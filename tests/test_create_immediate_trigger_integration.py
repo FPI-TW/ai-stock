@@ -1,4 +1,9 @@
-"""Integration tests for immediate-trigger-on-create — BE-V0.5-09 step 7."""
+"""Integration tests for immediate-trigger-on-create.
+
+T1 PR3 cutover 後 create endpoint 已改寫新軌，故本檔斷言的是 `trade_intent_triggers`
+與 `notifications.trade_intent_core_id`（原本是舊軌的 `trigger_events` /
+`notifications.trade_intent_id`）。情境本身未變——這正是 cutover 的行為等價證明。
+"""
 
 from collections.abc import Generator
 from datetime import UTC, datetime
@@ -23,12 +28,14 @@ from app.api.deps import (
 )
 from app.core.config import get_settings
 from app.core.security import RequestUser
-from app.db.models.core import Notification, Symbol, TriggerEvent
+from app.db.models.core import Notification, Symbol
+from app.db.models.trade_intent_core import TradeIntentTrigger
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
-from app.repositories.intent_repository import IntentRepository
+from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.services.quote.base import QuoteSnapshot, QuoteUnavailableError
 from app.services.quote.in_memory import InMemoryQuoteProvider
+from tests.db_helpers import INTENT_TABLES
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 # Monday inside the regular session.
@@ -72,7 +79,7 @@ def create_engine_module() -> Generator[Engine]:
         # Clear intents (incl. market_*) before downgrade so the 202605280004
         # status guard doesn't block `downgrade base`.
         with engine.begin() as conn:
-            conn.execute(text("TRUNCATE notifications, trigger_events, trade_intents CASCADE"))
+            conn.execute(text(f"TRUNCATE {INTENT_TABLES} CASCADE"))
         engine.dispose()
         command.downgrade(config, "base")
 
@@ -80,7 +87,7 @@ def create_engine_module() -> Generator[Engine]:
 @pytest.fixture
 def db_session(create_engine_module: Engine) -> Generator[Session]:
     session = Session(create_engine_module)
-    session.execute(text("TRUNCATE notifications, trigger_events, trade_intents CASCADE"))
+    session.execute(text(f"TRUNCATE {INTENT_TABLES} CASCADE"))
     session.commit()
     try:
         yield session
@@ -89,8 +96,8 @@ def db_session(create_engine_module: Engine) -> Generator[Session]:
 
 
 @pytest.fixture
-def repo(db_session: Session) -> IntentRepository:
-    return IntentRepository(db_session)
+def repo(db_session: Session) -> TradeIntentCoreRepository:
+    return TradeIntentCoreRepository(db_session)
 
 
 @pytest.fixture
@@ -164,7 +171,7 @@ def _create_payload(target: str = "99.5") -> dict[str, object]:
 def test_create_inside_session_with_condition_met_triggers_immediately(
     db_session: Session,
     client: TestClient,
-    repo: IntentRepository,
+    repo: TradeIntentCoreRepository,
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     quote_provider.push_quote(_snapshot(ask="99.5"))  # ask == target, condition met
@@ -176,14 +183,16 @@ def test_create_inside_session_with_condition_met_triggers_immediately(
     assert body["data"]["status"] == "triggered"
 
     intent_id = UUID(body["data"]["id"])
-    trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
+    trigger_row = db_session.execute(
+        select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == intent_id)
+    ).scalar_one()
     assert trigger_row.trigger_price == Decimal("99.5000")
     assert trigger_row.trigger_reference_price_type == "ask"
     assert trigger_row.fallback_used is False
     assert trigger_row.quote_snapshot["ask_price"] == "99.5"
 
     notification_row = db_session.execute(
-        select(Notification).where(Notification.trade_intent_id == intent_id)
+        select(Notification).where(Notification.trade_intent_core_id == intent_id)
     ).scalar_one()
     assert notification_row.type == "price_triggered"
 
@@ -192,7 +201,7 @@ def test_create_inside_session_with_condition_met_triggers_immediately(
 def test_create_inside_session_with_condition_not_met_stays_active(
     db_session: Session,
     client: TestClient,
-    repo: IntentRepository,
+    repo: TradeIntentCoreRepository,
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     quote_provider.push_quote(_snapshot(ask="100.0"))  # above target 99.5
@@ -204,15 +213,20 @@ def test_create_inside_session_with_condition_not_met_stays_active(
     assert body["data"]["status"] == "active"
 
     intent_id = UUID(body["data"]["id"])
-    assert db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).first() is None
-    assert db_session.execute(select(Notification).where(Notification.trade_intent_id == intent_id)).first() is None
+    assert (
+        db_session.execute(select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == intent_id)).first()
+        is None
+    )
+    assert (
+        db_session.execute(select(Notification).where(Notification.trade_intent_core_id == intent_id)).first() is None
+    )
 
 
 @pytest.mark.integration
 def test_create_inside_session_with_quote_unavailable_stays_active(
     db_session: Session,
     client: TestClient,
-    repo: IntentRepository,
+    repo: TradeIntentCoreRepository,
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     # Provider intentionally empty — no quote for 2330.
@@ -223,14 +237,17 @@ def test_create_inside_session_with_quote_unavailable_stays_active(
     assert body["data"]["status"] == "active"
 
     intent_id = UUID(body["data"]["id"])
-    assert db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).first() is None
+    assert (
+        db_session.execute(select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == intent_id)).first()
+        is None
+    )
 
 
 @pytest.mark.integration
 def test_create_outside_session_yields_scheduled_intent_without_trigger_attempt(
     db_session: Session,
     weekend_client: TestClient,
-    repo: IntentRepository,
+    repo: TradeIntentCoreRepository,
     quote_provider: InMemoryQuoteProvider,
 ) -> None:
     # Even if quote is set, scheduled intents must not consult the provider.
@@ -243,7 +260,10 @@ def test_create_outside_session_yields_scheduled_intent_without_trigger_attempt(
     assert body["data"]["status"] == "scheduled"
 
     intent_id = UUID(body["data"]["id"])
-    assert db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).first() is None
+    assert (
+        db_session.execute(select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == intent_id)).first()
+        is None
+    )
 
 
 @pytest.mark.integration
@@ -259,7 +279,9 @@ def test_create_with_last_fallback_triggers_and_records_metadata(
 
     assert response.status_code == 201
     intent_id = UUID(response.json()["data"]["id"])
-    trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
+    trigger_row = db_session.execute(
+        select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == intent_id)
+    ).scalar_one()
     assert trigger_row.trigger_reference_price_type == "last_fallback"
     assert trigger_row.fallback_used is True
 
@@ -290,13 +312,15 @@ def test_market_order_create_triggers_immediately(
     assert body["filledQuantityLots"] == 2
 
     intent_id = UUID(body["id"])
-    trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
+    trigger_row = db_session.execute(
+        select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == intent_id)
+    ).scalar_one()
     assert trigger_row.target_price_effective == Decimal("600.0000")
     assert trigger_row.trigger_price == Decimal("600.0000")
     assert trigger_row.trigger_reference_price_type == "ask"
 
     notification_row = db_session.execute(
-        select(Notification).where(Notification.trade_intent_id == intent_id)
+        select(Notification).where(Notification.trade_intent_core_id == intent_id)
     ).scalar_one()
     assert notification_row.type == "market_order_triggered"
 
@@ -330,6 +354,8 @@ def test_market_order_create_uses_current_price_snapshot_when_stream_cache_is_co
     assert body["targetPriceEffective"] is None
     assert body["filledQuantityLots"] == 2
     assert quote_provider.current_price_symbols == ["2330"]
-    trigger_row = db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == intent_id)).scalar_one()
+    trigger_row = db_session.execute(
+        select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == intent_id)
+    ).scalar_one()
     assert trigger_row.trigger_price == Decimal("600.0000")
     assert trigger_row.target_price_effective == Decimal("600.0000")

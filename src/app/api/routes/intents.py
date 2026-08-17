@@ -12,13 +12,14 @@ from app.api.deps import (
     IdempotencyManagerDep,
     IntentLifecycleCommandDep,
     IntentRepoDep,
+    TradeIntentCoreRepoDep,
     TwapConfirmCommandDep,
     TwapPlanCommandDep,
     enforce_mutation_rate_limit,
 )
 from app.api.errors import ApiError, ErrorCode, get_request_id
 from app.api.routes._pagination import validate_cursor
-from app.commands.trade_intent import CancelTradeIntentInput, CreateTradeIntentCommand, CreateTradeIntentInput
+from app.commands.trade_intent_core import CancelTradeIntentInput, CreateTradeIntentCommand, CreateTradeIntentInput
 from app.commands.twap import TwapPlanInput
 from app.domain.trade_intent import VALID_STATUSES
 from app.schemas.intent import (
@@ -345,7 +346,7 @@ def create_trailing_stop_alert(
 @router.get("", response_model=IntentListResponse)
 def list_intents(
     user: ActiveUserDep,
-    intent_repo: IntentRepoDep,
+    intent_repo: TradeIntentCoreRepoDep,
     lifecycle: IntentLifecycleCommandDep,
     status_filter: Annotated[list[str] | None, Query(alias="status")] = None,
     trading_date: Annotated[date | None, Query(alias="tradingDate")] = None,
@@ -436,13 +437,14 @@ def confirm_twap(
 def get_intent(
     intent_id: UUID,
     user: ActiveUserDep,
-    intent_repo: IntentRepoDep,
+    intent_repo: TradeIntentCoreRepoDep,
     lifecycle: IntentLifecycleCommandDep,
 ) -> IntentDetailResponse:
     lifecycle.run()
     intent = intent_repo.find_by_id(intent_id, user.user_id)
-    slices = intent_repo.list_twap_slices(intent_id, user.user_id) if intent.strategy == "twap_order" else None
-    return IntentDetailResponse(data=map_to_detail_response_data(intent, slices))
+    # slices 恆為 None：新表在 PR4 之前不可能有 TWAP 單（repo.create 明確擋掉），
+    # 查得到的一律是非 TWAP 策略。PR4 接 TWAP 時再把 slice 查詢接回來。
+    return IntentDetailResponse(data=map_to_detail_response_data(intent, None))
 
 
 @router.post(
@@ -455,7 +457,6 @@ def cancel_intent(
     intent_id: UUID,
     user: ActiveUserDep,
     command: CancelTradeIntentCommandDep,
-    intent_repo: IntentRepoDep,
     lifecycle: IntentLifecycleCommandDep,
     idempotency_key: IdempotencyKeyDep,
     idempotency: IdempotencyManagerDep,
@@ -469,8 +470,8 @@ def cancel_intent(
                 request_id=get_request_id(http_request),
             )
         )
-        slices = intent_repo.list_twap_slices(intent_id, user.user_id) if intent.strategy == "twap_order" else None
-        return IntentDetailResponse(data=map_to_detail_response_data(intent, slices)).model_dump(mode="json")
+        # slices 恆為 None，理由同 get_intent。
+        return IntentDetailResponse(data=map_to_detail_response_data(intent, None)).model_dump(mode="json")
 
     return idempotency.run(
         user_id=user.user_id,

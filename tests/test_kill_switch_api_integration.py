@@ -3,7 +3,7 @@
 Covers: admin toggle on/off writes audit + GET reflects state; reason is required;
 non-admin / unverified-2FA are blocked; and — the core safety property — when the
 switch is on, a create whose price condition is already met commits as `active`
-WITHOUT a TriggerEvent or notification, then triggers again once the switch is off.
+WITHOUT a trigger row or notification, then triggers again once the switch is off.
 """
 
 from collections.abc import Generator
@@ -30,11 +30,13 @@ from app.api.deps import (
 from app.core.config import get_settings
 from app.core.security import RequestUser
 from app.db.models.auth import AuditEvent
-from app.db.models.core import Notification, Symbol, TriggerEvent
+from app.db.models.core import Notification, Symbol
+from app.db.models.trade_intent_core import TradeIntentTrigger
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
 from app.services.quote.base import QuoteSnapshot
 from app.services.quote.in_memory import InMemoryQuoteProvider
+from tests.db_helpers import INTENT_TABLES
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 # Monday inside the regular session, so a created day-intent lands `active`.
@@ -75,7 +77,7 @@ def engine() -> Generator[Engine]:
         yield eng
     finally:
         with eng.begin() as conn:
-            conn.execute(text("TRUNCATE notifications, trigger_events, trade_intents CASCADE"))
+            conn.execute(text(f"TRUNCATE {INTENT_TABLES} CASCADE"))
         eng.dispose()
         command.downgrade(config, "base")
 
@@ -83,7 +85,7 @@ def engine() -> Generator[Engine]:
 @pytest.fixture
 def db_session(engine: Engine) -> Generator[Session]:
     session = Session(engine)
-    session.execute(text("TRUNCATE notifications, trigger_events, trade_intents, system_flags, audit_events CASCADE"))
+    session.execute(text(f"TRUNCATE {INTENT_TABLES}, system_flags, audit_events CASCADE"))
     session.commit()
     try:
         yield session
@@ -186,8 +188,13 @@ def test_create_with_met_condition_does_not_trigger_while_halted_then_resumes(
     assert halted.status_code == 201
     halted_id = UUID(halted.json()["data"]["id"])
     assert halted.json()["data"]["status"] == "active"  # NOT triggered
-    assert db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == halted_id)).first() is None
-    assert db_session.execute(select(Notification).where(Notification.trade_intent_id == halted_id)).first() is None
+    assert (
+        db_session.execute(select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == halted_id)).first()
+        is None
+    )
+    assert (
+        db_session.execute(select(Notification).where(Notification.trade_intent_core_id == halted_id)).first() is None
+    )
 
     # Cancel the halted intent so the duplicate-active guard doesn't block the
     # resume create below (same symbol + strategy).
@@ -203,6 +210,8 @@ def test_create_with_met_condition_does_not_trigger_while_halted_then_resumes(
     resumed_id = UUID(resumed.json()["data"]["id"])
     assert resumed.json()["data"]["status"] == "triggered"
     assert (
-        db_session.execute(select(TriggerEvent).where(TriggerEvent.trade_intent_id == resumed_id)).scalar_one()
+        db_session.execute(
+            select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == resumed_id)
+        ).scalar_one()
         is not None
     )

@@ -15,11 +15,16 @@
 
 import logging
 from collections.abc import Callable
-from dataclasses import replace
 
 from sqlalchemy.orm import Session
 
-from app.commands.trigger_intent_core import CoreIntentNotActiveError, TriggerCoreInput, persist_core_trigger
+from app.commands.intent_lifecycle import IntentLifecycleCommand
+from app.commands.trigger_intent_core import (
+    CoreIntentNotActiveError,
+    TriggerCoreInput,
+    apply_trailing_baseline_update,
+    persist_core_trigger,
+)
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
 from app.domain.trigger_event import DuplicateTriggerError, quote_snapshot_to_jsonb
@@ -64,6 +69,10 @@ class TradeIntentCoreDispatcher:
         now = self._session_service.now_taipei()
         with self._session_factory() as db:
             repo = TradeIntentCoreRepository(db)
+            # 生命週期必須掛在這裡（與舊軌 dispatcher 同）：scheduled 單只有被啟用成 active
+            # 才會進 system_list_active_by_symbols。若只靠 API 路徑跑，沒人打 API 的日子
+            # 開盤後單子會一直停在 scheduled、整天不觸發。
+            IntentLifecycleCommand(repo, self._session_service).run()
             intents = repo.system_list_active_by_symbols([snapshot.symbol])
             if not intents:
                 return
@@ -72,22 +81,7 @@ class TradeIntentCoreDispatcher:
             for intent in intents:
                 result = self._evaluator.evaluate(snapshot, intent, now)
                 if result.baseline_updated_at is not None:
-                    repo.system_update_trailing_baseline(
-                        intent.id,
-                        result.baseline,
-                        result.dynamic_trigger_price,
-                        result.baseline_updated_at,
-                    )
-                    # 同一 snapshot 可能既抬 baseline 又觸發（last 創高 → 新 dynamic；bid 已在其下）。
-                    # persist 讀的是 intent 上的 trailing 狀態 → 不換掉會拿舊值寫稽核/通知；
-                    # baseline 初始為 NULL 的單首 tick 就觸發時更會直接 RuntimeError。
-                    # 舊軌靠 stage 重新 SELECT 讀回，新軌傳攤平 data → 在此接回。
-                    intent = replace(
-                        intent,
-                        baseline=result.baseline,
-                        dynamic_trigger_price=result.dynamic_trigger_price,
-                        baseline_updated_at=result.baseline_updated_at,
-                    )
+                    intent = apply_trailing_baseline_update(repo, intent, result)
                     has_pending_writes = True
                 if not result.should_trigger:
                     continue

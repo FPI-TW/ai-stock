@@ -1,6 +1,6 @@
 """HTTP integration tests for the §15 creation caps, against real PostgreSQL.
 
-Caps are injected small via a get_intent_limits override so the boundary is hit
+Caps are injected small via a get_core_intent_limits override so the boundary is hit
 without creating 200 rows. No quote is pushed, so every create stays `active` and
 counts toward the caps.
 """
@@ -20,9 +20,9 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import (
     get_active_user,
+    get_core_intent_limits,
     get_current_user,
     get_idempotency_key,
-    get_intent_limits,
     get_trading_session_service,
 )
 from app.commands.trade_intent import IntentLimits
@@ -31,6 +31,7 @@ from app.core.security import RequestUser
 from app.db.models.core import Symbol
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
+from tests.db_helpers import INTENT_TABLES
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 SESSION_NOW_UTC = datetime(2026, 5, 11, 10, 0, tzinfo=TAIPEI).astimezone(UTC)  # Monday in-session
@@ -67,7 +68,7 @@ def engine() -> Generator[Engine]:
         yield eng
     finally:
         with eng.begin() as conn:
-            conn.execute(text("TRUNCATE notifications, trigger_events, trade_intents CASCADE"))
+            conn.execute(text(f"TRUNCATE {INTENT_TABLES} CASCADE"))
         eng.dispose()
         command.downgrade(config, "base")
 
@@ -75,7 +76,7 @@ def engine() -> Generator[Engine]:
 @pytest.fixture
 def db_session(engine: Engine) -> Generator[Session]:
     session = Session(engine)
-    session.execute(text("TRUNCATE notifications, trigger_events, trade_intents CASCADE"))
+    session.execute(text(f"TRUNCATE {INTENT_TABLES} CASCADE"))
     session.commit()
     try:
         yield session
@@ -86,7 +87,7 @@ def db_session(engine: Engine) -> Generator[Session]:
 def _client(limits: IntentLimits) -> TestClient:
     app = create_app()
     app.dependency_overrides[get_trading_session_service] = lambda: TradingSessionService(clock=lambda: SESSION_NOW_UTC)
-    app.dependency_overrides[get_intent_limits] = lambda: limits
+    app.dependency_overrides[get_core_intent_limits] = lambda: limits
     app.dependency_overrides[get_idempotency_key] = lambda: str(uuid4())
     principal = RequestUser(user_id=OWNER_USER_ID, role="user")
     app.dependency_overrides[get_current_user] = lambda: principal

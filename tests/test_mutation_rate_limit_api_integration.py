@@ -26,6 +26,7 @@ from app.db.models.auth import User
 from app.db.models.core import Symbol
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
+from tests.db_helpers import INTENT_TABLES
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 SESSION_NOW_UTC = datetime(2026, 5, 11, 10, 0, tzinfo=TAIPEI).astimezone(UTC)  # Monday in-session
@@ -62,7 +63,7 @@ def engine() -> Generator[Engine]:
         yield eng
     finally:
         with eng.begin() as conn:
-            conn.execute(text("TRUNCATE notifications, trigger_events, trade_intents CASCADE"))
+            conn.execute(text(f"TRUNCATE {INTENT_TABLES} CASCADE"))
         eng.dispose()
         command.downgrade(config, "base")
 
@@ -70,7 +71,7 @@ def engine() -> Generator[Engine]:
 @pytest.fixture
 def db_session(engine: Engine) -> Generator[Session]:
     session = Session(engine)
-    session.execute(text("TRUNCATE notifications, trigger_events, trade_intents, rate_limit_buckets CASCADE"))
+    session.execute(text(f"TRUNCATE {INTENT_TABLES}, rate_limit_buckets CASCADE"))
     session.commit()
     try:
         yield session
