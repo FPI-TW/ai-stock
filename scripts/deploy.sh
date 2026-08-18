@@ -29,10 +29,21 @@ if [[ ! -f "nginx/nginx.conf" ]]; then
   exit 1
 fi
 
+# 3. Origin TLS 憑證必須已由 EC2 機密管理流程放置；不存在或空檔時，在任何 Docker
+#    操作前停止，避免新 nginx 設定因憑證遺漏而連帶中斷現有 HTTP 入口。憑證內容不輸出。
+origin_fullchain="nginx/certs/fullchain.pem"
+origin_privkey="nginx/certs/privkey.pem"
+for cert_file in "$origin_fullchain" "$origin_privkey"; do
+  if [[ ! -f "$cert_file" || ! -s "$cert_file" ]]; then
+    echo "錯誤：origin TLS 憑證檔不存在或為空：${deploy_dir}/${cert_file}。請先放置 EC2 憑證後再部署。" >&2
+    exit 1
+  fi
+done
+
 compose=(docker compose -f "$compose_file" --env-file "$env_file")
 
 # ==============================================================================
-# 3. 登入 GHCR 並拉取本次要部署的映像
+# 4. 登入 GHCR 並拉取本次要部署的映像
 # ==============================================================================
 echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
 
@@ -43,7 +54,7 @@ trap 'echo "正在清理登入憑證..."; docker logout ghcr.io >/dev/null 2>&1 
 
 "${compose[@]}" pull
 
-# 4. 滾動更新前，先記下目前線上的 app 映像，供健康檢查失敗時回滾（首次部署時為空）。
+# 5. 滾動更新前，先記下目前線上的 app 映像，供健康檢查失敗時回滾（首次部署時為空）。
 prev_app_cid="$("${compose[@]}" ps -q app 2>/dev/null || true)"
 prev_app_image=""
 if [[ -n "$prev_app_cid" ]]; then
@@ -77,7 +88,7 @@ fail_deploy() {
 "${compose[@]}" up -d --remove-orphans \
   || fail_deploy "compose up 失敗（通常是 migrate 失敗），近期 migrate/app log："
 
-# 5. 等 app 通過 healthcheck（最多 ~3 分鐘）
+# 6. 等 app 通過 healthcheck（最多 ~3 分鐘）
 app_cid="$("${compose[@]}" ps -q app)"
 for attempt in $(seq 1 "$max_attempts"); do
   state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$app_cid" 2>/dev/null || echo missing)"
@@ -96,7 +107,7 @@ for attempt in $(seq 1 "$max_attempts"); do
   sleep 5
 done
 
-# 6. 收尾：清理舊映像，避免磁碟被歷次 SHA tag 塞爆
+# 7. 收尾：清理舊映像，避免磁碟被歷次 SHA tag 塞爆
 echo "開始清理舊映像..."
 docker image prune -f
 
