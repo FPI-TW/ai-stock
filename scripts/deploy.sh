@@ -31,11 +31,12 @@ fi
 
 # 3. Origin TLS 憑證必須已由 EC2 機密管理流程放置；不存在或空檔時，在任何 Docker
 #    操作前停止，避免新 nginx 設定因憑證遺漏而連帶中斷現有 HTTP 入口。憑證內容不輸出。
-origin_fullchain="nginx/certs/fullchain.pem"
-origin_privkey="nginx/certs/privkey.pem"
-for cert_file in "$origin_fullchain" "$origin_privkey"; do
+origin_tls_dir="/home/ubuntu/etc/ai-stock/tls"
+origin_certificate="$origin_tls_dir/server.crt"
+origin_private_key="$origin_tls_dir/server.key"
+for cert_file in "$origin_certificate" "$origin_private_key"; do
   if [[ ! -f "$cert_file" || ! -s "$cert_file" ]]; then
-    echo "錯誤：origin TLS 憑證檔不存在或為空：${deploy_dir}/${cert_file}。請先放置 EC2 憑證後再部署。" >&2
+    echo "錯誤：origin TLS 憑證檔不存在或為空：${cert_file}。請先放置 EC2 憑證後再部署。" >&2
     exit 1
   fi
 done
