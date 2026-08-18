@@ -3,7 +3,7 @@
 # 映像由 CI build 後推到 GHCR，EC2 只 pull、不在本機 build（見 .github/workflows/cd.yml）。
 # 手動部署時用法：
 #   1. cp .env.prod.example .env.prod 並填入真實機密（DATABASE_URL / JWT / MFA / Shioaji）。
-#   2. 確認 EC2 已放置 nginx/certs/fullchain.pem 與 nginx/certs/privkey.pem（deploy.sh
+#   2. 確認 EC2 已放置 /home/ubuntu/etc/ai-stock/tls/server.crt 與 server.key（deploy.sh
 #      會在任何 Docker 操作前檢查兩者存在且非空；憑證不得進 Git）。
 #   3. echo "$GHCR_TOKEN" | docker login ghcr.io -u <github_user> --password-stdin
 #   4. IMAGE_TAG=<commit_sha 或 latest> docker compose -f docker-compose.prod.yml --env-file .env.prod pull
@@ -65,9 +65,13 @@ services:
       # Cloudflare Full (strict) 仍可走邊緣；443 讓 origin 端到端 TLS 可被驗證。
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      # 憑證只存在 EC2（nginx/certs/ 不進 Git），以唯讀方式提供給 nginx。
-      - ./nginx/certs/fullchain.pem:/etc/nginx/certs/fullchain.pem:ro
-      - ./nginx/certs/privkey.pem:/etc/nginx/certs/privkey.pem:ro
+      # 憑證只存在 EC2，與應用部署目錄分離；禁止 Docker 在路徑錯誤時建立空目錄。
+      - type: bind
+        source: /home/ubuntu/etc/ai-stock/tls
+        target: /etc/nginx/certs
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       app:
         condition: service_healthy
