@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -16,7 +17,7 @@ from app.commands.telegram_intent import (
 )
 from app.commands.trade_intent_core import CreateTradeIntentInput
 from app.core.config import Settings
-from app.domain.telegram_intent import TelegramIntentDecision, TelegramIntentInteractionData
+from app.domain.telegram_intent import TelegramIntentDecision, TelegramIntentInteractionData, TelegramIntentLlmError
 
 OWNER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
@@ -142,6 +143,11 @@ class _Decider:
         return self.decision
 
 
+class _FailingDecider:
+    def decide(self, **kwargs: object) -> TelegramIntentDecision:
+        raise TelegramIntentLlmError("telegram intent LLM request failed with HTTP 401")
+
+
 class _Users:
     def get_by_email(self, email: str) -> SimpleNamespace:
         return SimpleNamespace(id=OWNER_ID, status="active")
@@ -234,6 +240,28 @@ def test_non_trading_chat_is_silent_and_leaves_active_draft_unchanged() -> None:
 
     assert reply is None
     assert interactions.pending == pending
+
+
+def test_llm_failure_logs_safe_reason_without_message_text(caplog: pytest.LogCaptureFixture) -> None:
+    interactions = _Interactions(None)
+    command = TelegramIntentCommand(
+        settings=_settings(),
+        interactions=interactions,  # type: ignore[arg-type]
+        users=_Users(),  # type: ignore[arg-type]
+        symbol_service=_Symbols(),  # type: ignore[arg-type]
+        decider=_FailingDecider(),
+        create_intent=_Create(interactions),  # type: ignore[arg-type]
+    )
+    message = "sensitive telegram message"
+
+    with caplog.at_level(logging.WARNING, logger="app.commands.telegram_intent"):
+        reply = command.handle_message(HandleTelegramMessageInput(chat_id="configured-group", text=message))
+
+    assert reply is not None
+    assert reply.text == "暫時無法判斷需求，請稍後再試。"
+    assert "telegram intent LLM classification failed" in caplog.text
+    assert "HTTP 401" in caplog.text
+    assert message not in caplog.text
 
 
 def test_supported_incomplete_request_creates_cancel_only_clarification() -> None:
