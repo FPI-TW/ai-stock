@@ -45,6 +45,19 @@ class _DecisionPayload(BaseModel):
     target_price: str | None = Field(default=None, alias="targetPrice")
     missing_fields: list[MissingField] = Field(default_factory=list, alias="missingFields")
 
+    @field_validator("target_price", mode="before")
+    @classmethod
+    def _normalize_numeric_price(cls, value: object) -> object:
+        # JSON producers commonly encode prices as numbers even when the
+        # contract asks for a decimal string.  Normalize only real JSON numeric
+        # primitives here; bool is deliberately left untouched so strict
+        # validation still rejects it.
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return str(value)
+        return value
+
     @field_validator("symbol")
     @classmethod
     def _numeric_symbol(cls, value: str | None) -> str | None:
@@ -183,6 +196,8 @@ class DeepSeekTelegramIntentDecider:
         try:
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 raw = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raise TelegramIntentLlmError(f"telegram intent LLM request failed with HTTP {exc.code}") from exc
         except (TimeoutError, urllib.error.URLError, OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise TelegramIntentLlmError("telegram intent LLM request failed") from exc
         if not isinstance(raw, dict):
@@ -194,7 +209,13 @@ def _parse_response(raw: dict[str, Any]) -> TelegramIntentDecision:
     text = _extract_chat_content(raw)
     try:
         payload = _DecisionPayload.model_validate_json(text)
-    except (ValidationError, ValueError) as exc:
+    except ValidationError as exc:
+        details = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc']) or '<root>'}: {error['msg']}"
+            for error in exc.errors(include_url=False, include_context=False, include_input=False)
+        )
+        raise TelegramIntentLlmError(f"telegram intent LLM returned invalid JSON schema ({details})") from exc
+    except ValueError as exc:
         raise TelegramIntentLlmError("telegram intent LLM returned invalid JSON") from exc
     target_price: Decimal | None = None
     if payload.target_price is not None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -27,6 +28,8 @@ from app.repositories.telegram_intent_repository import TelegramIntentInteractio
 from app.repositories.user_repository import UserRepository
 from app.services.symbol import SymbolService
 from app.services.telegram_intent_llm import TelegramIntentDecider
+
+logger = logging.getLogger(__name__)
 
 INTERACTION_TTL = timedelta(minutes=5)
 
@@ -109,7 +112,11 @@ class TelegramIntentCommand:
                 previous_capability_id=pending.capability_id if pending is not None else None,
                 previous_payload=pending.payload if pending is not None else None,
             )
-        except TelegramIntentLlmError:
+        except TelegramIntentLlmError as exc:
+            # Do not log the Telegram message, model response, or credentials.
+            # The decider error is intentionally reduced to a safe operational
+            # category such as an HTTP status or schema field failure.
+            logger.warning("telegram intent LLM classification failed: %s", exc)
             return TelegramReply(chat_id=inp.chat_id, text=LLM_FAILURE_REPLY)
 
         # Ordinary group chat is deliberately silent.  A pending draft is left

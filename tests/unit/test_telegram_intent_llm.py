@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from types import TracebackType
 from typing import cast
 from urllib.request import Request
@@ -54,6 +55,66 @@ def test_parse_response_rejects_unknown_capability_and_extra_keys() -> None:
                                     "symbol": "0050",
                                     "quantityLots": 1,
                                     "targetPrice": "180",
+                                    "missingFields": [],
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("target_price", "expected"),
+    [
+        (180, Decimal("180")),
+        (180.5, Decimal("180.5")),
+        ("180.50", Decimal("180.50")),
+    ],
+)
+def test_parse_response_accepts_numeric_or_string_target_price(
+    target_price: int | float | str,
+    expected: Decimal,
+) -> None:
+    decision = _parse_response(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "decision": "draft_intent",
+                                "capabilityId": "limit_buy",
+                                "symbol": "0050",
+                                "quantityLots": 1,
+                                "targetPrice": target_price,
+                                "missingFields": [],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+    )
+
+    assert decision.target_price == expected
+
+
+def test_parse_response_rejects_boolean_target_price() -> None:
+    with pytest.raises(TelegramIntentLlmError, match="targetPrice"):
+        _parse_response(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "decision": "draft_intent",
+                                    "capabilityId": "limit_buy",
+                                    "symbol": "0050",
+                                    "quantityLots": 1,
+                                    "targetPrice": True,
                                     "missingFields": [],
                                 }
                             )
