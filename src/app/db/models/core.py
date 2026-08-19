@@ -259,6 +259,61 @@ class TwapSlice(TimestampMixin, Base):
     price_followup_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class TelegramIntentInteraction(TimestampMixin, Base):
+    """One shared Telegram draft for the configured group.
+
+    This model deliberately points confirmed interactions at the new
+    ``trade_intent_core`` track.  It is independent of the frozen legacy order
+    tables and keeps the small amount of conversational state in Postgres so a
+    process restart does not lose a pending confirmation.
+    """
+
+    __tablename__ = "telegram_intent_interactions"
+    __table_args__ = (
+        CheckConstraint("kind IN ('clarification', 'draft')", name="telegram_intent_interaction_kind"),
+        CheckConstraint(
+            "status IN ('pending', 'confirming', 'confirmed', 'cancelled', 'expired', 'superseded')",
+            name="telegram_intent_interaction_status",
+        ),
+        CheckConstraint(
+            "capability_id IN ('limit_buy', 'limit_sell', 'market_buy', 'market_sell')",
+            name="telegram_intent_interaction_capability",
+        ),
+        CheckConstraint(
+            "strategy IN ('limit_buy_order', 'limit_sell_order', 'market_buy_order', 'market_sell_order')",
+            name="telegram_intent_interaction_strategy",
+        ),
+        CheckConstraint("clarification_attempt_count >= 0", name="telegram_intent_interaction_attempt_count"),
+        Index(
+            "uq_telegram_intent_interactions_chat_pending",
+            "telegram_chat_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'confirming')"),
+        ),
+        Index("ix_telegram_intent_interactions_chat_status", "telegram_chat_id", "status"),
+        Index("ix_telegram_intent_interactions_expires_at", "status", "expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    owner_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    telegram_chat_id: Mapped[str] = mapped_column(Text, nullable=False)
+    bot_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    capability_id: Mapped[str] = mapped_column(Text, nullable=False)
+    strategy: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    missing_fields: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    clarification_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_trade_intent_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("trade_intent_core.id"),
+        nullable=True,
+    )
+
+
 class TriggerEvent(Base):
     __tablename__ = "trigger_events"
     __table_args__ = (

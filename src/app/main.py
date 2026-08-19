@@ -15,6 +15,7 @@ from app.api.routes.intents import router as intents_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes.quotes import router as quotes_router
 from app.api.routes.symbols import router as symbols_router
+from app.api.routes.telegram import router as telegram_router
 from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.core.config import get_settings
 from app.core.ids import RequestIdMiddleware
@@ -187,6 +188,7 @@ def create_app() -> FastAPI:
     app.include_router(quotes_router, prefix="/quotes", tags=["quotes"])
     app.include_router(intents_router, prefix="/trade-intents", tags=["trade-intents"])
     app.include_router(notifications_router, prefix="/notifications", tags=["notifications"])
+    app.include_router(telegram_router, prefix="/telegram", tags=["telegram"])
     if settings.local_mode:
         app.include_router(dev_router, prefix="/dev", tags=["dev"])
     return app

@@ -20,6 +20,7 @@ from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.commands.kill_switch import SetKillSwitchCommand
 from app.commands.notification import MarkNotificationReadCommand
 from app.commands.password_reset import PasswordResetConfirmCommand, PasswordResetRequestCommand
+from app.commands.telegram_intent import TelegramIntentCommand
 from app.commands.trade_intent import IntentLimits
 from app.commands.trade_intent_core import CancelTradeIntentCommand, CreateTradeIntentCommand
 from app.commands.trade_intent_core import IntentLimits as CoreIntentLimits
@@ -43,6 +44,7 @@ from app.repositories.password_reset_repository import PasswordResetRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.symbol_repository import SymbolRepository
 from app.repositories.system_flag_repository import SystemFlagRepository
+from app.repositories.telegram_intent_repository import TelegramIntentInteractionRepository
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.repositories.user_repository import UserRepository
 from app.services.audit import AuditEventWriter
@@ -52,6 +54,8 @@ from app.services.mailer import LoggingMailer, Mailer, SesMailer
 from app.services.quote.base import QuoteProvider
 from app.services.quote.current_price import CurrentPriceProvider
 from app.services.symbol import SymbolService
+from app.services.telegram_bot import TelegramBotClient
+from app.services.telegram_intent_llm import TelegramIntentDecider, build_telegram_intent_decider
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
@@ -404,6 +408,51 @@ def get_user_repository(db: DatabaseDep) -> UserRepository:
 
 
 UserRepoDep = Annotated[UserRepository, Depends(get_user_repository)]
+
+
+def get_telegram_intent_interaction_repository(db: DatabaseDep) -> TelegramIntentInteractionRepository:
+    return TelegramIntentInteractionRepository(db)
+
+
+TelegramIntentInteractionRepoDep = Annotated[
+    TelegramIntentInteractionRepository,
+    Depends(get_telegram_intent_interaction_repository),
+]
+
+
+def get_telegram_intent_decider(settings: SettingsDep) -> TelegramIntentDecider:
+    return build_telegram_intent_decider(settings)
+
+
+TelegramIntentDeciderDep = Annotated[TelegramIntentDecider, Depends(get_telegram_intent_decider)]
+
+
+def get_telegram_bot_client(settings: SettingsDep) -> TelegramBotClient:
+    return TelegramBotClient(settings)
+
+
+TelegramBotClientDep = Annotated[TelegramBotClient, Depends(get_telegram_bot_client)]
+
+
+def get_telegram_intent_command(
+    settings: SettingsDep,
+    interactions: TelegramIntentInteractionRepoDep,
+    users: UserRepoDep,
+    symbol_service: SymbolServiceDep,
+    decider: TelegramIntentDeciderDep,
+    create_intent: CreateTradeIntentCommandDep,
+) -> TelegramIntentCommand:
+    return TelegramIntentCommand(
+        settings=settings,
+        interactions=interactions,
+        users=users,
+        symbol_service=symbol_service,
+        decider=decider,
+        create_intent=create_intent,
+    )
+
+
+TelegramIntentCommandDep = Annotated[TelegramIntentCommand, Depends(get_telegram_intent_command)]
 
 
 def get_refresh_token_repository(db: DatabaseDep) -> RefreshTokenRepository:

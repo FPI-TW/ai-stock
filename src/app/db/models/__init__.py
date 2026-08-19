@@ -6,7 +6,7 @@ from app.db.models.auth import (
     RefreshToken,
     User,
 )
-from app.db.models.core import Notification, Symbol, TradeIntent, TriggerEvent, TwapSlice
+from app.db.models.core import Notification, Symbol, TelegramIntentInteraction, TradeIntent, TriggerEvent, TwapSlice
 from app.db.models.trade_intent_core import (
     TradeIntentCore,
     TradeIntentPriceParams,
@@ -23,6 +23,7 @@ __all__ = [
     "RateLimitBucket",
     "RefreshToken",
     "Symbol",
+    "TelegramIntentInteraction",
     "TradeIntent",
     "TradeIntentCore",
     "TradeIntentPriceParams",

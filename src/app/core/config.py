@@ -1,5 +1,6 @@
 import base64
 import ipaddress
+import re
 from functools import lru_cache
 from typing import Literal
 from uuid import UUID
@@ -110,6 +111,16 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str | None = Field(default=None, alias="TELEGRAM_CHAT_ID")
     telegram_timeout_seconds: float = Field(default=5.0, alias="TELEGRAM_TIMEOUT_SECONDS")
+    # Telegram inbound intent workflow.  The webhook route intentionally refuses
+    # requests when the secret is unset; keeping the field optional lets local
+    # processes boot without a bot while still making an accidental open webhook
+    # impossible.
+    telegram_webhook_secret: str | None = Field(default=None, alias="TELEGRAM_WEBHOOK_SECRET")
+    telegram_owner_email: str = Field(default="admin@tingfong.com", alias="TELEGRAM_OWNER_EMAIL")
+    telegram_webhook_url: str | None = Field(default=None, alias="TELEGRAM_WEBHOOK_URL")
+    telegram_llm_model: str = Field(default="deepseek-v4-flash", alias="TELEGRAM_LLM_MODEL")
+    telegram_llm_timeout_seconds: float = Field(default=10.0, alias="TELEGRAM_LLM_TIMEOUT_SECONDS")
+    deepseek_api_key: str | None = Field(default=None, alias="DEEPSEEK_API_KEY")
 
     # Local V0.5 TWAP worker loop; dev endpoints remain available for manual backfill.
     twap_worker_enabled: bool = Field(default=True, alias="TWAP_WORKER_ENABLED")
@@ -153,6 +164,42 @@ class Settings(BaseSettings):
     def _enforce_local_user_id(self) -> "Settings":
         if self.local_mode and self.local_user_id is None:
             raise ValueError("LOCAL_USER_ID is required when LOCAL_MODE is true")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_telegram_settings(self) -> "Settings":
+        if self.telegram_llm_timeout_seconds <= 0:
+            raise ValueError("TELEGRAM_LLM_TIMEOUT_SECONDS must be positive")
+        if self.telegram_timeout_seconds <= 0:
+            raise ValueError("TELEGRAM_TIMEOUT_SECONDS must be positive")
+        if self.telegram_webhook_secret:
+            secret = self.telegram_webhook_secret
+            if not 1 <= len(secret) <= 256 or re.fullmatch(r"[A-Za-z0-9_-]+", secret) is None:
+                raise ValueError("TELEGRAM_WEBHOOK_SECRET must be 1-256 characters using only A-Z, a-z, 0-9, _ or -")
+        if not self.telegram_owner_email.strip():
+            raise ValueError("TELEGRAM_OWNER_EMAIL must not be empty")
+        return self
+
+    @model_validator(mode="after")
+    def _enforce_production_telegram_inbound_config(self) -> "Settings":
+        # Outbound notification-only deployments may set just bot token/chat.
+        # Once an inbound-only value is present in production, fail fast unless
+        # the complete runtime path is configured; otherwise CD could register a
+        # secure webhook while the app silently uses the disabled decider.
+        inbound_enabled = bool(self.deepseek_api_key or self.telegram_webhook_secret or self.telegram_webhook_url)
+        if not self.local_mode and inbound_enabled:
+            missing = [
+                env
+                for env, value in (
+                    ("TELEGRAM_BOT_TOKEN", self.telegram_bot_token),
+                    ("TELEGRAM_CHAT_ID", self.telegram_chat_id),
+                    ("TELEGRAM_WEBHOOK_SECRET", self.telegram_webhook_secret),
+                    ("DEEPSEEK_API_KEY", self.deepseek_api_key),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(f"Telegram inbound workflow is partially configured; missing {', '.join(missing)}")
         return self
 
     @model_validator(mode="after")
