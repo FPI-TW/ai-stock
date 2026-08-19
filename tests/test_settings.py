@@ -99,6 +99,49 @@ def test_telegram_settings_parse_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.telegram_timeout_seconds == 2.5
 
 
+def test_telegram_webhook_secret_must_match_telegram_charset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "not valid")
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert "TELEGRAM_WEBHOOK_SECRET must be 1-256 characters" in str(exc_info.value)
+
+
+def test_production_inbound_telegram_config_fails_fast_when_partial(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    monkeypatch.setenv("JWT_ACCESS_SECRET", "prod-secret")
+    monkeypatch.setenv("MFA_ENCRYPTION_KEY", "prod-mfa-key")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "test-secret")
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(_env_file=None)  # type: ignore[call-arg]
+
+    message = str(exc_info.value)
+    assert "Telegram inbound workflow is partially configured" in message
+    assert "TELEGRAM_BOT_TOKEN" in message
+    assert "TELEGRAM_CHAT_ID" in message
+    assert "DEEPSEEK_API_KEY" in message
+
+
+def test_production_outbound_telegram_config_remains_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_MODE", "false")
+    monkeypatch.setenv("JWT_ACCESS_SECRET", "prod-secret")
+    monkeypatch.setenv("MFA_ENCRYPTION_KEY", "prod-mfa-key")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "configured-group")
+    monkeypatch.delenv("TELEGRAM_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("TELEGRAM_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.local_mode is False
+    assert settings.telegram_bot_token == "bot-token"
+
+
 def test_trusted_proxy_ips_default_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOCAL_USER_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.setenv("LOCAL_MODE", "true")

@@ -106,6 +106,12 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID }}
           TELEGRAM_TIMEOUT_SECONDS: ${{ vars.TELEGRAM_TIMEOUT_SECONDS }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          TELEGRAM_OWNER_EMAIL: ${{ vars.TELEGRAM_OWNER_EMAIL }}
+          TELEGRAM_WEBHOOK_URL: ${{ vars.TELEGRAM_WEBHOOK_URL }}
+          TELEGRAM_LLM_MODEL: ${{ vars.TELEGRAM_LLM_MODEL }}
+          TELEGRAM_LLM_TIMEOUT_SECONDS: ${{ vars.TELEGRAM_LLM_TIMEOUT_SECONDS }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           TWAP_WORKER_ENABLED: ${{ vars.TWAP_WORKER_ENABLED }}
           TWAP_WORKER_INTERVAL_SECONDS: ${{ vars.TWAP_WORKER_INTERVAL_SECONDS }}
         run: |
@@ -159,6 +165,12 @@ jobs:
           TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
           TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
           TELEGRAM_TIMEOUT_SECONDS=${TELEGRAM_TIMEOUT_SECONDS}
+          TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET}
+          TELEGRAM_OWNER_EMAIL=${TELEGRAM_OWNER_EMAIL}
+          TELEGRAM_WEBHOOK_URL=${TELEGRAM_WEBHOOK_URL}
+          TELEGRAM_LLM_MODEL=${TELEGRAM_LLM_MODEL}
+          TELEGRAM_LLM_TIMEOUT_SECONDS=${TELEGRAM_LLM_TIMEOUT_SECONDS}
+          DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
           TWAP_WORKER_ENABLED=${TWAP_WORKER_ENABLED}
           TWAP_WORKER_INTERVAL_SECONDS=${TWAP_WORKER_INTERVAL_SECONDS}
           EOF
@@ -173,3 +185,9 @@ jobs:
               "$IMAGE_TAG" "$GHCR_ACTOR" "$GHCR_TOKEN"
             cat scripts/deploy.sh
           } | ssh "${ssh_opts[@]}" "$EC2_USER@$EC2_HOST" 'bash -s'
+
+          # deploy.sh only returns after the app healthcheck succeeds. Register
+          # the webhook afterwards and verify both URL and allowed update types;
+          # a mismatch fails this CD run instead of silently leaving Telegram on
+          # an old deployment.
+          python3 scripts/setup_telegram_webhook.py --url "$TELEGRAM_WEBHOOK_URL"

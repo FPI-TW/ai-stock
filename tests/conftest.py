@@ -43,6 +43,12 @@ def clear_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
         "TELEGRAM_BOT_TOKEN",
         "TELEGRAM_CHAT_ID",
         "TELEGRAM_TIMEOUT_SECONDS",
+        "TELEGRAM_WEBHOOK_SECRET",
+        "TELEGRAM_OWNER_EMAIL",
+        "TELEGRAM_WEBHOOK_URL",
+        "TELEGRAM_LLM_MODEL",
+        "TELEGRAM_LLM_TIMEOUT_SECONDS",
+        "DEEPSEEK_API_KEY",
         "TWAP_WORKER_ENABLED",
         "TWAP_WORKER_INTERVAL_SECONDS",
         "IDEMPOTENCY_CLEANUP_ENABLED",
@@ -61,6 +67,15 @@ def clear_settings_cache(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
     )
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "")
+    # Override (rather than only delete) inbound values so BaseSettings cannot
+    # fall back to a developer's ignored .env and accidentally use live bot/LLM
+    # configuration during tests.
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "")
+    monkeypatch.setenv("TELEGRAM_OWNER_EMAIL", "admin@tingfong.com")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_URL", "")
+    monkeypatch.setenv("TELEGRAM_LLM_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("TELEGRAM_LLM_TIMEOUT_SECONDS", "10")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
     monkeypatch.setenv("TWAP_WORKER_ENABLED", "false")
     monkeypatch.setenv("IDEMPOTENCY_CLEANUP_ENABLED", "false")
     get_settings.cache_clear()
