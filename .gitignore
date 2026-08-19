@@ -8,6 +8,7 @@ __pycache__/
 *.py[cod]
 .DS_Store
 .coverage
+.aws/credentials
 
 # agent 工作日誌（本地）
 PROJECT_HISTORY.md
