@@ -1,0 +1,210 @@
+# F2：富邦今日委託查詢（下了哪些單 / 成功與否）
+
+## Metadata
+
+- 分層：上線後（富邦串接系列）
+- 優先序：F2
+- ROM：**S**
+- 依賴：[F1](F1-fubon-account-balance.md)（富邦 SDK 登入 session 的實作在 F1，本票直接沿用）。SDK 安裝已由 `chore/fubon-sdk-install` 完成。
+- 被誰依賴：未來的下單票——送出委託後要能查回報，就是這支。
+- 交付版本：V1
+- 來源：2026-08-03 富邦方向（`PRODUCT_CONTEXT.md` 第 1、4 點）
+
+## 背景
+
+前端目前看不到任何委託狀態。富邦帳戶裡有哪些單、成不成功、成交了多少，全都問不到。
+
+⚠️ **現階段是階段一（只通知、不下單）**，所以帳戶裡的委託不是我方系統送出的，而是使用者自己在
+富邦下的單。這支接口的價值有兩層：
+
+1. **現在**：前端能顯示帳戶今日的委託與結果。
+2. **接下來**：下單系統開工後，送出去的單要能查到結果——就是這支。先把「查得到、狀態解讀正確」
+   打通，下單票才不用同時處理送單與回報兩件事。
+
+## 富邦 API 事實（`docs/api/fubon-neo-api.md`）
+
+`sdk.stock.get_order_results(account)`（47770 行）回 `Result{ is_success, message, data: List[OrderResult] }`，
+內容是**當日**委託。`OrderResult` 主要欄位：
+
+| 欄位 | 說明 |
+|---|---|
+| `order_no` / `seq_no` | 委託書號 / 流水序號 |
+| `stock_no` | 股票代號 |
+| `buy_sell` | 買賣別 |
+| `price_type` / `price` | 委託價格別（限價 / 市價 / 漲跌停 / 參考價）與價格 |
+| `quantity` | 原始委託股數 |
+| `after_qty` | 有效委託股數（含已成交） |
+| `filled_qty` / `filled_money` | 成交股數 / 成交價金 |
+| `status` | **委託單狀態碼（int）** |
+| `time_in_force` / `order_type` / `market_type` | ROD-FOK-IOC / 現股-融資-融券 / 整股-零股 |
+| `last_time` | 最後異動時間 |
+| `error_message` | 該筆委託的錯誤訊息 |
+| `user_def` | 自訂欄位（本票不用，見下方〈未來方向〉） |
+
+### 狀態碼對照（文件 29976 行，證券交易）
+
+| 狀態碼 | 富邦說明 |
+|---|---|
+| `0` | 預約單 |
+| `4` | 系統將委託送往後台 |
+| `8` | 後台傳送中 |
+| `9` | 連線逾時（需稍後重查） |
+| `10` | 委託成功 |
+| `30` | 未成交刪單成功 |
+| `40` | 部分成交，剩餘取消 |
+| `50` | 完全成交 |
+| `90` | 失敗 |
+| `14` / `24` / `34` | 改價 / 改量 / 刪單 ACK |
+| `15` / `20` | 改價成功 / 改量成功 |
+| `19` / `29` / `39` | 改價 / 改量 / 刪單失敗 |
+
+## 結論（要做什麼）
+
+新增 `GET /account/orders`，回傳富邦帳戶**今日**的委託清單，**狀態碼在後端翻成語意字串**後再給前端。
+
+### 核心要求：不要把狀態數字丟給前端
+
+「成功與否」是這張票的重點。後端必須把 `status` 的整數碼映射成語意值，前端不該去背 `10` 是什麼意思：
+
+| 語意值（建議） | 對應狀態碼 | 白話 |
+|---|---|---|
+| `pending` | `0`, `4`, `8`, `9` | 處理中 / 尚未確認 |
+| `accepted` | `10` | 委託成功（尚未成交） |
+| `filled` | `50` | 完全成交 |
+| `partially_filled_cancelled` | `40` | 部分成交、剩餘取消 |
+| `cancelled` | `30` | 未成交刪單成功 |
+| `failed` | `90`, `19`, `29`, `39` | 失敗 |
+
+- 映射表寫成一個明確的 dict，**不做動態推導**。
+- **遇到表上沒有的狀態碼**（含 `14`/`24`/`34`/`15`/`20` 這些歷程標示）：回一個明確的 `unknown`，
+  把原始碼一起帶出（見下方 `rawStatus`），並寫 warning log。**不可以默默當成成功或失敗**——
+  富邦日後新增狀態碼時，我們要看得出來，而不是靜默誤判。
+- `rawStatus` 一併回傳原始整數：出事時才查得出來前端顯示的語意是從哪個碼翻的。
+
+### 對外介面
+
+`GET /account/orders`，掛 `ActiveUserDep`。Response 200：
+
+```json
+{
+  "data": [
+    {
+      "orderNo": "bA628",
+      "stockNo": "2888",
+      "buySell": "Buy",
+      "priceType": "Limit",
+      "price": 9.1,
+      "quantity": 2000,
+      "filledQty": 0,
+      "filledMoney": 0,
+      "status": "accepted",
+      "rawStatus": 10,
+      "lastTime": "08:30:05.157",
+      "errorMessage": null
+    }
+  ],
+  "queriedAt": "2026-08-24T01:23:45Z"
+}
+```
+
+- **不回傳 `branch_no` / `account`**（理由同 F1：一套部署一個帳號，帳號屬個資）。
+- 無委託時回**空陣列 + 200**，不是 404。
+- 排序：依 `last_time` 由新到舊。若富邦回傳順序已符合就照用，不另外做複雜排序。
+
+### 兩種 message 要分開處理（別搞混）
+
+| 來源 | 處理 |
+|---|---|
+| `Result.message`（連線 / 認證層失敗） | **不回前端**，只寫 server log，端點回 502 通用訊息。同 F1。 |
+| `OrderResult.error_message`（單筆委託的失敗原因，如餘額不足） | **回前端**。這是使用者自己那張單的業務結果，看不到反而沒用。 |
+
+### 錯誤碼
+
+| 情境 | 狀態碼 |
+|---|---|
+| 未設定富邦憑證（`FUBON_ENABLED=false`） | 503 |
+| 登入失敗 / `is_success = false` / SDK 例外 | 502 |
+
+### 程式落點
+
+- `src/app/services/fubon/order_query.py`（新增）：呼叫 `get_order_results` + 狀態映射 + 轉 dataclass。
+- `src/app/schemas/account.py`（F1 建立）：加委託的 response model。
+- `src/app/api/routes/account.py`（F1 建立）：加這支端點。
+- **沿用 F1 的登入 session**，不要另外開一套登入。
+- 端點同樣是同步 `def`（SDK 阻塞，`async def` 會卡 event loop）。
+
+### 取哪個帳號：收斂成一處
+
+`sdk.login()` 回傳的 `accounts.data` **可能有多筆**（文件：「若有多帳號，則回傳多個」；`Account` 物件帶
+`name` / `account` / `branch_no` / `account_type`）。
+
+本票仍固定取第一個證券帳號，但**取得帳號的邏輯只能寫在一個地方**（F1 的 SDK 模組內），
+F2 及後續所有票都呼叫它，不要各自散寫 `accounts.data[0]`。
+
+理由見下方〈未來方向〉的多帳號待確認事項——真要支援多帳號時，這樣只需改一處。這是零成本的寫法，
+**不是為未來預留的抽象層**：不建 account selector 介面、不做設定驅動的帳號路由。
+
+## 非目標
+
+- **不下單、不改單、不刪單。**
+- 不做歷史成交查詢（`filled_history`，需日期區間）——等真的開始送單、確定前端怎麼呈現再開票。
+- 不做委託歷程（`get_order_results_detail`）。
+- 不接主動回報（`set_on_order` callback / WebSocket 推播）——本票是使用者開頁面時查一次。
+- **不把委託寫進我們的資料庫**：本票是即時透傳。委託落 DB 的時機與範圍見〈未來方向〉，前置是下單功能。
+- 不做快取（理由同 F1：手動查看，不是輪詢）。
+- 不做期貨（`sdk.futopt.*`），只做證券。
+- 不做多帳號選擇、不做交易員績效——見〈未來方向〉。
+
+## 未來方向：委託紀錄與績效追蹤（本票不實作）
+
+已寫入 `PRODUCT_CONTEXT.md` 第 4 點（2026-08-24 定案），此處摘要，供做下單票的人不必重想一次：
+
+**資料界線**
+
+| 資料 | 放哪 |
+|---|---|
+| 委託 ↔ intent ↔ user 的對照（`order_no` / `seq_no` / `intent_id` / `user_id` / 送出時間） | **我方 DB**——只有我們知道 |
+| 成交價、委託狀態、持倉、已實現／未實現損益 | **即時查富邦**——券商是唯一真相來源 |
+
+- 送單時把 `intent_id` 塞進 `user_def`，回報就能直接對回意圖，不必另建索引。
+- ⚠️ **不要自建持倉表**：使用者隨時可能直接用富邦 App 自行買賣，本地快照立刻失真，接著就得寫對帳邏輯。
+- **損益不自己算**：富邦已提供 `realized_gains_and_loses` / `unrealized_gains_and_loses`，我方只做歸戶。
+- **時序**：對照表的落點是下單功能實作時（那時才有 `order_no`），現在建即空表。
+
+**多帳號 / 子憑證（待向富邦確認）**
+
+文件所述「最多 30 把」是 **API Key 上限**，且 `apikey_login` 仍需主帳號 ID + 憑證，**未見「交易員各自子憑證」的機制**。
+若 30 把 key 全綁同一帳號，`OrderResult.account` 完全相同、**分不出是誰下的單**，績效歸屬只能靠我方對照表。
+此前提確認前，不得據此設計 per-user 憑證管理或 session pool。
+
+## 驗收條件
+
+- [ ] `GET /account/orders` 回 200 + 委託陣列，欄位如上（camelCase）。
+- [ ] 狀態碼正確翻成語意值：`10`→`accepted`、`50`→`filled`、`40`→`partially_filled_cancelled`、`30`→`cancelled`、`90`→`failed`、`0/4/8/9`→`pending`。
+- [ ] 未知狀態碼 → `unknown` + `rawStatus` 原碼 + warning log，不被誤判成成功或失敗。
+- [ ] 每筆都帶 `rawStatus` 原始整數。
+- [ ] 帳戶今日無委託 → 200 + 空陣列。
+- [ ] 單筆的 `error_message` 有回前端；連線層 `Result.message` 沒有回前端、只在 log。
+- [ ] 未登入 401；`FUBON_ENABLED=false` → 503；券商查詢失敗 → 502。
+- [ ] 沿用 F1 的登入 session，未新增第二套登入流程；取帳號邏輯只有一處。
+- [ ] `make check` 全綠。
+
+## 測試要求
+
+`tests/api/test_account_orders.py`，以 monkeypatch 注入 fake SDK（**不連真富邦 API**）：
+
+- 正常清單回 200 與正確 JSON。
+- **每個狀態碼各一個 case**（`0/4/8/9/10/30/40/50/90`）驗證語意映射——這是本票最容易寫錯的地方。
+- 未知狀態碼（例如 `77`）→ `unknown` + `rawStatus: 77`。
+- 空清單 → 200 + `[]`。
+- `is_success = false` → 502 且回應不含券商 message。
+- `FUBON_ENABLED=false` → 503。
+
+真實帳號的連線驗證屬手動 smoke test，寫在 PR 描述。
+
+## 工程注意事項
+
+- 狀態映射是一個 dict + 一個「查不到就 unknown」的分支，**不要**做成 enum 階層、策略類別或設定檔驅動。
+- `price` 在富邦是 `float`。對外 JSON 照原樣給前端（前端只做顯示）；未來若要拿它算錢，再考慮 `Decimal`——本票不涉及金額計算。
+- `last_time` 富邦只給時分秒字串（`"08:30:05.157"`），沒有日期。因為查的是當日委託，前端要組完整時間就自己補當天日期；**後端不要自作聰明幫它拼**，拼錯會在跨日邊界出事。
+- 命名遵循 snake_case（模組 / 函式 / 變數），response model class 用 PascalCase，對外 JSON camelCase。
