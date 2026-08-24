@@ -9,6 +9,7 @@ __pycache__/
 .DS_Store
 .coverage
 .aws/credentials
+key/*
 
 # agent 工作日誌（本地）
 PROJECT_HISTORY.md
