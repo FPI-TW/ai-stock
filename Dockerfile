@@ -13,7 +13,10 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 
 # 先只用 lock + manifest 裝相依，最大化 layer cache。
+# vendor/ 是富邦 SDK 的本地 wheel（不上 PyPI），uv.lock 的 path source 指向它，
+# 不 COPY 進 build context 的話 uv sync 會找不到檔案而失敗。
 COPY pyproject.toml uv.lock ./
+COPY vendor ./vendor
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
