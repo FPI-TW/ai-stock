@@ -5,7 +5,9 @@
 - 分層：上線後（富邦串接第一票；不阻擋既有通知功能）
 - 優先序：F1（F = Fubon 券商串接系列，新開前綴；既有 L/P/T 三系列不含券商帳務）
 - ROM：**S**
-- 依賴：`fubon-neo` 2.2.8 已加入 `pyproject.toml`（本機 wheel，`[tool.uv.sources]`）。無其他功能依賴。
+- 依賴：`fubon-neo` 2.2.8 已加入 `pyproject.toml`（本機 wheel，`[tool.uv.sources]`）。
+  **[F5](F5-fubon-quote-provider.md)（富邦行情 provider）＝共用登入 session 的擁有者**，本票沿用不自建
+  （2026-09-09 變更，理由見〈登入 session 處理〉）。無其他功能依賴。
 - 交付版本：V1
 - 來源：2026-08-03 富邦方向（`PRODUCT_CONTEXT.md` 第 3、4 點）——取得富邦交易帳號後，先做**唯讀帳務**，下單另票。
 
@@ -14,22 +16,25 @@
 目前系統只有報價與通知，前端沒有任何「這個帳戶還有多少錢」的資訊。富邦 Neo SDK 的
 `accounting.bank_remain(account)` 直接回傳交割帳戶餘額，後端只需登入 → 查詢 → 轉成 JSON。
 
-這是**第一支碰富邦 SDK 的程式**，所以本票同時要把「登入 session 怎麼拿、放哪、失敗怎麼辦」
-一次定下來，後續下單票直接沿用，不要各寫一套。
+⚠️ **2026-09-09 變更**：本票原本要「順便把登入 session 一次定下來」，該責任已移交
+[F5](F5-fubon-quote-provider.md)。本票改為**沿用 F5 的共用登入**，不自建第二套。
+詳見〈登入 session 處理〉。
 
 ## 結論（要做什麼）
 
-新增一支唯讀端點 `GET /account/balance`，後端登入富邦 SDK、呼叫 `accounting.bank_remain`，
+新增一支唯讀端點 `GET /account/balance`，後端以 F5 的共用 session 呼叫 `accounting.bank_remain`，
 把餘額打包成 JSON 回前端。
 
 ### 富邦 API 事實（`fubon-api.md` 45393–45450）
 
 ```py
-from fubon_neo.sdk import FubonSDK
-sdk = FubonSDK()
-accounts = sdk.login("ID", "password", "cert path", "cert password")
-result = sdk.accounting.bank_remain(accounts.data[0])
+# sdk 與證券帳號皆取自 F5 的共用登入，本票不自己 login
+result = sdk.accounting.bank_remain(stock_account)
 ```
+
+⚠️ 官方文件範例寫的是 `accounts.data[0]`，**不可照抄**。一次登入會回證券帳號 + 期權帳號
+**多筆且順序不保證**（`docs/api/fubon-neo-verified-behavior.md` 地雷節，已實測）。
+拿到期權帳號去打證券 API 會回「帳號類別錯誤」。取帳號的責任在 F5，本票直接用它給的證券帳號。
 
 `Result` 欄位：`is_success: bool` / `message: str | None` / `data: BankRemain`。
 
@@ -63,7 +68,8 @@ Response 200（JSON 欄位維持既有 camelCase 慣例）：
 
 ### 程式落點
 
-- `src/app/services/fubon/account_balance.py`（新增，單一模組）：SDK 登入 + `bank_remain` 查詢 + 轉成 dataclass。
+- `src/app/services/fubon/account_balance.py`（新增，單一模組）：`bank_remain` 查詢 + 轉成 dataclass。
+  **不含登入**——sdk 實例與證券帳號都向 F5 的共用 session 取。
 - `src/app/schemas/account.py`（新增）：response model。
 - `src/app/api/routes/account.py`（新增）+ 在 router 註冊。
 - `src/app/core/config.py`：新增下方環境變數。
@@ -73,8 +79,29 @@ Response 200（JSON 欄位維持既有 camelCase 慣例）：
 
 ### 登入 session 處理
 
-- SDK 登入昂貴且有 session 概念，**module 級延遲初始化 + `threading.Lock` 保護**，不要每次請求重登。
-- 查詢失敗且疑似 session 失效時，**重登一次並重試一次**就好；再失敗直接 502。不要做重試佇列 / 指數退避。
+> **2026-09-09 改寫。** 原本這節寫的是「module 級延遲初始化 + `threading.Lock`，第一次查詢才登入」，
+> 已作廢——本票改為沿用 [F5](F5-fubon-quote-provider.md) 的共用登入。
+
+**本票不得自行 `sdk.login()`。** 整個 process 只有一個 `FubonSDK` 實例、只登入一次，
+由 F5 在 lifespan 建立、關閉時 `logout()`；本票的端點向它取 sdk 與證券帳號即可。
+
+為什麼不各登各的（硬限制，不是偏好）：
+
+- **富邦交易連線數上限 10**，每次 `sdk.login()` 吃掉一條，超過回
+  `Login Error, 超過本應用程式連線限制==>[10]`。
+- 未正常 `logout()` 的殘留 session 會**繼續佔著額度**——症狀是「平常都好好的，
+  反覆重啟幾次之後某天突然登不進去」，極難查。
+- SDK 的 `marketdata` / `accounting` / `stock` 本來就掛在**同一個 `sdk` 物件**底下，
+  不是三個獨立 client。行情與帳務各登一次是自己製造問題。
+- 由 F5（行情）擁有的理由：行情是**開機連到關機的長命連線**，帳務是請求時查一次；
+  生命週期最長的那個負責管理，其他人附掛。
+
+其餘不變：
+
+- 查詢失敗且疑似 session 失效時，**重登一次並重試一次**就好；再失敗直接 502。
+  不要做重試佇列 / 指數退避。重登動作一律走 F5 的共用 session（由它負責重建），
+  **本票不自己呼叫 `login()`**。
+- `FUBON_ENABLED=false`（或共用 session 未建立）→ 503，不嘗試載入 SDK。
 - SDK 是**同步阻塞**：端點用 `def`（FastAPI 自動丟 threadpool），**不要寫 `async def`**，否則會卡住 event loop。
 
 ### 環境變數（`.env`，不入 repo）
@@ -96,7 +123,8 @@ Response 200（JSON 欄位維持既有 camelCase 慣例）：
 
 - **不下單**、不查委託、不查成交（下單是另一系列票）。
 - 不做庫存（`inventories`）、未實現/已實現損益、交割金額（`query_settlement`）、維持率（`maintenance`）——要哪個另開票。
-- 不做多帳號 / 帳號選擇（`accounts.data[0]` 固定取第一個，多於一個時 log warning）。
+- 不做多帳號 / 帳號選擇：固定用 F5 給的那個證券帳號（F5 以 `account_type == "stock"` 過濾，
+  **不是** `data[0]`；多於一個證券帳號時取第一個並 log warning）。
 - **不做快取**。富邦 Web API 有 300/min 速率限制，但前端是使用者手動開頁面看餘額，量級差三個數量級。前端真的改成輪詢再加，屆時一行 TTL cache 即可。
 - 不做 `BrokerClient` 抽象層、不做券商 provider factory。
 - 不動 shioaji 報價路徑；`make check-shioaji-isolation` 只 grep `shioaji`，本票不受影響。
@@ -108,7 +136,9 @@ Response 200（JSON 欄位維持既有 camelCase 慣例）：
 - [ ] `FUBON_ENABLED=false` → 503，且**不嘗試**載入 SDK / 讀憑證。
 - [ ] `is_success = false` 或 SDK 丟例外 → 502，前端拿到通用訊息，券商 `message` 只出現在 server log。
 - [ ] log / response 皆不含帳號、密碼、憑證路徑。
-- [ ] SDK 只在第一次查詢時登入，第二次請求重用同一 session（測試以 fake sdk 計算 `login` 呼叫次數驗證）。
+- [ ] **本票程式碼中沒有任何 `sdk.login()` 呼叫**；sdk 與證券帳號皆取自 F5 的共用 session。
+- [ ] 連續多次請求，`login` 在整個 process 生命週期**只被呼叫一次**（測試以 fake sdk 計數驗證）。
+- [ ] 取到的是**證券**帳號（`account_type == "stock"`），不是 `data[0]`。
 - [ ] 端點為同步 `def`，不阻塞 event loop。
 - [ ] `make check` 全綠。
 
@@ -119,7 +149,8 @@ Response 200（JSON 欄位維持既有 camelCase 慣例）：
   - 文件那種字串金額（`"666666"`）也要能正確轉成 int。
   - `is_success = false` → 502 且回應不含券商 message。
   - `FUBON_ENABLED=false` → 503。
-  - 連續兩次請求只 `login` 一次。
+  - 連續兩次請求只 `login` 一次（登入由 F5 的共用 session 負責，本票不自己登）。
+  - fake 的登入回傳同時含期權與證券帳號、且**期權排在前面**——驗證取到的是證券帳號而非 `data[0]`。
 - 真實憑證的連線驗證屬手動 smoke test，寫在 PR 描述，不進 CI。
 
 ## 工程注意事項
@@ -128,3 +159,5 @@ Response 200（JSON 欄位維持既有 camelCase 慣例）：
 - `fubon_neo` 無型別標註 → `pyproject.toml` 補 `[[tool.mypy.overrides]] module = "fubon_neo.*" ignore_missing_imports = true`（比照既有 shioaji override）。
 - 目前 wheel 是 macOS arm64 專用（`fubon_neo-2.2.8-cp37-abi3-macosx_11_0_arm64.whl`），**Linux 部署要另外拿對應 wheel**，否則 `uv sync` 在 EC2 會失敗——施工時先確認部署環境裝得起來，這是本票最可能卡住的地方。
 - 不要在 `import` 時就登入 SDK（會讓 app 啟動綁死券商可用性、也讓測試變慢）。
+  ——這條依然成立且與 F5 不衝突：F5 的登入是在 **lifespan** 做的，不是 import 時，
+  而本票根本不登入。
