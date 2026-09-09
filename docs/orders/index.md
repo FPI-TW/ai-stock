@@ -5,6 +5,7 @@
 ## 目前工單
 
 - [停利／停損提醒](stop-loss-take-profit.md)
+- [富邦行情 provider（訂閱股票現價）](fubon-quote-provider.md)
 
 ## 生命週期
 
