@@ -5,7 +5,10 @@
 - 分層：上線後（富邦串接系列）
 - 優先序：F2
 - ROM：**S**
-- 依賴：[F1](F1-fubon-account-balance.md)（富邦 SDK 登入 session 的實作在 F1，本票直接沿用）。SDK 安裝已由 `chore/fubon-sdk-install` 完成。
+- 依賴：**[F5](F5-fubon-quote-provider.md)（富邦行情 provider）＝共用登入 session 與取帳號邏輯的擁有者**，
+  本票直接沿用，不另開登入（2026-09-09 變更：原本指向 F1，登入責任已移交 F5，理由見 F5 工單〈登入〉節）。
+  [F1](F1-fubon-account-balance.md) 建立 `schemas/account.py` 與 `routes/account.py`，本票在其上加端點。
+  SDK 安裝已由 `chore/fubon-sdk-install` 完成。
 - 被誰依賴：未來的下單票——送出委託後要能查回報，就是這支。
 - 交付版本：V1
 - 來源：2026-08-03 富邦方向（`PRODUCT_CONTEXT.md` 第 1、4 點）
@@ -130,7 +133,8 @@
 - `src/app/services/fubon/order_query.py`（新增）：呼叫 `get_order_results` + 狀態映射 + 轉 dataclass。
 - `src/app/schemas/account.py`（F1 建立）：加委託的 response model。
 - `src/app/api/routes/account.py`（F1 建立）：加這支端點。
-- **沿用 F1 的登入 session**，不要另外開一套登入。
+- **沿用 F5 的共用登入 session 與證券帳號**，不要另外開一套登入
+  （富邦交易連線數上限 10，每次 `login()` 吃一條；全 process 只能登一次）。
 - 端點同樣是同步 `def`（SDK 阻塞，`async def` 會卡 event loop）。
 
 ### 取哪個帳號：收斂成一處
@@ -138,8 +142,12 @@
 `sdk.login()` 回傳的 `accounts.data` **可能有多筆**（文件：「若有多帳號，則回傳多個」；`Account` 物件帶
 `name` / `account` / `branch_no` / `account_type`）。
 
-本票仍固定取第一個證券帳號，但**取得帳號的邏輯只能寫在一個地方**（F1 的 SDK 模組內），
+本票仍固定取第一個證券帳號，但**取得帳號的邏輯只能寫在一個地方**（F5 的共用登入模組內），
 F2 及後續所有票都呼叫它，不要各自散寫 `accounts.data[0]`。
+
+⚠️ 「第一個**證券**帳號」＝先以 `account_type == "stock"` 過濾再取第一個，**不是** `data[0]`。
+登入回證券 + 期權多筆且順序不保證（`docs/api/fubon-neo-verified-behavior.md` 已實測），
+期權帳號打證券 API 會回「帳號類別錯誤」。
 
 理由見下方〈未來方向〉的多帳號待確認事項——真要支援多帳號時，這樣只需改一處。這是零成本的寫法，
 **不是為未來預留的抽象層**：不建 account selector 介面、不做設定驅動的帳號路由。
@@ -186,7 +194,7 @@ F2 及後續所有票都呼叫它，不要各自散寫 `accounts.data[0]`。
 - [ ] 帳戶今日無委託 → 200 + 空陣列。
 - [ ] 單筆的 `error_message` 有回前端；連線層 `Result.message` 沒有回前端、只在 log。
 - [ ] 未登入 401；`FUBON_ENABLED=false` → 503；券商查詢失敗 → 502。
-- [ ] 沿用 F1 的登入 session，未新增第二套登入流程；取帳號邏輯只有一處。
+- [ ] 沿用 F5 的共用登入 session，本票程式碼中**沒有任何 `sdk.login()` 呼叫**；取帳號邏輯只有一處。
 - [ ] `make check` 全綠。
 
 ## 測試要求
