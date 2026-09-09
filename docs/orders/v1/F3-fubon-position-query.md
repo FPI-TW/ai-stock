@@ -5,7 +5,9 @@
 - 分層：上線後（富邦串接系列）
 - 優先序：F3
 - ROM：**S**
-- 依賴：[F1](F1-fubon-account-balance.md)（登入 session 與「取哪個帳號」的邏輯都在 F1，本票直接沿用，不另開登入）。
+- 依賴：**[F5](F5-fubon-quote-provider.md)（富邦行情 provider）＝共用登入 session 與「取哪個帳號」的擁有者**，
+  本票直接沿用，不另開登入（2026-09-09 變更：原本指向 F1，登入責任已移交 F5）。
+  [F1](F1-fubon-account-balance.md) 建立 `schemas/account.py` 與 `routes/account.py`，本票在其上加端點。
   與 [F2](F2-fubon-order-query.md) 無相互依賴，可平行做。
 - 被誰依賴：停損停利建單流程（[P1](P1-take-profit-stop-loss-oco.md)）——使用者要對持有部位設停損，
   前提是知道自己有哪些股票、可賣幾股。
@@ -89,7 +91,8 @@
 | 把整股與 `odd` 零股加總 | 兩者單位語意不同，合併會出錯。`odd` 原樣帶出，前端要怎麼呈現自己決定 |
 | 把持倉歸戶到 user | 子帳號系統已於 2026-08-28 整套取消，見〈非目標〉 |
 
-**券商是唯一真相來源**，後端的職責只有：登入 → 查 → 翻 `order_type` → 濾空殼 → 轉 JSON 欄位命名 → 回傳。
+**券商是唯一真相來源**，後端的職責只有：查 → 翻 `order_type` → 濾空殼 → 轉 JSON 欄位命名 → 回傳。
+（登入不在本票職責內，走 F5 的共用 session。）
 
 ### `order_type` 映射（比照 F2 的狀態碼原則）
 
@@ -173,7 +176,10 @@
 - `src/app/services/fubon/position_query.py`（新增）：`inventories` 查詢 + `order_type` 映射 + 濾空殼 + 轉 dataclass。
 - `src/app/schemas/account.py`（F1 建立）：加持倉的 response model。
 - `src/app/api/routes/account.py`（F1 建立）：加這支端點。
-- **沿用 F1 的登入 session 與取帳號邏輯**，不要另開一套，也不要各自寫 `accounts.data[0]`。
+- **沿用 F5 的共用登入 session 與取帳號邏輯**，不要另開一套（富邦交易連線數上限 10，
+  每次 `login()` 吃一條，全 process 只能登一次），也不要各自寫 `accounts.data[0]`
+  ——取帳號須以 `account_type == "stock"` 過濾，登入回證券 + 期權多筆且順序不保證
+  （`docs/api/fubon-neo-verified-behavior.md` 已實測），期權帳號打證券 API 會回「帳號類別錯誤」。
 - 端點同樣是同步 `def`（SDK 阻塞，`async def` 會卡 event loop）。
 
 ## 非目標
@@ -217,7 +223,7 @@
 - [ ] `is_success = false` 或 SDK 例外 → 502，券商 `message` 只在 log。
 - [ ] 未登入 401；`FUBON_ENABLED=false` → 503。
 - [ ] 後端沒有任何成本均價、市值、手續費、稅、報酬率的計算；沒有新增任何持倉相關資料表。
-- [ ] 沿用 F1 的登入 session，未新增第二套登入流程；取帳號邏輯只有一處。
+- [ ] 沿用 F5 的共用登入 session，本票程式碼中**沒有任何 `sdk.login()` 呼叫**；取帳號邏輯只有一處。
 - [ ] `make check` 全綠。
 
 ## 測試要求
