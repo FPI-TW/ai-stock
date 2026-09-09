@@ -334,17 +334,19 @@ CURRENT_PRICE_SOURCE_NAME = "shioaji"
 - 命名遵循 snake_case（模組 / 函式 / 變數），class 用 PascalCase，對外 JSON camelCase。
 - 券商回傳的 `message` 只寫 server log，不回前端（對齊 `SECURITY_AUDIT.md` 既有原則）。
 
-## F1–F4 需同步修改
+## F1–F4 同步修改（✅ 已完成，2026-09-09）
 
-四張帳務票各在獨立分支上（`docs/f1-…` ~ `docs/f4-…`），**皆未 merge**。
-本票取得共用登入的擁有權後，那四張要調整：
+四張帳務票各在獨立分支上（`docs/f1-…` ~ `docs/f4-…`），皆未 merge。
+本票取得共用登入的擁有權後，那四張已同步改完：
 
-- **F1**〈登入 session 處理〉整節作廢。原本的「module 級延遲初始化 + `threading.Lock`，
-  第一次查詢才登入」改成**沿用本票的共用 session**。
+- **F1**（PR #85）〈登入 session 處理〉整節改寫：原本的「module 級延遲初始化 +
+  `threading.Lock`，第一次查詢才登入」作廢，改為沿用本票的共用 session；
+  〈程式落點〉的 `account_balance.py` 不再自己 login；驗收條件改為
+  「本票程式碼無任何 `login()` 呼叫」+「全 process 只登入一次」。
   〈環境變數〉那節保留不動（本票沿用同一組 `FUBON_*`）。
-- **F1**〈程式落點〉：`src/app/services/fubon/account_balance.py` 不再自己 login，改取共用 sdk。
-- **F1** 驗收條件「SDK 只在第一次查詢時登入，第二次請求重用同一 session」
-  → 改為「全 process 只登入一次」。
-- **F2 / F3 / F4** Metadata 的「依賴 F1（登入 session）」→ 改指向 F5。
+- **F2 / F3 / F4**（PR #87 / #88 / #89）Metadata 的「依賴 F1（登入 session）」改指向 F5，
+  〈程式落點〉與驗收條件同步；F1 保留為 `schemas/account.py` 與 `routes/account.py` 的建立者。
+- 四張票的 `accounts.data[0]` 一併收緊為「先以 `account_type == "stock"` 過濾再取第一個」
+  ——這是原本各票都照抄官方文件範例留下的錯誤（見上方〈登入回傳〉）。
 
 ⚠️ 五張票都會改 `README.md` 的同一個區塊，merge 時必然衝突，各自 rebase 即可。
