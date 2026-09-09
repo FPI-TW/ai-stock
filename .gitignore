@@ -23,5 +23,7 @@ BUG_LOG.md
 # Logs
 logs/
 *.log
+# 富邦 SDK 在 cwd 自建的 log 目錄（檔名為 xxx.log.YYYYMMDD，`*.log` 擋不到）
+log/
 # TLS 憑證（Cloudflare Origin CA），只放 EC2、絕不進版控
 nginx/certs/
