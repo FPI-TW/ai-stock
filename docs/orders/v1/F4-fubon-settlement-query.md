@@ -4,8 +4,10 @@
 
 - 分層：上線後（富邦串接系列）
 - 優先序：F4
-- ROM：**S**（比 F3 更小：無狀態碼映射、無濾除規則，只有登入 → 查 → 轉 JSON）
-- 依賴：[F1](F1-fubon-account-balance.md)（登入 session 與「取哪個帳號」的邏輯都在 F1，本票直接沿用，不另開登入）。
+- ROM：**S**（比 F3 更小：無狀態碼映射、無濾除規則，只有查 → 轉 JSON）
+- 依賴：**[F5](F5-fubon-quote-provider.md)（富邦行情 provider）＝共用登入 session 與「取哪個帳號」的擁有者**，
+  本票直接沿用，不另開登入（2026-09-09 變更：原本指向 F1，登入責任已移交 F5）。
+  [F1](F1-fubon-account-balance.md) 建立 `schemas/account.py` 與 `routes/account.py`，本票在其上加端點。
   與 [F2](F2-fubon-order-query.md)、[F3](F3-fubon-position-query.md) 無相互依賴，可平行做。
 - 被誰依賴：無硬依賴。階段二／三開始下單後價值放大（賣出後何時入帳、買進後 T+2 要準備多少錢）。
 - 交付版本：V1
@@ -102,7 +104,8 @@ Settlement { date: "2026/09/01", settlement_date: None, buy_value: None, ... cur
 | 把交割資料寫進我們的資料庫 / 做對帳 | 同 F3：使用者隨時會自己在富邦 App 買賣，本地快照立刻失真 |
 | 日期格式轉 ISO | 同 F2 `last_time`、F3 `date` 的教訓，原樣透傳 |
 
-**券商是唯一真相來源**，後端職責只有：登入 → 查 → 去掉帳號欄位 → 轉 JSON 欄位命名 → 回傳。
+**券商是唯一真相來源**，後端職責只有：查 → 去掉帳號欄位 → 轉 JSON 欄位命名 → 回傳。
+（登入不在本票職責內，走 F5 的共用 session。）
 
 ### 為什麼不濾空殼列（F3 濾、這裡不濾）
 
@@ -177,8 +180,10 @@ F3 濾掉全零庫存，是因為那 9 筆裡有 3 筆純粹是雜訊、**沒有
 - `src/app/services/fubon/settlement_query.py`（新增）：`query_settlement` 查詢 + 轉 dataclass。
 - `src/app/schemas/account.py`（F1 建立）：加交割款的 response model。
 - `src/app/api/routes/account.py`（F1 建立）：加這支端點。
-- **沿用 F1 的登入 session 與取帳號邏輯**，不要另開一套，也不要各自寫 `accounts.data[0]`
-  （登入會回證券 + 期權多筆且順序不保證，見 `docs/api/fubon-neo-verified-behavior.md`）。
+- **沿用 F5 的共用登入 session 與取帳號邏輯**，不要另開一套（富邦交易連線數上限 10，
+  每次 `login()` 吃一條，全 process 只能登一次），也不要各自寫 `accounts.data[0]`
+  ——取帳號須以 `account_type == "stock"` 過濾，登入會回證券 + 期權多筆且順序不保證，
+  見 `docs/api/fubon-neo-verified-behavior.md`。
 - 端點同樣是同步 `def`（SDK 阻塞，`async def` 會卡 event loop）。
 
 ## 非目標
@@ -210,7 +215,7 @@ F3 濾掉全零庫存，是因為那 9 筆裡有 3 筆純粹是雜訊、**沒有
 - [ ] `details` 為空 → 200 + `[]`。
 - [ ] `is_success = false`、`data` 為 `None` 或 SDK 例外 → 502，券商 `message` 只在 log。
 - [ ] 未登入 401；`FUBON_ENABLED=false` → 503。
-- [ ] 沒有新增任何交割相關資料表；沿用 F1 的登入 session，未新增第二套登入流程。
+- [ ] 沒有新增任何交割相關資料表；沿用 F5 的共用登入 session，本票程式碼中**沒有任何 `sdk.login()` 呼叫**。
 - [ ] `make check` 全綠。
 
 ## 測試要求
