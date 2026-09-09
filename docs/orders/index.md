@@ -5,6 +5,7 @@
 ## 目前工單
 
 - [停利／停損提醒](stop-loss-take-profit.md)
+- [富邦持倉查詢](fubon-position-query.md)
 
 ## 生命週期
 
