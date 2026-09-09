@@ -26,4 +26,12 @@ Repository 有 EC2／RDS 部署流程，但沒有版本化的 RDS backup／PITR 
 
 站內通知與 intent trigger 位於同一 DB transaction；Telegram 在 commit 前直接呼叫，且沒有 transactional outbox、delivery 狀態與重試 worker。短暫失敗可能造成外部通知遺失；若外部發送成功但後續 DB transaction 失敗，也可能出現 Telegram 已送出而站內資料未落地的不一致。
 
+## 除息調整缺席，目標價 original／effective 形同單欄
+
+`trade_intent_price_params` 同時保存 `target_price_original` 與 `target_price_effective`（`src/app/db/models/trade_intent_core.py`），但建立 intent 時兩欄寫入同一個值（`src/app/commands/trade_intent_core.py`），evaluator 只讀 `target_price_effective`（`src/app/domain/quote_evaluation.py`），觸發紀錄也只保存 effective。系統沒有 corporate action 資料來源、importer 或任何調整路徑，因此兩欄恆等，拆成兩欄目前不產生行為差異。凍結中的舊軌 `trade_intents` 有同一組欄位，退役時一併移除。
+
+這對欄位的原始用途是除息：除息當天參考價會扣除配息金額，股價未跌但數字下移。使用者設定的停損目標價若不隨之調整，除息當天開盤即可能觸發一則不成立的通知；反向的到價買進則可能提前成立。預期做法是保留使用者輸入值於 original、以配息調整後的值寫入 effective 供比對，並讓介面能解釋兩者差異。
+
+目前的缺口有兩層。行為上，除息日的誤觸發沒有任何防護，也沒有偵測或告警。文件上，`docs/` 內沒有任何段落說明除息語意或這對欄位的用途，只有 `architecture.md` 記載尚無 corporate action importer、`domain.md` 記載不支援 corporate action 調整；維護者讀 schema 時無從得知 `target_price_original` 為何存在，有被當成冗餘欄位刪除的風險。要處理時需要先決定除息資料來源與更新時機，屬需要完整設計的工作，應新增 `docs/orders/` 工單而非直接施工。
+
 小型 bug／enhancement 的即時狀態只在 [GitHub Issues](https://github.com/FPI-TW/ai-stock/issues) 維護，本文件不複製 issue 清單。
