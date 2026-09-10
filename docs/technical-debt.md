@@ -4,13 +4,13 @@
 
 ## 舊軌交易意圖持久層待退役
 
-非 TWAP 的 create、list、detail 與 cancel 已切到 `trade_intent_core` 新軌，但 TWAP confirm／slice worker 仍讀寫舊軌；舊 dispatcher 也仍在啟動與 quote callback 路徑中運行：
+create、list、detail、cancel 與 TWAP confirm／slice worker 都已切到 `trade_intent_core` 新軌，舊表不再有新增寫入路徑；但舊 dispatcher 仍在啟動與 quote callback 路徑中運行，帳號停用與 lifecycle 也仍讀寫既有舊資料：
 
 - 舊表：`trade_intents`、`twap_slices`、`trigger_events`。
 - 舊模型：`src/app/db/models/core.py` 的 `TradeIntent`、`TwapSlice`、`TriggerEvent`。
 - 舊路徑：`commands/trigger_intent.py`、`services/quote_dispatcher.py`、`repositories/intent_repository.py` 及相關 lifecycle／subscription 接線。
 
-風險是 TWAP 與非 TWAP 的對外讀寫來源不一致、維護者容易誤改錯軌、啟動時同時掃描兩套表，且每筆 quote 同時經過兩個 dispatcher。完整退役前必須先完成 TWAP 新軌 slice schema、command、API 與 worker cutover，確認 production 舊表沒有需保留的有效資料，再以 migration 與程式刪除一次移除舊垂直切片；在正式排程前維持 AGENTS.md 的 reviewer freeze。
+風險是維護者容易誤改錯軌、啟動時同時掃描兩套表，且每筆 quote 同時經過兩個 dispatcher。退役前需確認 production 舊表沒有需保留的有效資料，再以 migration 與程式刪除一次移除舊垂直切片；在正式排程前維持 AGENTS.md 的 reviewer freeze。
 
 `notifications`、`symbols`、`users`、auth、quotes 與其他跨軌資源不是舊軌，不能連帶刪除。
 
