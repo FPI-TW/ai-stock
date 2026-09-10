@@ -17,6 +17,9 @@ dependencies = [
     "uvicorn[standard]>=0.34.0",
     "cryptography>=43.0.0",
     "pydantic[email]>=2.12.3",
+    # 只有 Linux wheel 進版控（見下方 [tool.uv.sources]）；沒有 marker 的話
+    # uv 的 universal resolution 會連其他平台也要解，直接無解。
+    "fubon-neo; sys_platform == 'linux'",
 ]
 
 [dependency-groups]
@@ -69,3 +72,18 @@ check_untyped_defs = true
 [[tool.mypy.overrides]]
 module = "shioaji.*"
 ignore_missing_imports = true
+
+# 富邦 SDK 同樣沒有型別標註（無 py.typed）。
+[[tool.mypy.overrides]]
+module = "fubon_neo.*"
+ignore_missing_imports = true
+
+# Fubon Neo SDK 不上 PyPI，只提供平台專用 wheel，故以本地檔案安裝。
+# 只保留 CI / 正式環境用的 Linux x86_64 wheel；macOS wheel 不進版控，
+# 因此 macOS 開發機的 venv 不會有 fubon_neo，相關程式碼在本機測試時需 mock。
+# wheel 是 cp37-abi3（stable ABI），一顆吃 Python 3.8–3.13；⚠️ 富邦不支援 3.14，
+# 升 Python 版本前先確認官方相容性表。
+[tool.uv.sources]
+fubon-neo = [
+    { path = "vendor/fubon/fubon_neo-2.2.9-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", marker = "sys_platform == 'linux'" },
+]
