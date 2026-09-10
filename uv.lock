@@ -22,8 +22,7 @@ dependencies = [
     { name = "argon2-cffi" },
     { name = "cryptography" },
     { name = "fastapi" },
-    { name = "fubon-neo", version = "2.2.9", source = { path = "vendor/fubon_neo-2.2.9-cp37-abi3-macosx_11_0_arm64.whl" }, marker = "sys_platform == 'darwin'" },
-    { name = "fubon-neo", version = "2.2.9", source = { path = "vendor/fubon_neo-2.2.9-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }, marker = "sys_platform == 'linux'" },
+    { name = "fubon-neo", marker = "sys_platform == 'linux'" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic", extra = ["email"] },
     { name = "pydantic-settings" },
@@ -50,8 +49,7 @@ requires-dist = [
     { name = "argon2-cffi", specifier = ">=23.1.0" },
     { name = "cryptography", specifier = ">=43.0.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
-    { name = "fubon-neo", marker = "sys_platform == 'darwin'", path = "vendor/fubon_neo-2.2.9-cp37-abi3-macosx_11_0_arm64.whl" },
-    { name = "fubon-neo", marker = "sys_platform == 'linux'", path = "vendor/fubon_neo-2.2.9-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
+    { name = "fubon-neo", marker = "sys_platform == 'linux'", path = "vendor/fubon/fubon_neo-2.2.9-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pydantic", extras = ["email"], specifier = ">=2.12.3" },
     { name = "pydantic-settings", specifier = ">=2.7.0" },
@@ -528,31 +526,7 @@ wheels = [
 [[package]]
 name = "fubon-neo"
 version = "2.2.9"
-source = { path = "vendor/fubon_neo-2.2.9-cp37-abi3-macosx_11_0_arm64.whl" }
-resolution-markers = [
-    "python_full_version >= '3.15' and sys_platform == 'darwin'",
-    "python_full_version == '3.14.*' and sys_platform == 'darwin'",
-    "python_full_version < '3.14' and sys_platform == 'darwin'",
-]
-dependencies = [
-    { name = "fugle-marketdata", marker = "sys_platform == 'darwin'" },
-]
-wheels = [
-    { filename = "fubon_neo-2.2.9-cp37-abi3-macosx_11_0_arm64.whl", hash = "sha256:c13e735aabcedf225096f1145668aea3e7a0db21fe6d68183b5567d10af9f0d7" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "fugle-marketdata", specifier = "==2.5.0rc5" }]
-
-[[package]]
-name = "fubon-neo"
-version = "2.2.9"
-source = { path = "vendor/fubon_neo-2.2.9-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
-resolution-markers = [
-    "python_full_version >= '3.15' and sys_platform == 'linux'",
-    "python_full_version == '3.14.*' and sys_platform == 'linux'",
-    "python_full_version < '3.14' and sys_platform == 'linux'",
-]
+source = { path = "vendor/fubon/fubon_neo-2.2.9-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" }
 dependencies = [
     { name = "fugle-marketdata", marker = "sys_platform == 'linux'" },
 ]
@@ -568,10 +542,10 @@ name = "fugle-marketdata"
 version = "2.5.0rc5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "orjson", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "pyee", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "requests", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "websocket-client", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "orjson", marker = "sys_platform == 'linux'" },
+    { name = "pyee", marker = "sys_platform == 'linux'" },
+    { name = "requests", marker = "sys_platform == 'linux'" },
+    { name = "websocket-client", marker = "sys_platform == 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c0/07/306ad3b54232a9b11af5f2609592e119b959c4df3578cadd7442793df4f4/fugle_marketdata-2.5.0rc5.tar.gz", hash = "sha256:1924d560bae38cea4a145ea5d68b9426f2a03a1a5d97ccb2716ae1bdc0c536c0", size = 11814, upload-time = "2026-08-04T10:11:45.19Z" }
 wheels = [
@@ -1175,7 +1149,7 @@ name = "pyee"
 version = "11.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "typing-extensions", marker = "sys_platform == 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/54/20/3e646860d5a2f9c24b23b1964fb7c65312236883fa7b62d0f64456addc93/pyee-11.1.1.tar.gz", hash = "sha256:82e1eb1853f8497c4ff1a0c7fa26b9cd2f1253e2b6ffb93b4700fda907017302", size = 30002, upload-time = "2024-08-30T19:15:39.282Z" }
 wheels = [
