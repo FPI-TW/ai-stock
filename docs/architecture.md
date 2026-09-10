@@ -47,11 +47,12 @@ production 使用單一 `app` container，同時承載 API、quote callback、TW
 - `trade_intent_core`：跨策略核心欄位與 `dedup_key`。
 - `trade_intent_price_params`：到價與限價策略價格。
 - `trade_intent_trailing_params`：移動出場參數及動態 baseline。
-- `trade_intent_twap_params`：已建立但在 `main` 尚未接通的 TWAP 新軌參數表。
+- `trade_intent_twap_params`：TWAP 新軌參數表。
+- `trade_intent_twap_slices`：新軌 TWAP 切片，FK 指向 `trade_intent_core`。
 - `trade_intent_triggers`：新軌不可變的觸發快照。
 - `notifications`：新舊軌共用的使用者收件匣。
 
-`users`、refresh tokens、invitation、password reset、audit、idempotency keys 與 system flags 是共用基礎設施。TWAP confirm／slice worker 仍讀寫舊 `trade_intents` 與 `twap_slices`；其他舊單表路徑也仍存在但已凍結，詳見 [已知技術債](technical-debt.md)。
+`users`、refresh tokens、invitation、password reset、audit、idempotency keys 與 system flags 是共用基礎設施。TWAP confirm 與 slice worker 已切到新軌，舊 `trade_intents` 與 `twap_slices` 不再有新增寫入路徑；舊 dispatcher、lifecycle 與帳號停用仍在執行期讀寫既有舊資料，詳見 [已知技術債](technical-debt.md)。
 
 ## 外部整合
 

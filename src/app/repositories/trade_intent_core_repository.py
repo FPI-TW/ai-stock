@@ -14,13 +14,15 @@ from uuid import UUID, uuid4
 from sqlalchemy import CursorResult, and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, SessionTransaction, joinedload
-from sqlalchemy.sql import Select
+from sqlalchemy.sql import ColumnElement, Select
 
 from app.db.models.core import Symbol
 from app.db.models.trade_intent_core import (
     TradeIntentCore,
     TradeIntentPriceParams,
     TradeIntentTrailingParams,
+    TradeIntentTwapParams,
+    TradeIntentTwapSlice,
 )
 from app.domain.price import SecurityType, format_price_str
 from app.domain.trade_intent import (
@@ -32,8 +34,9 @@ from app.domain.trade_intent import (
     IntentNotFoundError,
     InvalidCursorError,
     TradeIntentData,
+    TwapSliceData,
 )
-from app.domain.twap import TWAP_STRATEGY
+from app.domain.twap import TWAP_STRATEGY, TwapDuplicateActivePlanError, TwapPlan
 
 TRAILING_STRATEGY = "trailing_stop_alert"
 
@@ -102,6 +105,32 @@ def _to_domain(core: TradeIntentCore, security_type: SecurityType) -> TradeInten
         twap_end_at=twap.twap_end_at if twap else None,
         twap_available_slice_count=twap.twap_available_slice_count if twap else None,
         twap_materialized_slice_count=twap.twap_materialized_slice_count if twap else None,
+    )
+
+
+def _twap_slice_to_domain(row: TradeIntentTwapSlice) -> TwapSliceData:
+    return TwapSliceData(
+        id=row.id,
+        trade_intent_id=row.trade_intent_id,
+        owner_user_id=row.owner_user_id,
+        symbol=row.symbol,
+        sequence_no=row.sequence_no,
+        scheduled_at=row.scheduled_at,
+        planned_quantity_lots=row.planned_quantity_lots,
+        status=row.status,
+        primary_notification_id=row.primary_notification_id,
+        notified_at=row.notified_at,
+        primary_price_available=row.primary_price_available,
+        primary_reference_price=row.primary_reference_price,
+        primary_reference_price_type=row.primary_reference_price_type,
+        primary_quote_time=row.primary_quote_time,
+        price_followup_required=row.price_followup_required,
+        price_followup_attempts=row.price_followup_attempts,
+        next_price_followup_at=row.next_price_followup_at,
+        price_followup_notification_id=row.price_followup_notification_id,
+        price_followup_sent_at=row.price_followup_sent_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 
@@ -257,6 +286,113 @@ class TradeIntentCoreRepository:
             raise DuplicateIntentError(owner_user_id, symbol, strategy) from exc
         return intent_id
 
+    def create_twap(
+        self,
+        *,
+        owner_user_id: UUID,
+        symbol: str,
+        twap_plan: TwapPlan,
+        execution_mode: str,
+        time_in_force: str,
+        status: str,
+        trigger_reference_price_type: str,
+    ) -> UUID:
+        """建立 TWAP 委託（核心 + twap 衛星 + 切片，同 transaction），回傳 id。
+
+        去重鑑別值＝`position_side`，對應 partial unique index
+        `uq_trade_intent_core_active_twap_duplicate`（不含 quantity_lots）→ 同標的同日
+        long 與 short 可並存（已定案放行），同 side 重複才擋。
+        """
+
+        dedup_key = build_dedup_key(
+            TWAP_STRATEGY,
+            target_price_effective=None,
+            trail_mode=None,
+            trail_value=None,
+            position_side=twap_plan.position_side,
+        )
+        duplicate = self._db.execute(
+            select(TradeIntentCore.id).where(
+                TradeIntentCore.owner_user_id == owner_user_id,
+                TradeIntentCore.symbol == symbol,
+                TradeIntentCore.strategy == TWAP_STRATEGY,
+                TradeIntentCore.dedup_key == dedup_key,
+                TradeIntentCore.trading_date == twap_plan.trading_date,
+                TradeIntentCore.status.in_(CANCELLABLE_STATUSES),
+            )
+        ).scalar_one_or_none()
+        if duplicate is not None:
+            raise TwapDuplicateActivePlanError(owner_user_id, symbol, twap_plan.position_side)
+
+        intent_id = uuid4()
+        self._db.add(
+            TradeIntentCore(
+                id=intent_id,
+                owner_user_id=owner_user_id,
+                symbol=symbol,
+                strategy=TWAP_STRATEGY,
+                execution_mode=execution_mode,
+                quantity_lots=twap_plan.target_quantity_lots,
+                trigger_reference_price_type=trigger_reference_price_type,
+                trading_date=twap_plan.trading_date,
+                time_in_force=time_in_force,
+                status=status,
+                transaction_mode="single_notification",
+                notification_mode="single",
+                dedup_key=dedup_key,
+            )
+        )
+        self._db.add(
+            TradeIntentTwapParams(
+                trade_intent_id=intent_id,
+                position_side=twap_plan.position_side,
+                twap_interval_seconds=twap_plan.interval_seconds,
+                twap_end_time=twap_plan.requested_end_time,
+                twap_start_at=twap_plan.start_at,
+                twap_end_at=twap_plan.end_at,
+                twap_available_slice_count=twap_plan.available_slice_count,
+                twap_materialized_slice_count=twap_plan.materialized_slice_count,
+            )
+        )
+        for slice_plan in twap_plan.slices:
+            self._db.add(
+                TradeIntentTwapSlice(
+                    id=uuid4(),
+                    trade_intent_id=intent_id,
+                    owner_user_id=owner_user_id,
+                    symbol=symbol,
+                    sequence_no=slice_plan.sequence_no,
+                    scheduled_at=slice_plan.scheduled_at,
+                    planned_quantity_lots=slice_plan.planned_quantity_lots,
+                    status="pending",
+                )
+            )
+        try:
+            self._db.flush()
+        except IntegrityError as exc:
+            raise TwapDuplicateActivePlanError(owner_user_id, symbol, twap_plan.position_side) from exc
+        return intent_id
+
+    def list_twap_slices(self, intent_id: UUID, owner_user_id: UUID) -> list[TwapSliceData]:
+        intent = self._db.execute(
+            select(TradeIntentCore.owner_user_id).where(TradeIntentCore.id == intent_id)
+        ).scalar_one_or_none()
+        if intent is None or intent != owner_user_id:
+            raise IntentNotFoundError(intent_id)
+        rows = (
+            self._db.execute(
+                select(TradeIntentTwapSlice)
+                .where(
+                    TradeIntentTwapSlice.trade_intent_id == intent_id,
+                    TradeIntentTwapSlice.owner_user_id == owner_user_id,
+                )
+                .order_by(TradeIntentTwapSlice.sequence_no.asc())
+            )
+            .scalars()
+            .all()
+        )
+        return [_twap_slice_to_domain(row) for row in rows]
+
     def find_by_id(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
         result = self._db.execute(_core_with_symbol_type().where(TradeIntentCore.id == intent_id)).one_or_none()
         if result is None:
@@ -269,7 +405,7 @@ class TradeIntentCoreRepository:
     def cancel(self, intent_id: UUID, owner_user_id: UUID) -> TradeIntentData:
         """status='cancelled' 並 flush（不 commit，caller 擁有交易）。
 
-        冪等：已 cancelled 直接回現狀。TWAP slice 連動取消於 TWAP 增量補上。
+        冪等：已 cancelled 直接回現狀。TWAP 另連動取消未發出的切片與待補價。
         """
 
         result = self._db.execute(_core_with_symbol_type().where(TradeIntentCore.id == intent_id)).one_or_none()
@@ -289,8 +425,39 @@ class TradeIntentCoreRepository:
             .values(status="cancelled", updated_at=func.now(), cancelled_at=func.now()),
             execution_options={"synchronize_session": False},
         )
+        if core.strategy == TWAP_STRATEGY:
+            self._cancel_pending_slices([intent_id], func.now())
+            # 已通知、但還欠一則補價通知的切片：取消後不再補價（切片本身維持 notified）。
+            self._db.execute(
+                update(TradeIntentTwapSlice)
+                .where(
+                    TradeIntentTwapSlice.trade_intent_id == intent_id,
+                    TradeIntentTwapSlice.price_followup_required.is_(True),
+                    TradeIntentTwapSlice.price_followup_notification_id.is_(None),
+                )
+                .values(price_followup_required=False, next_price_followup_at=None, updated_at=func.now()),
+                execution_options={"synchronize_session": False},
+            )
         self._db.refresh(core)
         return _to_domain(core, SecurityType(instrument_type))
+
+    def _cancel_pending_slices(self, intent_ids: list[UUID], now: datetime | ColumnElement[datetime]) -> None:
+        """尚未發出的切片一律取消並停掉補價；取消與到期共用（兩者都代表計畫不再執行）。"""
+
+        self._db.execute(
+            update(TradeIntentTwapSlice)
+            .where(
+                TradeIntentTwapSlice.trade_intent_id.in_(intent_ids),
+                TradeIntentTwapSlice.status == "pending",
+            )
+            .values(
+                status="cancelled",
+                price_followup_required=False,
+                next_price_followup_at=None,
+                updated_at=now,
+            ),
+            execution_options={"synchronize_session": False},
+        )
 
     # ------------------------------------------------------------------
     # trailing baseline (robot #2 evaluator writes back here)
@@ -490,15 +657,9 @@ class TradeIntentCoreRepository:
         return int(result.rowcount or 0)
 
     def system_expire_day_intents_through(self, cutoff_date: date, now: datetime) -> int:
-        """讓已不可能再觸發的當沖單到期。不 commit。
+        """讓已不可能再觸發的當沖單到期，並連動取消其未發出的 TWAP 切片。不 commit。"""
 
-        ponytail: 舊軌在此會連動取消 pending 的 TWAP slices；新軌 slices 表要到 PR4 才存在，
-        且 PR3 期間新表不可能有 TWAP 單（`create()` 明確擋掉），故此處無 slice 連動。
-        PR4 建好新 slices 表時要補回——工單附錄已把本方法標成「接在 TWAP 增量後」。
-        """
-
-        result = cast(
-            CursorResult[Any],
+        expired_ids = list(
             self._db.execute(
                 update(TradeIntentCore)
                 .where(
@@ -506,9 +667,14 @@ class TradeIntentCoreRepository:
                     TradeIntentCore.trading_date <= cutoff_date,
                 )
                 .values(status="expired", updated_at=now)
-            ),
+                .returning(TradeIntentCore.id)
+            )
+            .scalars()
+            .all()
         )
-        return int(result.rowcount or 0)
+        if expired_ids:
+            self._cancel_pending_slices(expired_ids, now)
+        return len(expired_ids)
 
     def cancel_active_for_owner(self, owner_user_id: UUID, *, status: str, now: datetime) -> int:
         """帳號停用連動：整批取消該擁有者的非終態委託，回傳筆數。不 commit。"""

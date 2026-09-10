@@ -15,7 +15,7 @@ from app.api.deps import (
     get_current_user,
     get_idempotency_key,
     get_idempotency_manager,
-    get_intent_repository,
+    get_trade_intent_core_repository,
     get_twap_confirm_command,
     get_twap_plan_command,
 )
@@ -129,7 +129,7 @@ def client(plan_command: MagicMock, confirm_command: MagicMock, repo: MagicMock)
     app = create_app()
     app.dependency_overrides[get_twap_plan_command] = lambda: plan_command
     app.dependency_overrides[get_twap_confirm_command] = lambda: confirm_command
-    app.dependency_overrides[get_intent_repository] = lambda: repo
+    app.dependency_overrides[get_trade_intent_core_repository] = lambda: repo
     app.dependency_overrides[get_current_user] = lambda: RequestUser(user_id=OWNER_ID, role="user")
     app.dependency_overrides[get_active_user] = lambda: RequestUser(user_id=OWNER_ID, role="user")
     # confirm now carries the §13/§16 guards (rate limit + idempotency); with get_db
