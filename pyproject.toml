@@ -3,7 +3,7 @@ name = "ai-stock"
 version = "0.5.0"
 description = "AI Stock local FastAPI backend"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "alembic>=1.18.4",
     "argon2-cffi>=23.1.0",
