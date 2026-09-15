@@ -4,7 +4,7 @@
 
 ## 目前工單
 
-- [停利／停損提醒](stop-loss-take-profit.md)
+- [停損停利提醒（一張單兩價位）](stop-loss-take-profit.md)
 - [富邦帳戶現金餘額查詢](fubon-account-balance.md)
 
 ## 生命週期

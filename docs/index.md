@@ -10,6 +10,7 @@
 | [系統架構](architecture.md) | 已落地元件、資料流、持久層與外部整合 |
 | [Domain 規則](domain.md) | 交易意圖、策略、狀態、價格與觸發語意 |
 | [API 指南](api.md) | API 分組、認證、共通契約與主要流程 |
+| [富邦 Neo SDK 參考](vendor/fubon/index.md) | 富邦官方文件快照、版本來源與測試環境實測差異 |
 | [開發指南](development.md) | 本地安裝、migration、seed、測試與品質指令 |
 | [維運指南](operations.md) | production 設定、CI/CD、TLS、部署與回滾 |
 | [通知訊息](notifications.md) | 現行通知類型、文字與 Telegram 同步方式 |
