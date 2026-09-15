@@ -168,7 +168,7 @@ demo 給主管看還行，但使用者想盯自己的股票就卡住了。富邦
 
 **這支是唯讀行情，與下單無關**，階段一（只通知不下單）就能做完。
 
-### 富邦 API 事實（出自 `docs/api/fubon-llms-full.txt`，標行號）
+### 富邦 API 事實（出自 `docs/vendor/fubon/fubon-llms-full.txt`，標行號）
 
 #### 取價有兩條路，本票兩條都要
 
@@ -274,7 +274,7 @@ except FugleAPIError as e:
 ℹ️ 上表是這些數字在 repo 內的**唯一記載**。舊的 `PRODUCT_CONTEXT.md` 曾寫「每條連線 200 檔、
 最多 5 條連線」（2.2.8 時期的舊數字，已不正確），該檔已於文件重構併入 `docs/product.md`，
 而新版刻意只保留原則不寫具體數字：「券商的訂閱與速率上限是外部硬限制；達上限時清楚拒絕，
-不建立配額平台或動態擴容」。施工時以本節為準，出處見 `docs/api/fubon-llms-full.txt`〈速率限制〉。
+不建立配額平台或動態擴容」。施工時以本節為準，出處見 `docs/vendor/fubon/fubon-llms-full.txt`〈速率限制〉。
 
 #### 斷線重連（L4951）與取消訂閱（L4813）
 
@@ -293,7 +293,7 @@ def handle_disconnect(code, message):
 - **取消訂閱用的是訂閱回傳的 `id`，不是 symbol**：`stock.unsubscribe({'id': '<CHANNEL_ID>'})`。
   必須自己維護 `symbol → channel_id` 對照表，否則 `unsubscribe` 根本做不出來。
 
-#### 登入回傳（`docs/api/fubon-neo-verified-behavior.md` 地雷節，已實測）
+#### 登入回傳（`docs/vendor/fubon/fubon-neo-verified-behavior.md` 地雷節，已實測）
 
 一次登入回證券帳號 + 期權帳號**多筆且順序不保證**。**禁止 `login.data[0]`**：
 
@@ -374,7 +374,7 @@ try/except + `logger.exception`（misbehaving listener 不得殺掉 SDK 執行�
 6. **不做 allowlist。** `DEFAULT_DEMO_ALLOWED_SYMBOLS` 是永豐 demo 的限制，富邦沒有這回事，
    不要照抄。
 7. **REST 路徑要攔 `FugleAPIError`**（2.2.4 起錯誤走例外），並把 429 對映成明確錯誤而非 500。
-8. **先在獨立行程試打一次。** 照 `docs/api/fubon-neo-verified-behavior.md` 的通則：
+8. **先在獨立行程試打一次。** 照 `docs/vendor/fubon/fubon-neo-verified-behavior.md` 的通則：
    2.2.8 的 `bank_remain()` 是 Rust 核心直接 panic 殺掉 Python 行程，`try/except` 攔不住。
    行情這幾支（`init_realtime` / `connect` / `subscribe`）**尚未實測過**，接進服務前先單獨跑。
 
