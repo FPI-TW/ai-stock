@@ -224,7 +224,7 @@ stock.subscribe({'channel': 'aggregates', 'symbol': '2330'})
 | `last_price` | **`lastTrade.price`** | 見下方 ⚠️ |
 | `bid_price` | `bids[0].price` | 最佳一檔委買；`bids` 可能為空 |
 | `ask_price` | `asks[0].price` | 最佳一檔委賣；`asks` 可能為空 |
-| `quote_time` | `lastTrade.time` | **微秒** epoch，轉 Asia/Taipei tz-aware |
+| `last_trade_time` | `lastTrade.time` | **微秒** epoch，轉 Asia/Taipei tz-aware；無 `lastTrade` 時為 `None`，見下方〈`quote_time` 改名〉 |
 | `received_at` | — | 本地 UTC now |
 
 ⚠️ **`lastPrice` 是「含試撮」的最後成交價，絕對不可拿來當觸發依據。**
@@ -232,11 +232,42 @@ stock.subscribe({'channel': 'aggregates', 'symbol': '2330'})
 文件對 `lastPrice` 的定義原文就是「最後一筆成交價（**含試撮**）」，
 另有獨立的 `lastTrial`（最後一筆試撮資訊）與 `lastTrade`（最後一筆成交資訊）兩個物件。
 
-盤前試撮（08:30–09:00）會被 `QuoteValidator` 的「`quote_time` 必須在 regular session」擋掉，
+盤前試撮（08:30–09:00）會被 `QuoteValidator` 的「`last_trade_time` 必須在 regular session」擋掉，
 **但收盤前試撮 13:25–13:30 落在 regular session 內**——用 `lastPrice` 就是拿一個
 從未真正成交的價位去觸發使用者的委託。到了階段三（觸發即下單）這是會真的送出委託的錯誤。
 
-`quote_time` 同理取 `lastTrade.time`，不要取 `total.time`（累計資訊時間）或訊息到達時間。
+`last_trade_time` 同理取 `lastTrade.time`，不要取 `total.time`（累計資訊時間）或訊息到達時間。
+
+#### `quote_time` 改名為 `last_trade_time`（本票同步處理）
+
+`QuoteSnapshot.quote_time` 這個名稱看不出它是「最後一筆成交的時間」，
+容易被誤解為「這則報價訊息的時間」而拿 `lastUpdated` / `total.time` 去填。本票一併改名：
+
+- 改：`QuoteSnapshot.quote_time` → `last_trade_time`（`src/app/services/quote/base.py`），
+  連帶 `QuoteValidator`、`shioaji_demo/`、兩個 dispatcher、`schemas/quote.py` 與所有測試的引用一起改。
+- 不改：對外 JSON 欄位 `quoteTime` / `primaryQuoteTime`（API 契約），
+  DB 欄位 `twap_slices.primary_quote_time`（舊軌凍結表，不動）。
+
+改名後語意收緊：**這個欄位只能來自 `lastTrade.time`**，型別改為 `datetime | None`，
+缺席時的行為見下一節。
+
+#### `lastTrade` 缺席的處理（2026-09-15 組長定案：保持 `None`）
+
+**何時發生。** 富邦欄位表只有 `date` / `type` / `exchange` / `symbol` / `name` 標為必揭示，
+`lastTrade` 不是。今日尚無成交的標的（冷門股開盤到首筆成交前、整日零成交）訊息裡就沒有這個物件。
+而且 `aggregates` 五檔異動也會推，所以「有 `bids` / `asks`、沒有 `lastTrade`」是盤中正常會收到的訊息，
+不是邊角案例。REST `intraday.quote` 同理。
+
+**各層行為：**
+
+| 層 | 行為 |
+|---|---|
+| `normalize.py` | `last_price` / `last_trade_time` 皆填 `None`，snapshot 照常建立。**不可**拿 `lastUpdated`、`total.time`、`lastTrial.*` 或訊息到達時間補位 |
+| `QuoteValidator` session 檢查 | `last_trade_time` 為 `None` 時改用 `received_at` 換算 Asia/Taipei 做同一個檢查。**不可直接跳過**——否則盤前試撮 08:30–09:00「只有五檔、沒有成交」的訊息會放行，策略會拿試撮的 bid / ask 觸發 |
+| `QuoteValidator` 價格檢查 | 沿用既有規則不改：bid / ask 齊全 → 正常評估；缺一側且 `last_price` 為 `None` → 現行 `missing both bid/ask and last for fallback` 拒絕，該則不觸發（對齊 `docs/domain.md`「bid／ask／last 全缺時不觸發」） |
+| 策略 evaluator | 一行不改。買方看 ask、賣方看 bid，本來就不需要 last |
+| `GET /quotes/current-price/{symbol}` | `currentPrice` 既已 nullable；`quoteTime` 改為 nullable（欄位名不變，值可為 `null`）。這是本票唯一的對外契約變更 |
+| 觸發紀錄 | `primary_quote_time` 既已 nullable，直接寫 `None` |
 
 #### REST 單次查詢（給 `get_current_price`）
 
@@ -415,11 +446,15 @@ CURRENT_PRICE_SOURCE_NAME = "shioaji"
 - [ ] `QUOTE_PROVIDER=fubon` 可啟動；lifespan 完成登入、建立行情連線、reconcile 既有 intent 的訂閱。
 - [ ] `login()` 在整個 process 生命週期**只被呼叫一次**；`shutdown()` 有呼叫 `logout()`。
 - [ ] 收到 aggregates 推播後，`get_quotes([symbol])` 回得出 `QuoteSnapshot`，
-      且 `bid_price` / `ask_price` / `last_price` / `quote_time` 皆正確填入。
+      且 `bid_price` / `ask_price` / `last_price` / `last_trade_time` 皆正確填入。
 - [ ] **`last_price` 取自 `lastTrade.price`，不是 `lastPrice`**；有 `lastTrial` 的訊息
       不會污染 `last_price`。
-- [ ] `quote_time` 為 Asia/Taipei tz-aware（微秒 epoch 已正確換算），`received_at` 為 UTC tz-aware。
+- [ ] `last_trade_time` 為 Asia/Taipei tz-aware（微秒 epoch 已正確換算），`received_at` 為 UTC tz-aware。
 - [ ] `bids` / `asks` 為空時 `bid_price` / `ask_price` 為 `None`，不是 0、不拋例外。
+- [ ] 訊息無 `lastTrade` 時 `last_price` / `last_trade_time` 皆為 `None`，snapshot 仍建立；
+      validator 改以 `received_at`（轉 Asia/Taipei）做 regular session 檢查；
+      盤前 08:45 收到的無 `lastTrade` 訊息仍被擋下。
+- [ ] `GET /quotes/current-price/{symbol}` 對無成交標的回 200，`currentPrice` 與 `quoteTime` 為 `null`。
 - [ ] 兩個 dispatcher（`QuoteEvaluationDispatcher` / `TradeIntentCoreDispatcher`）
       掛上 listener 後收得到 snapshot，**兩者的程式碼一行未改**。
 - [ ] `unsubscribe(symbol)` 真的送出 `{'id': <channel_id>}`；對未訂閱的 symbol 為 no-op。
@@ -443,6 +478,12 @@ CURRENT_PRICE_SOURCE_NAME = "shioaji"
 - 正常 aggregates 訊息 → 完整 `QuoteSnapshot`
 - **`lastTrial` 有值、`lastTrade` 是舊值** → `last_price` 取 `lastTrade.price`，不受試撮影響
 - `bids` / `asks` 為空陣列 → `bid_price` / `ask_price` 為 `None`
+- 無 `lastTrade`、只有 `bids` / `asks` → `last_price` / `last_trade_time` 為 `None`，snapshot 仍建立
+
+`tests/unit/quote/test_validation.py`（既有檔，補案例）：
+- `last_trade_time=None` + `received_at` 落在盤中 → 通過
+- `last_trade_time=None` + `received_at` 落在 08:45 → `QuoteValidationError`
+- `last_trade_time=None` + 只有 `asks` → 沿用既有 fallback 規則拒絕
 - 微秒 epoch → Asia/Taipei tz-aware 的換算正確（含跨日邊界）
 - REST `intraday.quote` 的回傳走同一份 normalize，結果一致
 
