@@ -5,6 +5,7 @@
 ## 目前工單
 
 - [停損停利提醒（一張單兩價位）](stop-loss-take-profit.md)
+- [per-user 券商帳號綁定與每使用者行情 session](per-user-broker-sessions.md)
 
 ## 生命週期
 
