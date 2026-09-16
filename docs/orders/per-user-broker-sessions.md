@@ -142,7 +142,7 @@
 - `commands/account.py`：disable 後 `pool.stop`（列保留）；reactivate 後有金鑰就 `pool.start`，失敗不讓復權失敗。
 - `commands/telegram_intent.py`：`BrokerAccountNotBoundError` 回覆「尚未綁定券商帳號，請先到使用者頁面綁定後再確認。」，draft 維持 pending。
 - 設定與部署：`.env*`、`cd.yml` 加 `BROKER_MAX_SESSIONS`；不需要任何 `FUBON_*` 帳密變數。部署前提：至少一位使用者已綁定，否則行情全停。
-- 合併前實測：兩個測試帳號同 process 登入確認連線上限語意；量測 1／2／3 個 SDK 實例各訂 5 檔跑 10 分鐘的 RSS，決定 `BROKER_MAX_SESSIONS` 預設。
+- 合併前實測：登入 session 能活多久、富邦會不會收盤後或深夜強制登出、憑證是否只在 `login()` 時讀取。若會被踢，加一個開盤前固定時間對所有 session 登出再登入的排程，不做斷線偵測或健康層。兩個測試帳號同 process 登入確認連線上限語意；量測 1／2／3 個 SDK 實例各訂 5 檔跑 10 分鐘的 RSS，決定 `BROKER_MAX_SESSIONS` 預設。
 - 文件同步：`architecture.md`（一個 process 持有 N 條 session，仍不可多 worker）、`api.md`、`operations.md`（記憶體、重啟全員重登、殘留 session 佔額度、`login_failed` 處置、`MFA_ENCRYPTION_KEY` 輪替涵蓋 `broker_accounts`）、`technical-debt.md`（舊軌 TWAP 無參考價、每 tick 每 session 重跑 lifecycle UPDATE、dispatcher 觸發後不退訂）。完成後刪除本工單。
 
 ### 對其他富邦工作的影響
@@ -168,7 +168,7 @@
 ### 已知風險
 
 - 連線上限 10 若是每應用程式，一套部署最多 10 位使用者，且異常關機殘留 session 會暫時吃掉額度。
-- 每次部署全員重登券商；`login_failed` 無自動重試，需重新綁定或重啟。
+- 每次部署全員重登券商；`login_failed` 無自動重試，需重新綁定或重啟。登入 session 若被券商定時踢掉，目前沒有自動重登，要靠實測結果決定是否加每日重登排程。
 - 憑證檔必須落地成暫存檔才能登入；暫存檔生命週期要實測。
 - `MFA_ENCRYPTION_KEY` 現在同時保護券商金鑰。
 - SDK Rust 核心 panic 攔不住，會殺掉整個 process，所有使用者一起斷。
