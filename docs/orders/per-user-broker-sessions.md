@@ -46,7 +46,7 @@
 
 ## 做完之後看得到什麼
 
-- 使用者頁面多一組「券商帳號」設定：綁定、查看狀態、解除。
+- 使用者頁面多一組「券商帳號」設定：綁定、查看狀態、解除。管理員也能代使用者綁定，適合憑證由我們代申請的客戶。前端在瀏覽器把 pfx 轉 base64 隨 JSON 送出，伺服器不另做檔案上傳、不保存憑證檔。
 - 綁定後建單，行情從他自己的券商帳號來；沒綁定就不能建單，Telegram 也會回「請先綁定」。
 - 富邦成為第一個真正接上的券商；永豐 demo 模式保留給展示用。
 
@@ -127,6 +127,7 @@
 |---|---|
 | `GET /me/broker-account` | 200：`broker`、`brokerAccountNo`（遮罩後四碼）、`status`、`lastLoginAt`、`lastError`、`updatedAt`；無 → 404 |
 | `PUT /me/broker-account` | body `broker, nationalId, password, certPfxBase64, certPassword`（`extra="forbid"`，pfx ≤ 64KB）。`RateLimiter.consume("broker_bind:{user_id}", 5 次/小時)` → `pool.start`（失敗 → 422 `BROKER_LOGIN_FAILED`，不落 DB）→ `upsert` → 訂閱該 user 的 active symbols → audit `broker_account_bound` → commit；例外 rollback 並 `pool.stop` |
+| `PUT /admin/users/{user_id}/broker-account` | 管理員代綁（憑證由我們代申請、代辦綁定的情境）。body 與流程同上，`user_id` 取自路徑，audit `actor_type="admin"`。需 `AdminUserDep`，目標使用者須為 active |
 | `DELETE /me/broker-account` | 204 冪等：`cancel_active_for_owner` → `delete` → audit `broker_account_unbound` → commit → `pool.stop` |
 
 - CLI `python -m app.db.bind_broker_account --email --broker --national-id --cert-path`（登入密碼與憑證密碼用 `getpass` 互動輸入）：讀 pfx 轉 base64、組 JSON、`encrypt_secret` 後走同一個 repo `upsert`，供部署前預先寫入；不試登入，`status` 先寫 `active`，由下次啟動驗證。prod image 需 `-e PYTHONPATH=src`，比照 `create_admin`。
