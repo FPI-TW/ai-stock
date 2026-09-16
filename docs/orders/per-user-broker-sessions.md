@@ -89,7 +89,7 @@
 - **Session pool**：`src/app/services/broker_session_pool.py` 的 `BrokerSessionPool`，`dict[user_id, QuoteProvider]` + `threading.Lock`，掛在 `app.state.broker_sessions`，取代 `app.state.quote_provider`。
   - `QUOTE_PROVIDER=fubon`：per-user 模式，每人一個 `FubonQuoteProvider`。
   - `QUOTE_PROVIDER=in_memory` 或 `shioaji_demo`：shared 模式，所有 user 共用同一個 provider 實例，行為與現在相同（既有測試與永豐 demo 不必綁定）。
-- **金鑰儲存**：`broker_accounts` 一列一人，`credentials_encrypted` 一欄存加密後的 JSON（富邦：`national_id`、`password`、`cert_pfx_base64`、`cert_password`），不為每家券商開專屬欄位。加密重用 `app.core.mfa_crypto.encrypt_secret/decrypt_secret`，金鑰為 `MFA_ENCRYPTION_KEY`。
+- **金鑰儲存**：`broker_accounts` 以獨立 `id` 當主鍵、`user_id` 加 unique（現階段一人一帳戶；日後開放多帳戶只需拿掉 unique 並在單子上加 `broker_account_id`，不必重建表），`credentials_encrypted` 一欄存加密後的 JSON（富邦：`national_id`、`password`、`cert_pfx_base64`、`cert_password`），不為每家券商開專屬欄位。加密重用 `app.core.mfa_crypto.encrypt_secret/decrypt_secret`，金鑰為 `MFA_ENCRYPTION_KEY`。
 - **憑證檔**：登入時把 pfx 解密寫到 `tempfile.NamedTemporaryFile`（0600），呼叫 `sdk.login(...)` 後立刻刪除。若實測發現 SDK 重連時會重讀憑證檔，改為存在 `key/<user_id>.pfx` 並在 `stop` 時刪。
 - **Dispatcher 依 owner 過濾**：同一 symbol 會從 N 條 session 各來一次 tick，`TradeIntentCoreDispatcher.dispatch(snapshot, *, owner_user_id=None)` → `repo.system_list_active_by_symbols(symbols, owner_user_id=...)`。pool 用 `functools.partial(dispatch, owner_user_id=uid)` 掛 listener；shared 模式傳 `None` 掃全部。
 - **Telegram 路徑不能靠 request user 取 session**：webhook 無 Bearer，owner 由 `TELEGRAM_OWNER_EMAIL` 在 command 內解析，因此 `CreateTradeIntentCommand` 改注入 pool，執行時 `pool.require(inp.owner_user_id)`。
@@ -113,7 +113,7 @@
 **Schema**
 
 - Migration `202609160001_create_broker_accounts.py`，`down_revision` 接當時的 head。
-- `broker_accounts`：`user_id` UUID PK+FK users.id、`broker` TEXT CHECK IN ('fubon')、`credentials_encrypted` BYTEA NOT NULL、`broker_account_no` TEXT NOT NULL（登入結果的證券帳號，非機密，顯示用）、`status` TEXT CHECK IN ('active','login_failed')、`last_login_at` TIMESTAMPTZ NULL、`last_error` TEXT NULL、`created_at/updated_at`。downgrade 直接 drop。
+- `broker_accounts`：`id` UUID PK、`user_id` UUID NOT NULL FK users.id UNIQUE、`broker` TEXT CHECK IN ('fubon')、`credentials_encrypted` BYTEA NOT NULL、`broker_account_no` TEXT NOT NULL（登入結果的證券帳號，非機密，顯示用）、`status` TEXT CHECK IN ('active','login_failed')、`last_login_at` TIMESTAMPTZ NULL、`last_error` TEXT NULL、`created_at/updated_at`。downgrade 直接 drop。
 - Model `src/app/db/models/broker_account.py`；Domain `src/app/domain/broker_account.py`（`BrokerAccountData`、`FubonCredentials` 僅記憶體且 `__repr__` 遮罩、`BrokerAccountError` → `BrokerAccountNotBoundError`／`BrokerLoginFailedError`／`BrokerSessionLimitReachedError`）；Repo `src/app/repositories/broker_account_repository.py`（`get_by_user_id`、`list_all`、`upsert`、`delete`、`mark_login_ok`、`mark_login_failed` 截 500 字、`get_credentials` 在 repo 內解密）。
 
 **Pool**
