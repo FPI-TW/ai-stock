@@ -129,6 +129,7 @@
 | `PUT /me/broker-account` | body `broker, nationalId, password, certPfxBase64, certPassword`（`extra="forbid"`，pfx ≤ 64KB）。`RateLimiter.consume("broker_bind:{user_id}", 5 次/小時)` → `pool.start`（失敗 → 422 `BROKER_LOGIN_FAILED`，不落 DB）→ `upsert` → 訂閱該 user 的 active symbols → audit `broker_account_bound` → commit；例外 rollback 並 `pool.stop` |
 | `DELETE /me/broker-account` | 204 冪等：`cancel_active_for_owner` → `delete` → audit `broker_account_unbound` → commit → `pool.stop` |
 
+- CLI `python -m app.db.bind_broker_account --email --broker --national-id --cert-path`（登入密碼與憑證密碼用 `getpass` 互動輸入）：讀 pfx 轉 base64、組 JSON、`encrypt_secret` 後走同一個 repo `upsert`，供部署前預先寫入；不試登入，`status` 先寫 `active`，由下次啟動驗證。prod image 需 `-e PYTHONPATH=src`，比照 `create_admin`。
 - 錯誤碼：`BROKER_ACCOUNT_NOT_BOUND`(409)、`BROKER_LOGIN_FAILED`(422)、`BROKER_SESSION_LIMIT_REACHED`(409)。回應與 log 不含身分證字號、密碼、憑證。
 - Commands `src/app/commands/broker_account.py`；Schemas `src/app/api/schemas/broker_account.py` 逐欄 alias。
 
