@@ -46,7 +46,7 @@
 
 ## 做完之後看得到什麼
 
-- 使用者頁面多一組「券商帳號」設定：綁定、查看狀態、解除。管理員也能代使用者綁定，適合憑證由我們代申請的客戶。前端在瀏覽器把 pfx 轉 base64 隨 JSON 送出，伺服器不另做檔案上傳、不保存憑證檔。
+- 使用者頁面多一組「券商帳號」設定：綁定、查看狀態與憑證到期日、解除。憑證一年一換，更新就是重新綁定一次（整包覆蓋），不另設更新端點；到期前主動提醒本票不做。管理員也能代使用者綁定，適合憑證由我們代申請的客戶。前端在瀏覽器把 pfx 轉 base64 隨 JSON 送出，伺服器不另做檔案上傳、不保存憑證檔。
 - 綁定後建單，行情從他自己的券商帳號來；沒綁定就不能建單，Telegram 也會回「請先綁定」。
 - 富邦成為第一個真正接上的券商；永豐 demo 模式保留給展示用。
 
@@ -113,7 +113,7 @@
 **Schema**
 
 - Migration `202609160001_create_broker_accounts.py`，`down_revision` 接當時的 head。
-- `broker_accounts`：`id` UUID PK、`user_id` UUID NOT NULL FK users.id UNIQUE、`broker` TEXT CHECK IN ('fubon')、`credentials_encrypted` BYTEA NOT NULL、`broker_account_no` TEXT NOT NULL（登入結果的證券帳號，非機密，顯示用）、`status` TEXT CHECK IN ('active','login_failed')、`last_login_at` TIMESTAMPTZ NULL、`last_error` TEXT NULL、`created_at/updated_at`。downgrade 直接 drop。
+- `broker_accounts`：`id` UUID PK、`user_id` UUID NOT NULL FK users.id UNIQUE、`broker` TEXT CHECK IN ('fubon')、`credentials_encrypted` BYTEA NOT NULL、`broker_account_no` TEXT NOT NULL（登入結果的證券帳號，非機密，顯示用）、`cert_expires_at` TIMESTAMPTZ NOT NULL（綁定時以 `cryptography` 的 `pkcs12.load_key_and_certificates` 解 pfx 取 `not_valid_after_utc`，同時驗證憑證密碼）、`status` TEXT CHECK IN ('active','login_failed')、`last_login_at` TIMESTAMPTZ NULL、`last_error` TEXT NULL、`created_at/updated_at`。downgrade 直接 drop。
 - Model `src/app/db/models/broker_account.py`；Domain `src/app/domain/broker_account.py`（`BrokerAccountData`、`FubonCredentials` 僅記憶體且 `__repr__` 遮罩、`BrokerAccountError` → `BrokerAccountNotBoundError`／`BrokerLoginFailedError`／`BrokerSessionLimitReachedError`）；Repo `src/app/repositories/broker_account_repository.py`（`get_by_user_id`、`list_all`、`upsert`、`delete`、`mark_login_ok`、`mark_login_failed` 截 500 字、`get_credentials` 在 repo 內解密）。
 
 **Pool**
@@ -125,7 +125,7 @@
 
 | 端點 | 行為 |
 |---|---|
-| `GET /me/broker-account` | 200：`broker`、`brokerAccountNo`（遮罩後四碼）、`status`、`lastLoginAt`、`lastError`、`updatedAt`；無 → 404 |
+| `GET /me/broker-account` | 200：`broker`、`brokerAccountNo`（遮罩後四碼）、`status`、`certExpiresAt`、`lastLoginAt`、`lastError`、`updatedAt`；無 → 404 |
 | `PUT /me/broker-account` | body `broker, nationalId, password, certPfxBase64, certPassword`（`extra="forbid"`，pfx ≤ 64KB）。`RateLimiter.consume("broker_bind:{user_id}", 5 次/小時)` → `pool.start`（失敗 → 422 `BROKER_LOGIN_FAILED`，不落 DB）→ `upsert` → 訂閱該 user 的 active symbols → audit `broker_account_bound` → commit；例外 rollback 並 `pool.stop` |
 | `PUT /admin/users/{user_id}/broker-account` | 管理員代綁（憑證由我們代申請、代辦綁定的情境）。body 與流程同上，`user_id` 取自路徑，audit `actor_type="admin"`。需 `AdminUserDep`，目標使用者須為 active |
 | `DELETE /me/broker-account` | 204 冪等：`cancel_active_for_owner` → `delete` → audit `broker_account_unbound` → commit → `pool.stop` |
