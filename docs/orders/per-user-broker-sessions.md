@@ -22,9 +22,9 @@
 
 ## 這張工單做的事（白話）
 
-**1. 使用者綁定自己的券商帳號**
+**1. 管理員幫使用者綁定他的券商帳號**
 
-富邦登入需要四樣東西：身分證字號、登入密碼、憑證檔、憑證密碼。使用者在 APP 裡填一次，系統當場試登入，成功才加密存起來。
+富邦登入需要四樣東西：身分證字號、登入密碼、憑證檔、憑證密碼。憑證由我們代客戶申請，申請完這四樣就在我們手上，所以綁定由管理員代辦：填一次，系統當場試登入，成功才加密存起來。不開放使用者自助綁定，將來有客戶需要再於該客戶分支加回。
 
 **2. 系統用他的帳號幫他盯盤**
 
@@ -46,7 +46,7 @@
 
 ## 做完之後看得到什麼
 
-- 使用者頁面多一組「券商帳號」設定：綁定、查看狀態與憑證到期日、解除。憑證一年一換，更新就是重新綁定一次（整包覆蓋），不另設更新端點；到期前主動提醒本票不做。管理員也能代使用者綁定，適合憑證由我們代申請的客戶。前端在瀏覽器把 pfx 轉 base64 隨 JSON 送出，伺服器不另做檔案上傳、不保存憑證檔。
+- 使用者頁面多一組「券商帳號」唯讀資訊：狀態、券商帳號後四碼、憑證到期日。綁定與解除由管理員在後台代辦。憑證一年一換，更新就是重新綁定一次（整包覆蓋），不另設更新端點；到期前主動提醒本票不做。管理端在瀏覽器把 pfx 轉 base64 隨 JSON 送出，伺服器不另做檔案上傳、不保存憑證檔。
 - 綁定後建單，行情從他自己的券商帳號來；沒綁定就不能建單，Telegram 也會回「請先綁定」。
 - 富邦成為第一個真正接上的券商；永豐 demo 模式保留給展示用。
 
@@ -89,7 +89,7 @@
 - **Session pool**：`src/app/services/broker_session_pool.py` 的 `BrokerSessionPool`，`dict[user_id, QuoteProvider]` + `threading.Lock`，掛在 `app.state.broker_sessions`，取代 `app.state.quote_provider`。
   - `QUOTE_PROVIDER=fubon`：per-user 模式，每人一個 `FubonQuoteProvider`。
   - `QUOTE_PROVIDER=in_memory` 或 `shioaji_demo`：shared 模式，所有 user 共用同一個 provider 實例，行為與現在相同（既有測試與永豐 demo 不必綁定）。
-- **金鑰儲存**：`broker_accounts` 以獨立 `id` 當主鍵、`user_id` 加 unique（現階段一人一帳戶；日後開放多帳戶只需拿掉 unique 並在單子上加 `broker_account_id`，不必重建表），`credentials_encrypted` 一欄存加密後的 JSON（富邦：`national_id`、`password`、`cert_pfx_base64`、`cert_password`），不為每家券商開專屬欄位。加密重用 `app.core.mfa_crypto.encrypt_secret/decrypt_secret`，金鑰為 `MFA_ENCRYPTION_KEY`。
+- **金鑰儲存**：`broker_accounts` 以獨立 `id` 當主鍵、`user_id` 加 unique（現階段一人一帳戶；日後開放多帳戶只需拿掉 unique 並在單子上加 `broker_account_id`，不必重建表），`credentials_encrypted` 一欄存加密後的 JSON（富邦：`personal_id`（對應 SDK `login(personal_id, ...)` 參數名）、`password`、`cert_pfx_base64`、`cert_password`），不為每家券商開專屬欄位。加密重用 `app.core.mfa_crypto.encrypt_secret/decrypt_secret`，金鑰為 `MFA_ENCRYPTION_KEY`。
 - **憑證檔**：登入時把 pfx 解密寫到 `tempfile.NamedTemporaryFile`（0600），呼叫 `sdk.login(...)` 後立刻刪除。若實測發現 SDK 重連時會重讀憑證檔，改為存在 `key/<user_id>.pfx` 並在 `stop` 時刪。
 - **Dispatcher 依 owner 過濾**：同一 symbol 會從 N 條 session 各來一次 tick，`TradeIntentCoreDispatcher.dispatch(snapshot, *, owner_user_id=None)` → `repo.system_list_active_by_symbols(symbols, owner_user_id=...)`。pool 用 `functools.partial(dispatch, owner_user_id=uid)` 掛 listener；shared 模式傳 `None` 掃全部。
 - **Telegram 路徑不能靠 request user 取 session**：webhook 無 Bearer，owner 由 `TELEGRAM_OWNER_EMAIL` 在 command 內解析，因此 `CreateTradeIntentCommand` 改注入 pool，執行時 `pool.require(inp.owner_user_id)`。
@@ -100,7 +100,7 @@
 
 ### PR1 `feat/fubon-quote-provider`（純新增，不接線）
 
-- `src/app/services/quote/fubon/client.py`：`FubonClient(*, national_id, password, cert_pfx: bytes, cert_password)`，`login()`（temp 檔寫 pfx → `sdk.login` → 過濾 `account_type=="stock"`；失敗 raise `QuoteProviderUnavailableError("fubon", ...)`）、`logout()`、`init_realtime(Mode.Normal)` + `connect`、`subscribe`／`unsubscribe`（維護 `symbol → channel_id`）、`on_disconnect` 重連＋重訂閱、`get_stock_quote(symbol)`（REST，攔 `FugleAPIError`，429 對映 provider 錯誤）。
+- `src/app/services/quote/fubon/client.py`：`FubonClient(*, personal_id, password, cert_pfx: bytes, cert_password)`，`login()`（temp 檔寫 pfx → `sdk.login` → 過濾 `account_type=="stock"`；失敗 raise `QuoteProviderUnavailableError("fubon", ...)`）、`logout()`、`init_realtime(Mode.Normal)` + `connect`、`subscribe`／`unsubscribe`（維護 `symbol → channel_id`）、`on_disconnect` 重連＋重訂閱、`get_stock_quote(symbol)`（REST，攔 `FugleAPIError`，429 對映 provider 錯誤）。
 - `src/app/services/quote/fubon/normalize.py`：純函式，aggregates／REST dict → `QuoteSnapshot`；`last_price` 取 `lastTrade.price`，`bids/asks` 空 → `None`，`lastTrade` 缺 → `last_price/last_trade_time` 皆 `None`。
 - `src/app/services/quote/fubon/provider.py`：`FubonQuoteProvider`，實作 `QuoteProvider` 與 `CurrentPriceProvider`，執行緒模型照抄 `shioaji_demo/provider.py`；`max_subscriptions` 預設 300，超限丟 fubon 自己的例外（409）；無 allowlist。
 - `QuoteSnapshot.quote_time` 改名 `last_trade_time`，型別 `datetime | None`；`QuoteValidator` 在其為 `None` 時改用 `received_at` 換算 Asia/Taipei 做 regular session 檢查（不可直接跳過）。對外 JSON 欄位 `quoteTime` 不改名但可為 `null`。
@@ -121,16 +121,15 @@
 - `BrokerSessionPool(settings, *, shared=None)`：`set_quote_listener`、`get`、`require`、`start(user_id, credentials)`（鎖內：超限拒絕；登入成功才 shutdown 舊 session；掛 partial listener）、`stop`（必呼叫 `logout`）、`stop_all`、`bound_user_ids`。log 只記 user_id。
 - `config.py` 加 `broker_max_sessions`（預設 2，validator 1..10）、`BrokerName = Literal["fubon"]`、`BROKER_NAMES`。
 
-**綁定 API**（prefix `/me`，全部需登入）
+**綁定 API**（全部需登入；寫入只開給管理員）
 
 | 端點 | 行為 |
 |---|---|
 | `GET /me/broker-account` | 200：`broker`、`brokerAccountNo`（遮罩後四碼）、`status`、`certExpiresAt`、`lastLoginAt`、`lastError`、`updatedAt`；無 → 404 |
-| `PUT /me/broker-account` | body `broker, nationalId, password, certPfxBase64, certPassword`（`extra="forbid"`，pfx ≤ 64KB）。`RateLimiter.consume("broker_bind:{user_id}", 5 次/小時)` → `pool.start`（失敗 → 422 `BROKER_LOGIN_FAILED`，不落 DB）→ `upsert` → 訂閱該 user 的 active symbols → audit `broker_account_bound` → commit；例外 rollback 並 `pool.stop` |
-| `PUT /admin/users/{user_id}/broker-account` | 管理員代綁（憑證由我們代申請、代辦綁定的情境）。body 與流程同上，`user_id` 取自路徑，audit `actor_type="admin"`。需 `AdminUserDep`，目標使用者須為 active |
-| `DELETE /me/broker-account` | 204 冪等：`cancel_active_for_owner` → `delete` → audit `broker_account_unbound` → commit → `pool.stop` |
+| `PUT /admin/users/{user_id}/broker-account` | 需 `AdminUserDep`，目標使用者須為 active。body `broker, personalId, password, certPfxBase64, certPassword`（`extra="forbid"`，pfx ≤ 64KB）。`pool.start`（失敗 → 422 `BROKER_LOGIN_FAILED`，不落 DB）→ `upsert` → 訂閱該 user 的 active symbols → audit `broker_account_bound`（`actor_type="admin"`）→ commit；例外 rollback 並 `pool.stop`。已有 admin 認證，不另加 rate limit |
+| `DELETE /admin/users/{user_id}/broker-account` | 需 `AdminUserDep`。204 冪等：`cancel_active_for_owner` → `delete` → audit `broker_account_unbound`（`actor_type="admin"`）→ commit → `pool.stop` |
 
-- CLI `python -m app.db.bind_broker_account --email --broker --national-id --cert-path`（登入密碼與憑證密碼用 `getpass` 互動輸入）：讀 pfx 轉 base64、組 JSON、`encrypt_secret` 後走同一個 repo `upsert`，供部署前預先寫入；不試登入，`status` 先寫 `active`，由下次啟動驗證。prod image 需 `-e PYTHONPATH=src`，比照 `create_admin`。
+- 不做自助 `PUT/DELETE /me/broker-account`、不做 CLI 預寫：綁定情境只有我們代辦，管理員端點一條路即可；系統可在無人綁定時啟動，管理員登入後再綁第一位。
 - 錯誤碼：`BROKER_ACCOUNT_NOT_BOUND`(409)、`BROKER_LOGIN_FAILED`(422)、`BROKER_SESSION_LIMIT_REACHED`(409)。回應與 log 不含身分證字號、密碼、憑證。
 - Commands `src/app/commands/broker_account.py`；Schemas `src/app/api/schemas/broker_account.py` 逐欄 alias。
 
@@ -141,8 +140,8 @@
 - `commands/trade_intent_core.py`：create 在限額檢查後、`repo.create` 前 `pool.require(owner)`；cancel 用 `count_active_or_scheduled_for_user_symbol` 決定退訂（跨 owner 計數會讓本人 session 永不退訂）。
 - `deps.py`：`get_quote_provider` 改由 pool 取本人 session；`current-price` 與 `/dev/*` 因此需登入。
 - `commands/account.py`：disable 後 `pool.stop`（列保留）；reactivate 後有金鑰就 `pool.start`，失敗不讓復權失敗。
-- `commands/telegram_intent.py`：`BrokerAccountNotBoundError` 回覆「尚未綁定券商帳號，請先到使用者頁面綁定後再確認。」，draft 維持 pending。
-- 設定與部署：`.env*`、`cd.yml` 加 `BROKER_MAX_SESSIONS`；不需要任何 `FUBON_*` 帳密變數。部署前提：至少一位使用者已綁定，否則行情全停。
+- `commands/telegram_intent.py`：`BrokerAccountNotBoundError` 回覆「尚未綁定券商帳號，請聯絡管理員綁定後再確認。」，draft 維持 pending。
+- 設定與部署：`.env*`、`cd.yml` 加 `BROKER_MAX_SESSIONS`；不需要任何 `FUBON_*` 帳密變數。無人綁定時可啟動但行情全停，由管理員登入後綁第一位。
 - 合併前實測：登入 session 能活多久、富邦會不會收盤後或深夜強制登出、憑證是否只在 `login()` 時讀取。若會被踢，加一個開盤前固定時間對所有 session 登出再登入的排程，不做斷線偵測或健康層。兩個測試帳號同 process 登入確認連線上限語意；量測 1／2／3 個 SDK 實例各訂 5 檔跑 10 分鐘的 RSS，決定 `BROKER_MAX_SESSIONS` 預設。
 - 文件同步：`architecture.md`（一個 process 持有 N 條 session，仍不可多 worker）、`api.md`、`operations.md`（記憶體、重啟全員重登、殘留 session 佔額度、`login_failed` 處置、`MFA_ENCRYPTION_KEY` 輪替涵蓋 `broker_accounts`）、`technical-debt.md`（舊軌 TWAP 無參考價、每 tick 每 session 重跑 lifecycle UPDATE、dispatcher 觸發後不退訂）。完成後刪除本工單。
 
@@ -155,8 +154,8 @@
 ### 驗收條件
 
 - [ ] `QUOTE_PROVIDER=fubon` 可啟動；已綁定使用者於 lifespan 各登入一次並訂閱自己的 active symbols；其中一人登入失敗不影響其他人與 `/health`。
-- [ ] `PUT /me/broker-account` 登入成功才落列，`credentials_encrypted` 可用 `decrypt_secret` 還原；登入失敗回 422 且無列。
-- [ ] `GET /me/broker-account` 不回任何機密；`DELETE` 後該人 active intent 皆 cancelled、session 已 logout。
+- [ ] `PUT /admin/users/{user_id}/broker-account` 登入成功才落列，`credentials_encrypted` 可用 `decrypt_secret` 還原；登入失敗回 422 且無列。
+- [ ] `GET /me/broker-account` 不回任何機密；一般使用者呼叫 admin PUT/DELETE 回 403；`DELETE` 後該人 active intent 皆 cancelled、session 已 logout。
 - [ ] `BROKER_MAX_SESSIONS=1` 時第二人綁定回 409。
 - [ ] 兩個 owner 同 symbol 各有 active intent，A 的 session 推價只觸發 A 的單。
 - [ ] 未綁定者建單回 409 `BROKER_ACCOUNT_NOT_BOUND`；Telegram 確認時回覆提示。
