@@ -34,12 +34,19 @@ def _micros_to_taipei(micros: int) -> datetime:
     return datetime.fromtimestamp(micros / 1_000_000, tz=UTC).astimezone(_TAIPEI_TZ)
 
 
+def _top_of_book(levels: Any) -> Decimal | None:
+    """`bids` / `asks` are 5-level depth arrays; empty or missing outside the session."""
+    if not isinstance(levels, list) or not levels:
+        return None
+    return _to_decimal(levels[0].get("price"))
+
+
 def aggregates_to_snapshot(data: dict[str, Any]) -> QuoteSnapshot:
     last_trade = data["lastTrade"]
     return QuoteSnapshot(
         symbol=data["symbol"],
-        bid_price=_to_decimal(data["bids"][0]["price"]),
-        ask_price=_to_decimal(data["asks"][0]["price"]),
+        bid_price=_top_of_book(data.get("bids")),
+        ask_price=_top_of_book(data.get("asks")),
         last_price=_to_decimal(last_trade["price"]),
         quote_time=_micros_to_taipei(last_trade["time"]),
         received_at=datetime.now(tz=UTC),

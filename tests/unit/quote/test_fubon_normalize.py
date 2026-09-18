@@ -34,3 +34,36 @@ def test_aggregates_to_snapshot_uses_last_trade_not_trial_price() -> None:
     # `lastTrade.time` is epoch microseconds; expose it as tz-aware Asia/Taipei.
     assert snapshot.quote_time == datetime(2023, 5, 29, 13, 30, tzinfo=TAIPEI)  # 步驟 3 改名 last_trade_time 後改回
     assert snapshot.received_at.tzinfo is not None
+
+
+def _payload_with_trade(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "symbol": "2330",
+        "lastPrice": 568,
+        "bids": [{"price": 567, "size": 87}],
+        "asks": [{"price": 568, "size": 800}],
+        "lastTrade": {"price": 568, "size": 1, "time": 1685338200000000},
+    }
+    base.update(overrides)
+    return base
+
+
+def test_empty_book_yields_none_bid_ask() -> None:
+    # Pre-open / after-close frames carry empty depth arrays; the validator
+    # falls back to last_price, so both sides must be None rather than a crash.
+    snapshot = aggregates_to_snapshot(_payload_with_trade(bids=[], asks=[]))
+
+    assert snapshot.bid_price is None
+    assert snapshot.ask_price is None
+    assert snapshot.last_price == Decimal("568")
+
+
+def test_missing_book_keys_yield_none_bid_ask() -> None:
+    payload = _payload_with_trade()
+    del payload["bids"]
+    del payload["asks"]
+
+    snapshot = aggregates_to_snapshot(payload)
+
+    assert snapshot.bid_price is None
+    assert snapshot.ask_price is None
