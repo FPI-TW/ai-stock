@@ -1,0 +1,46 @@
+"""Fubon market-data payload → QuoteSnapshot normalisation.
+
+Pure functions only — no `fubon_neo` import — so the contract can be unit-tested
+without the SDK. Both the websocket `aggregates` channel and the REST
+`intraday/quote` endpoint share the same dict shape.
+
+Rules (docs/orders/per-user-broker-sessions.md, PR1):
+- `last_price` comes from `lastTrade.price`; `lastPrice` includes pre-open trial
+  matching and must not be used for triggers.
+- Top of book is `bids[0]` / `asks[0]`.
+- Timestamps are epoch microseconds; expose them as tz-aware Asia/Taipei.
+"""
+
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from app.services.quote.base import QuoteSnapshot
+
+_TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+
+
+def _to_decimal(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+def _micros_to_taipei(micros: int) -> datetime:
+    return datetime.fromtimestamp(micros / 1_000_000, tz=UTC).astimezone(_TAIPEI_TZ)
+
+
+def aggregates_to_snapshot(data: dict[str, Any]) -> QuoteSnapshot:
+    last_trade = data["lastTrade"]
+    return QuoteSnapshot(
+        symbol=data["symbol"],
+        bid_price=_to_decimal(data["bids"][0]["price"]),
+        ask_price=_to_decimal(data["asks"][0]["price"]),
+        last_price=_to_decimal(last_trade["price"]),
+        quote_time=_micros_to_taipei(last_trade["time"]),
+        received_at=datetime.now(tz=UTC),
+    )
