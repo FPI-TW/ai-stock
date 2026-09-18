@@ -93,7 +93,8 @@
   - `QUOTE_PROVIDER=in_memory` 或 `shioaji_demo`：shared 模式，所有 user 共用同一個 provider 實例，行為與現在相同（既有測試與永豐 demo 不必綁定）。
 - **金鑰儲存**：`broker_accounts` 以獨立 `id` 當主鍵、`user_id` 加 unique（現階段一人一帳戶；日後開放多帳戶只需拿掉 unique 並在單子上加 `broker_account_id`，不必重建表），`credentials_encrypted` 一欄存加密後的 JSON（富邦：`personal_id`（對應 SDK `login(personal_id, ...)` 參數名）、`password`、`cert_pfx_base64`、`cert_password`），不為每家券商開專屬欄位。加密重用 `app.core.mfa_crypto.encrypt_secret/decrypt_secret`，金鑰為 `MFA_ENCRYPTION_KEY`。
 - **憑證檔**：登入時把 pfx 解密寫到 `tempfile.NamedTemporaryFile`（0600），呼叫 `sdk.login(...)` 後立刻刪除。若實測發現 SDK 重連時會重讀憑證檔，改為存在 `key/<user_id>.pfx` 並在 `stop` 時刪。
-- **開盤前重建行情連線**：行情 WS 每日收盤後被斷且 SDK 不重連，`on_disconnect` 只記 log 不自行重連（避免收盤後反覆斷連）。每日 08:30（Asia/Taipei）一支排程對所有 session 重建連線並重訂各 owner 的 active symbols，形狀比照 `IdempotencyCleanupScheduler`。登入已實測整夜不失效（2026-09-17 10:26～09-18 08:16 連續 22 小時授權查詢全數成功），最小動作只需重做 `init_realtime`＋`connect`＋重訂，但定案（2026-09-18）採全員 `logout` → `login` → 訂閱：與 lifespan 啟動共用同一條路徑，且對登入到期等未驗證情況免疫。啟動與每日重登共用一個函式 `login_all_bound_users(pool, session_factory)`，逐人 `pool.stop` → 解密金鑰 → `pool.start` → 依 owner 重訂 active symbols，一人失敗 `mark_login_failed` + warning + continue。
+- **行情連線重建迴圈（不做每日重登）**：行情 WS 每日收盤後被富邦端斷掉且 SDK 不重連，登入本身不會失效（實測 2026-09-17 10:26～09-18 09:50 連續 23.5 小時授權查詢全數成功）。因此只重建行情，不碰登入：`on_disconnect` 只把 `_realtime_connected` 設為 `False` 並記 log；pool 一支週期任務（每 30 秒，形狀比照 `IdempotencyCleanupScheduler`）掃每個 session，`not connected` 且現在落在台北時間 08:30～13:35 才呼叫 `reconnect_realtime()`，交易時段外不重連（避免收盤後反覆斷連）。每個 tick 每個 session 最多試一次，失敗記 warning 等下一個 tick，不另做退避。這個迴圈只負責重連，不產生任何行情健康狀態或通知。
+- **登入不偵測、不排程重登**：登入只在 lifespan 啟動、綁定、復權時做。`reconnect_realtime()` 內 `init_realtime` 換 token 失敗即代表登入已失效，此時 `mark_login_failed` + `pool.stop`，`GET /me/broker-account` 的 `status` 會顯示 `login_failed`，由管理員重新綁定或重啟服務。被踢的 `set_on_event` 事件代碼未曾觀察到，等真的看到再決定是否接到重登。
 - **Dispatcher 依 owner 過濾**：同一 symbol 會從 N 條 session 各來一次 tick，`TradeIntentCoreDispatcher.dispatch(snapshot, *, owner_user_id=None)` → `repo.system_list_active_by_symbols(symbols, owner_user_id=...)`。pool 用 `functools.partial(dispatch, owner_user_id=uid)` 掛 listener；shared 模式傳 `None` 掃全部。
 - **Telegram 路徑不能靠 request user 取 session**：webhook 無 Bearer，owner 由 `TELEGRAM_OWNER_EMAIL` 在 command 內解析，因此 `CreateTradeIntentCommand` 改注入 pool，執行時 `pool.require(inp.owner_user_id)`。
 - **連線上限**：`BROKER_MAX_SESSIONS`（預設 2，實測後調，硬上限不超過 10），達上限綁定回 409。
@@ -103,7 +104,7 @@
 
 ### PR1 `feat/fubon-quote-provider`（純新增，不接線）
 
-- `src/app/services/quote/fubon/client.py`：`FubonClient(*, personal_id, password, cert_pfx: bytes, cert_password)`，`login()`（temp 檔寫 pfx → `sdk.login` → 過濾 `account_type=="stock"`；失敗 raise `QuoteProviderUnavailableError("fubon", ...)`）、`logout()`、`init_realtime(Mode.Normal)` + `connect`、`subscribe`／`unsubscribe`（維護 `symbol → channel_id`）、`on_disconnect` 只記 log 並標記 disconnected、`reconnect_realtime()`（重做 `init_realtime` → 重掛 listener → `connect` → 重訂 `_subscribed` 每一檔並重建 channel_id 對照）、`get_stock_quote(symbol)`（REST，攔 `FugleAPIError`，429 對映 provider 錯誤）。
+- `src/app/services/quote/fubon/client.py`：`FubonClient(*, personal_id, password, cert_pfx: bytes, cert_password)`，`login()`（temp 檔寫 pfx → `sdk.login` → 過濾 `account_type=="stock"`；失敗 raise `QuoteProviderUnavailableError("fubon", ...)`）、`logout()`、`init_realtime(Mode.Normal)` + `connect`、`subscribe`／`unsubscribe`（維護 `symbol → channel_id`）、`on_disconnect` 只記 log 並把 `_realtime_connected` 設為 `False`、`reconnect_realtime()`（重做 `init_realtime` → 重掛 listener → `connect` → 重訂 `_subscribed` 每一檔並重建 channel_id 對照；`init_realtime` 失敗視為登入失效，raise `QuoteProviderUnavailableError`）、`get_stock_quote(symbol)`（REST，攔 `FugleAPIError`，429 對映 provider 錯誤）。
 - `src/app/services/quote/fubon/normalize.py`：純函式，aggregates／REST dict → `QuoteSnapshot`；`last_price` 取 `lastTrade.price`，`bids/asks` 空 → `None`，`lastTrade` 缺 → `last_price/last_trade_time` 皆 `None`。
 - `src/app/services/quote/fubon/provider.py`：`FubonQuoteProvider`，實作 `QuoteProvider` 與 `CurrentPriceProvider`，執行緒模型照抄 `shioaji_demo/provider.py`；`max_subscriptions` 預設 300，超限丟 fubon 自己的例外（409）；無 allowlist。
 - `QuoteSnapshot.quote_time` 改名 `last_trade_time`，型別 `datetime | None`；`QuoteValidator` 在其為 `None` 時改用 `received_at` 換算 Asia/Taipei 做 regular session 檢查（不可直接跳過）。對外 JSON 欄位 `quoteTime` 不改名但可為 `null`。
@@ -145,7 +146,7 @@
 - `commands/account.py`：disable 後 `pool.stop`（列保留）；reactivate 後有金鑰就 `pool.start`，失敗不讓復權失敗。
 - `commands/telegram_intent.py`：`BrokerAccountNotBoundError` 回覆「尚未綁定券商帳號，請聯絡管理員綁定後再確認。」，draft 維持 pending。
 - 設定與部署：`.env*`、`cd.yml` 加 `BROKER_MAX_SESSIONS`；不需要任何 `FUBON_*` 帳密變數。無人綁定時可啟動但行情全停，由管理員登入後綁第一位。
-- 合併前實測：登入 session 能活多久、富邦會不會收盤後或深夜強制登出、憑證是否只在 `login()` 時讀取。已實測：盤中不踢（2026-09-17 10:26～14:01 本機單 session 訂 2330，授權查詢與行情全程正常）；收盤後 14:05 行情 WS 被斷但登入仍有效（見富邦事實）；登入從收盤後到隔日開盤不會失效（同日 10:26 至次日 08:16 連續 22 小時授權查詢全數成功，無任何 `TRADE EVENT`）。不論結果，開盤前重建行情連線的排程都要做；不做斷線偵測或健康層。兩個測試帳號同 process 登入確認連線上限語意；量測 1／2／3 個 SDK 實例各訂 5 檔跑 10 分鐘的 RSS，決定 `BROKER_MAX_SESSIONS` 預設。
+- 合併前實測：登入 session 能活多久、富邦會不會收盤後或深夜強制登出、憑證是否只在 `login()` 時讀取。已實測：盤中不踢（2026-09-17 10:26～14:01 本機單 session 訂 2330，授權查詢與行情全程正常）；收盤後 14:05 行情 WS 被斷但登入仍有效（見富邦事實）；登入從收盤後到隔日開盤不會失效（同日 10:26 至次日 08:16 連續 22 小時授權查詢全數成功，無任何 `TRADE EVENT`）。行情靠重建迴圈在交易時段內接回；登入不偵測、不排程重登。兩個測試帳號同 process 登入確認連線上限語意；量測 1／2／3 個 SDK 實例各訂 5 檔跑 10 分鐘的 RSS，決定 `BROKER_MAX_SESSIONS` 預設。
 - 文件同步：`architecture.md`（一個 process 持有 N 條 session，仍不可多 worker）、`api.md`、`operations.md`（記憶體、重啟全員重登、殘留 session 佔額度、`login_failed` 處置、`MFA_ENCRYPTION_KEY` 輪替涵蓋 `broker_accounts`）、`technical-debt.md`（舊軌 TWAP 無參考價、每 tick 每 session 重跑 lifecycle UPDATE、dispatcher 觸發後不退訂）。完成後刪除本工單。
 
 ### 對其他富邦工作的影響
@@ -163,8 +164,8 @@
 - [ ] 兩個 owner 同 symbol 各有 active intent，A 的 session 推價只觸發 A 的單。
 - [ ] 未綁定者建單回 409 `BROKER_ACCOUNT_NOT_BOUND`；Telegram 確認時回覆提示。
 - [ ] `last_price` 取自 `lastTrade.price`；`lastTrade` 缺時 snapshot 仍建立且 validator 以 `received_at` 擋盤前試撮。
-- [ ] `reconnect_realtime()` 後重訂 `_subscribed` 內每一檔，channel_id 對照表重建；`on_disconnect` 不自行重連。
-- [ ] 每日 08:30 排程對所有 session 全員登出再登入並重訂各 owner 的 active symbols；一人失敗不影響其他人；與 lifespan 啟動走同一個函式。
+- [ ] `on_disconnect` 只標記不重連；重建迴圈在台北時間 08:30～13:35 內對 `not connected` 的 session 呼叫 `reconnect_realtime()`，重訂 `_subscribed` 內每一檔並重建 channel_id 對照表；時段外不重連。
+- [ ] `reconnect_realtime()` 內 `init_realtime` 失敗 → 該 session `login_failed` 並 `pool.stop`，其他 session 不受影響。
 - [ ] `QUOTE_PROVIDER=in_memory` 時 `app.services.quote.fubon*` 不出現在 `sys.modules`；`shioaji_demo/` 行為不變。
 - [ ] log 與回應皆不含身分證字號、密碼、憑證。
 - [ ] `make check` 全綠（含 `check-shioaji-isolation`）；migration up → down → up 通過。
@@ -172,7 +173,7 @@
 ### 已知風險
 
 - 連線上限 10 若是每應用程式，一套部署最多 10 位使用者，且異常關機殘留 session 會暫時吃掉額度。
-- 每次部署全員重登券商；`login_failed` 無自動重試，需重新綁定或重啟。登入實測跨夜不失效；超過 24 小時或跨週末是否失效尚未驗證。
+- 每次部署全員重登券商；`login_failed` 無自動重試，需重新綁定或重啟。登入實測跨夜不失效；跨週末或連續多日是否失效尚未驗證，若失效會在下次重建行情時以 `login_failed` 浮現。
 - 憑證檔必須落地成暫存檔才能登入；暫存檔生命週期要實測。
 - `MFA_ENCRYPTION_KEY` 現在同時保護券商金鑰。
 - SDK Rust 核心 panic 攔不住，會殺掉整個 process，所有使用者一起斷。
