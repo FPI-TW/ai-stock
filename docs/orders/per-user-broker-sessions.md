@@ -93,7 +93,7 @@
   - `QUOTE_PROVIDER=in_memory` 或 `shioaji_demo`：shared 模式，所有 user 共用同一個 provider 實例，行為與現在相同（既有測試與永豐 demo 不必綁定）。
 - **金鑰儲存**：`broker_accounts` 以獨立 `id` 當主鍵、`user_id` 加 unique（現階段一人一帳戶；日後開放多帳戶只需拿掉 unique 並在單子上加 `broker_account_id`，不必重建表），`credentials_encrypted` 一欄存加密後的 JSON（富邦：`personal_id`（對應 SDK `login(personal_id, ...)` 參數名）、`password`、`cert_pfx_base64`、`cert_password`），不為每家券商開專屬欄位。加密重用 `app.core.mfa_crypto.encrypt_secret/decrypt_secret`，金鑰為 `MFA_ENCRYPTION_KEY`。
 - **憑證檔**：登入時把 pfx 解密寫到 `tempfile.NamedTemporaryFile`（0600），呼叫 `sdk.login(...)` 後立刻刪除。若實測發現 SDK 重連時會重讀憑證檔，改為存在 `key/<user_id>.pfx` 並在 `stop` 時刪。
-- **開盤前重建行情連線**：行情 WS 每日收盤後被斷且 SDK 不重連，`on_disconnect` 只記 log 不自行重連（避免收盤後反覆斷連）。每日 08:30（Asia/Taipei）一支排程對所有 session 重建連線並重訂各 owner 的 active symbols，形狀比照 `IdempotencyCleanupScheduler`。重建的動作大小待今晚實測登入是否也會失效後定：登入不失效只需重做 `init_realtime`＋`connect`＋重訂；登入也失效則全員 `logout` → `login` 再訂。傾向不論結果都走全員重登，與 lifespan 啟動共用同一條路徑。
+- **開盤前重建行情連線**：行情 WS 每日收盤後被斷且 SDK 不重連，`on_disconnect` 只記 log 不自行重連（避免收盤後反覆斷連）。每日 08:30（Asia/Taipei）一支排程對所有 session 重建連線並重訂各 owner 的 active symbols，形狀比照 `IdempotencyCleanupScheduler`。登入已實測整夜不失效（2026-09-17 10:26～09-18 08:16 連續 22 小時授權查詢全數成功），最小動作只需重做 `init_realtime`＋`connect`＋重訂；是否改走全員 `logout` → `login` 以與 lifespan 啟動共用同一條路徑，待定。
 - **Dispatcher 依 owner 過濾**：同一 symbol 會從 N 條 session 各來一次 tick，`TradeIntentCoreDispatcher.dispatch(snapshot, *, owner_user_id=None)` → `repo.system_list_active_by_symbols(symbols, owner_user_id=...)`。pool 用 `functools.partial(dispatch, owner_user_id=uid)` 掛 listener；shared 模式傳 `None` 掃全部。
 - **Telegram 路徑不能靠 request user 取 session**：webhook 無 Bearer，owner 由 `TELEGRAM_OWNER_EMAIL` 在 command 內解析，因此 `CreateTradeIntentCommand` 改注入 pool，執行時 `pool.require(inp.owner_user_id)`。
 - **連線上限**：`BROKER_MAX_SESSIONS`（預設 2，實測後調，硬上限不超過 10），達上限綁定回 409。
@@ -145,7 +145,7 @@
 - `commands/account.py`：disable 後 `pool.stop`（列保留）；reactivate 後有金鑰就 `pool.start`，失敗不讓復權失敗。
 - `commands/telegram_intent.py`：`BrokerAccountNotBoundError` 回覆「尚未綁定券商帳號，請聯絡管理員綁定後再確認。」，draft 維持 pending。
 - 設定與部署：`.env*`、`cd.yml` 加 `BROKER_MAX_SESSIONS`；不需要任何 `FUBON_*` 帳密變數。無人綁定時可啟動但行情全停，由管理員登入後綁第一位。
-- 合併前實測：登入 session 能活多久、富邦會不會收盤後或深夜強制登出、憑證是否只在 `login()` 時讀取。已實測：盤中不踢（2026-09-17 10:26～14:01 本機單 session 訂 2330，授權查詢與行情全程正常）；收盤後 14:05 行情 WS 被斷但登入仍有效（見富邦事實）；登入本身從收盤後到隔日開盤會不會失效待實測。不論結果，開盤前重建行情連線的排程都要做；不做斷線偵測或健康層。兩個測試帳號同 process 登入確認連線上限語意；量測 1／2／3 個 SDK 實例各訂 5 檔跑 10 分鐘的 RSS，決定 `BROKER_MAX_SESSIONS` 預設。
+- 合併前實測：登入 session 能活多久、富邦會不會收盤後或深夜強制登出、憑證是否只在 `login()` 時讀取。已實測：盤中不踢（2026-09-17 10:26～14:01 本機單 session 訂 2330，授權查詢與行情全程正常）；收盤後 14:05 行情 WS 被斷但登入仍有效（見富邦事實）；登入從收盤後到隔日開盤不會失效（同日 10:26 至次日 08:16 連續 22 小時授權查詢全數成功，無任何 `TRADE EVENT`）。不論結果，開盤前重建行情連線的排程都要做；不做斷線偵測或健康層。兩個測試帳號同 process 登入確認連線上限語意；量測 1／2／3 個 SDK 實例各訂 5 檔跑 10 分鐘的 RSS，決定 `BROKER_MAX_SESSIONS` 預設。
 - 文件同步：`architecture.md`（一個 process 持有 N 條 session，仍不可多 worker）、`api.md`、`operations.md`（記憶體、重啟全員重登、殘留 session 佔額度、`login_failed` 處置、`MFA_ENCRYPTION_KEY` 輪替涵蓋 `broker_accounts`）、`technical-debt.md`（舊軌 TWAP 無參考價、每 tick 每 session 重跑 lifecycle UPDATE、dispatcher 觸發後不退訂）。完成後刪除本工單。
 
 ### 對其他富邦工作的影響
@@ -172,7 +172,7 @@
 ### 已知風險
 
 - 連線上限 10 若是每應用程式，一套部署最多 10 位使用者，且異常關機殘留 session 會暫時吃掉額度。
-- 每次部署全員重登券商；`login_failed` 無自動重試，需重新綁定或重啟。登入 session 若被券商定時踢掉，目前沒有自動重登，要靠實測結果決定是否加每日重登排程。
+- 每次部署全員重登券商；`login_failed` 無自動重試，需重新綁定或重啟。登入實測跨夜不失效；超過 24 小時或跨週末是否失效尚未驗證。
 - 憑證檔必須落地成暫存檔才能登入；暫存檔生命週期要實測。
 - `MFA_ENCRYPTION_KEY` 現在同時保護券商金鑰。
 - SDK Rust 核心 panic 攔不住，會殺掉整個 process，所有使用者一起斷。
