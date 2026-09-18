@@ -93,7 +93,7 @@
   - `QUOTE_PROVIDER=in_memory` 或 `shioaji_demo`：shared 模式，所有 user 共用同一個 provider 實例，行為與現在相同（既有測試與永豐 demo 不必綁定）。
 - **金鑰儲存**：`broker_accounts` 以獨立 `id` 當主鍵、`user_id` 加 unique（現階段一人一帳戶；日後開放多帳戶只需拿掉 unique 並在單子上加 `broker_account_id`，不必重建表），`credentials_encrypted` 一欄存加密後的 JSON（富邦：`personal_id`（對應 SDK `login(personal_id, ...)` 參數名）、`password`、`cert_pfx_base64`、`cert_password`），不為每家券商開專屬欄位。加密重用 `app.core.mfa_crypto.encrypt_secret/decrypt_secret`，金鑰為 `MFA_ENCRYPTION_KEY`。
 - **憑證檔**：登入時把 pfx 解密寫到 `tempfile.NamedTemporaryFile`（0600），呼叫 `sdk.login(...)` 後立刻刪除。若實測發現 SDK 重連時會重讀憑證檔，改為存在 `key/<user_id>.pfx` 並在 `stop` 時刪。
-- **開盤前重建行情連線**：行情 WS 每日收盤後被斷且 SDK 不重連，`on_disconnect` 只記 log 不自行重連（避免收盤後反覆斷連）。每日 08:30（Asia/Taipei）一支排程對所有 session 重建連線並重訂各 owner 的 active symbols，形狀比照 `IdempotencyCleanupScheduler`。登入已實測整夜不失效（2026-09-17 10:26～09-18 08:16 連續 22 小時授權查詢全數成功），最小動作只需重做 `init_realtime`＋`connect`＋重訂；是否改走全員 `logout` → `login` 以與 lifespan 啟動共用同一條路徑，待定。
+- **開盤前重建行情連線**：行情 WS 每日收盤後被斷且 SDK 不重連，`on_disconnect` 只記 log 不自行重連（避免收盤後反覆斷連）。每日 08:30（Asia/Taipei）一支排程對所有 session 重建連線並重訂各 owner 的 active symbols，形狀比照 `IdempotencyCleanupScheduler`。登入已實測整夜不失效（2026-09-17 10:26～09-18 08:16 連續 22 小時授權查詢全數成功），最小動作只需重做 `init_realtime`＋`connect`＋重訂，但定案（2026-09-18）採全員 `logout` → `login` → 訂閱：與 lifespan 啟動共用同一條路徑，且對登入到期等未驗證情況免疫。啟動與每日重登共用一個函式 `login_all_bound_users(pool, session_factory)`，逐人 `pool.stop` → 解密金鑰 → `pool.start` → 依 owner 重訂 active symbols，一人失敗 `mark_login_failed` + warning + continue。
 - **Dispatcher 依 owner 過濾**：同一 symbol 會從 N 條 session 各來一次 tick，`TradeIntentCoreDispatcher.dispatch(snapshot, *, owner_user_id=None)` → `repo.system_list_active_by_symbols(symbols, owner_user_id=...)`。pool 用 `functools.partial(dispatch, owner_user_id=uid)` 掛 listener；shared 模式傳 `None` 掃全部。
 - **Telegram 路徑不能靠 request user 取 session**：webhook 無 Bearer，owner 由 `TELEGRAM_OWNER_EMAIL` 在 command 內解析，因此 `CreateTradeIntentCommand` 改注入 pool，執行時 `pool.require(inp.owner_user_id)`。
 - **連線上限**：`BROKER_MAX_SESSIONS`（預設 2，實測後調，硬上限不超過 10），達上限綁定回 409。
@@ -164,7 +164,7 @@
 - [ ] 未綁定者建單回 409 `BROKER_ACCOUNT_NOT_BOUND`；Telegram 確認時回覆提示。
 - [ ] `last_price` 取自 `lastTrade.price`；`lastTrade` 缺時 snapshot 仍建立且 validator 以 `received_at` 擋盤前試撮。
 - [ ] `reconnect_realtime()` 後重訂 `_subscribed` 內每一檔，channel_id 對照表重建；`on_disconnect` 不自行重連。
-- [ ] 每日 08:30 排程對所有 session 重建行情連線並重訂各 owner 的 active symbols；一人失敗不影響其他人。
+- [ ] 每日 08:30 排程對所有 session 全員登出再登入並重訂各 owner 的 active symbols；一人失敗不影響其他人；與 lifespan 啟動走同一個函式。
 - [ ] `QUOTE_PROVIDER=in_memory` 時 `app.services.quote.fubon*` 不出現在 `sys.modules`；`shioaji_demo/` 行為不變。
 - [ ] log 與回應皆不含身分證字號、密碼、憑證。
 - [ ] `make check` 全綠（含 `check-shioaji-isolation`）；migration up → down → up 通過。
