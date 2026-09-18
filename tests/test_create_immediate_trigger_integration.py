@@ -150,7 +150,7 @@ def _snapshot(
 ) -> QuoteSnapshot:
     return QuoteSnapshot(
         symbol="2330",
-        quote_time=SESSION_QUOTE_TIME,
+        last_trade_time=SESSION_QUOTE_TIME,
         received_at=SESSION_QUOTE_TIME,
         ask_price=Decimal(ask) if ask else None,
         bid_price=Decimal(bid) if bid else None,

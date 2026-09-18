@@ -76,7 +76,7 @@ def test_build_snapshot_keeps_previous_fields_on_partial_update() -> None:
         bid_price=Decimal("589"),
         ask_price=Decimal("591"),
         last_price=Decimal("590"),
-        quote_time=quote_time,
+        last_trade_time=quote_time,
         received_at=datetime.now(tz=UTC),
     )
     later = datetime(2026, 5, 11, 10, 31, tzinfo=TAIPEI)
@@ -94,7 +94,7 @@ def test_build_snapshot_clears_bidask_when_bidask_channel_reports_missing_values
         bid_price=Decimal("589"),
         ask_price=Decimal("591"),
         last_price=Decimal("590"),
-        quote_time=quote_time,
+        last_trade_time=quote_time,
         received_at=datetime.now(tz=UTC),
     )
     later = datetime(2026, 5, 11, 10, 31, tzinfo=TAIPEI)

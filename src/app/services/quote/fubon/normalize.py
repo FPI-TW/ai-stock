@@ -48,6 +48,6 @@ def aggregates_to_snapshot(data: dict[str, Any]) -> QuoteSnapshot:
         bid_price=_top_of_book(data.get("bids")),
         ask_price=_top_of_book(data.get("asks")),
         last_price=_to_decimal(last_trade["price"]),
-        quote_time=_micros_to_taipei(last_trade["time"]),
+        last_trade_time=_micros_to_taipei(last_trade["time"]),
         received_at=datetime.now(tz=UTC),
     )

@@ -140,7 +140,7 @@ class ShioajiClient:
             bid_price=to_decimal(getattr(snapshot, "buy_price", None)),
             ask_price=to_decimal(getattr(snapshot, "sell_price", None)),
             last_price=to_decimal(getattr(snapshot, "close", None)),
-            quote_time=timestamp_to_taipei(getattr(snapshot, "ts", None)),
+            last_trade_time=timestamp_to_taipei(getattr(snapshot, "ts", None)),
             received_at=now_utc(),
         )
 

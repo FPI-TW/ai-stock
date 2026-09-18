@@ -61,7 +61,7 @@ def _snapshot(
     # so tests only differentiate when a specific value matters.
     return QuoteSnapshot(
         symbol="2330",
-        quote_time=quote_time,
+        last_trade_time=quote_time,
         received_at=quote_time,
         bid_price=bid_price,
         ask_price=ask_price,

@@ -27,7 +27,7 @@ def _make(
         bid_price=Decimal(bid) if bid is not None else None,
         ask_price=Decimal(ask) if ask is not None else None,
         last_price=Decimal(last) if last is not None else None,
-        quote_time=quote_time,
+        last_trade_time=quote_time,
         received_at=datetime.now(tz=ZoneInfo("UTC")),
     )
 
@@ -82,3 +82,27 @@ def test_validation_rejects_when_now_outside_session() -> None:
     out_of_session_validator = QuoteValidator(TradingSessionService(clock=lambda: _OUT_OF_SESSION))
     with pytest.raises(QuoteValidationError, match="now outside regular session"):
         out_of_session_validator.validate(_make())
+
+
+def _make_without_trade(*, received_at: datetime) -> QuoteSnapshot:
+    # Pre-open frames carry bid/ask but no trade yet: `last_trade_time` is None and
+    # the session check must fall back to `received_at` instead of being skipped.
+    return QuoteSnapshot(
+        symbol="2330",
+        bid_price=Decimal("590.0000"),
+        ask_price=Decimal("591.0000"),
+        last_price=None,
+        last_trade_time=None,
+        received_at=received_at,
+    )
+
+
+def test_validation_without_trade_time_uses_received_at(validator: QuoteValidator) -> None:
+    result = validator.validate(_make_without_trade(received_at=_IN_SESSION.astimezone(ZoneInfo("UTC"))))
+    assert result.snapshot.quote_time == _IN_SESSION.astimezone(ZoneInfo("UTC"))
+    assert result.fallback_used is False
+
+
+def test_validation_without_trade_time_rejects_received_outside_session(validator: QuoteValidator) -> None:
+    with pytest.raises(QuoteValidationError, match="quote_time outside regular session"):
+        validator.validate(_make_without_trade(received_at=_OUT_OF_SESSION.astimezone(ZoneInfo("UTC"))))

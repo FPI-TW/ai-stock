@@ -18,8 +18,9 @@ from fastapi import status
 class QuoteSnapshot:
     """The latest known quote for a single symbol.
 
-    `quote_time` is the broker-supplied timestamp of the quote itself (Asia/Taipei,
-    tz-aware). `received_at` is when the provider observed it locally (UTC, tz-aware).
+    `last_trade_time` is the broker-supplied timestamp of the last trade (Asia/Taipei,
+    tz-aware), or None when the frame carries no trade yet (pre-open book-only frames).
+    `received_at` is when the provider observed it locally (UTC, tz-aware).
     Either field being naive is a bug — providers must attach timezone info before
     constructing this dataclass.
     """
@@ -28,8 +29,17 @@ class QuoteSnapshot:
     bid_price: Decimal | None
     ask_price: Decimal | None
     last_price: Decimal | None
-    quote_time: datetime
+    last_trade_time: datetime | None
     received_at: datetime
+
+    @property
+    def quote_time(self) -> datetime:
+        """Timestamp to attribute this quote to: the last trade if any, else when we received it.
+
+        Session checks, freshness checks and notifications all want *a* time; a
+        book-only frame is still a quote we observed at `received_at`.
+        """
+        return self.last_trade_time if self.last_trade_time is not None else self.received_at
 
 
 QuoteListener = Callable[[QuoteSnapshot], None]

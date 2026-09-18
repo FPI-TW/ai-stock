@@ -32,7 +32,7 @@ def test_aggregates_to_snapshot_uses_last_trade_not_trial_price() -> None:
     assert snapshot.bid_price == Decimal("567")
     assert snapshot.ask_price == Decimal("568")
     # `lastTrade.time` is epoch microseconds; expose it as tz-aware Asia/Taipei.
-    assert snapshot.quote_time == datetime(2023, 5, 29, 13, 30, tzinfo=TAIPEI)  # 步驟 3 改名 last_trade_time 後改回
+    assert snapshot.last_trade_time == datetime(2023, 5, 29, 13, 30, tzinfo=TAIPEI)
     assert snapshot.received_at.tzinfo is not None
 
 
