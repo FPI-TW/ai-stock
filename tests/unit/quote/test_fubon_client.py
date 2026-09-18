@@ -207,7 +207,6 @@ def test_connect_realtime_subscribes_and_tracks_channel_ids() -> None:
         {"channel": "aggregates", "symbol": "2317"},
     ]
     assert sdk.ws.unsubscribed == [{"id": "ch-1"}]
-    assert client.subscribed_symbols() == {"2317"}
     assert client.realtime_connected is True
 
 
@@ -228,28 +227,32 @@ def test_data_frames_reach_quote_handler_as_snapshots() -> None:
     assert received[0].last_price == Decimal("568")
 
 
-def test_disconnect_only_flags_and_reconnect_rebuilds_subscriptions() -> None:
+def test_disconnect_only_flags_and_connect_again_rebuilds_channel_map() -> None:
+    # Resubscribing is the provider's job (it owns the subscription set); the
+    # client only has to come back with a fresh websocket and an empty channel map.
     sdk = FakeSdk(login_result=_ok_login())
     client = _client(sdk)
     client.login()
     client.connect_realtime()
     client.subscribe("2330")
-    client.subscribe("2317")
     first_ws = sdk.ws
 
     first_ws.drop()
     assert client.realtime_connected is False
     assert first_ws.connect_calls == 1, "on_disconnect must not reconnect by itself"
 
-    client.reconnect_realtime()
+    client.connect_realtime()
 
     assert len(sdk.init_realtime_calls) == 2
     assert sdk.ws is not first_ws
     assert sdk.ws.connect_calls == 1
-    assert {p["symbol"] for p in sdk.ws.subscribed} == {"2330", "2317"}
+    assert sdk.ws.subscribed == [], "client does not resubscribe on its own"
     assert client.realtime_connected is True
     client.unsubscribe("2330")
-    assert sdk.ws.unsubscribed[0]["id"].startswith("ch-"), "channel map must be rebuilt from the new subscribed events"
+    assert sdk.ws.unsubscribed == [], "stale channel id from the old socket must not be reused"
+    client.subscribe("2330")
+    client.unsubscribe("2330")
+    assert sdk.ws.unsubscribed == [{"id": "ch-1"}]
 
 
 def test_reconnect_failure_is_treated_as_login_lost() -> None:
@@ -264,7 +267,7 @@ def test_reconnect_failure_is_treated_as_login_lost() -> None:
     sdk.init_realtime = boom  # type: ignore[method-assign]
 
     with pytest.raises(QuoteProviderUnavailableError) as exc_info:
-        client.reconnect_realtime()
+        client.connect_realtime()
 
     assert client.login_alive is False
     assert "A123456789" not in str(exc_info.value)

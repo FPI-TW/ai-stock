@@ -85,9 +85,14 @@ class FubonQuoteProvider(QuoteProvider):
             logger.info("fubon session stopped")
 
     def reconnect_realtime(self) -> None:
-        """Rebuild the market-data websocket after a broker-side drop; login stays."""
+        """Rebuild the market-data websocket after a broker-side drop; login stays.
+
+        The provider owns the subscription set, so it is the one that resubscribes.
+        """
         with self._lock:
-            self._client.reconnect_realtime()
+            self._client.connect_realtime()
+            for symbol in sorted(self._subscribed):
+                self._client.subscribe(symbol)
 
     @property
     def realtime_connected(self) -> bool:

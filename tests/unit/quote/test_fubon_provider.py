@@ -41,10 +41,6 @@ class FakeClient:
         self.calls.append("connect")
         self.realtime_connected = True
 
-    def reconnect_realtime(self) -> None:
-        self.calls.append("reconnect")
-        self.realtime_connected = True
-
     def subscribe(self, symbol: str) -> None:
         self.calls.append(f"sub:{symbol}")
 
@@ -196,15 +192,18 @@ def test_remove_listener_is_idempotent() -> None:
     assert seen == []
 
 
-def test_connection_flags_and_reconnect_pass_through() -> None:
+def test_reconnect_realtime_reconnects_then_resubscribes_owned_set() -> None:
     provider, client = _started()
+    provider.subscribe("2330")
+    provider.subscribe("2317")
+    provider.unsubscribe("2317")
     client.realtime_connected = False
     client.login_alive = False
-
     assert provider.realtime_connected is False
     assert provider.login_alive is False
+    client.calls.clear()
 
     provider.reconnect_realtime()
 
-    assert client.calls[-1] == "reconnect"
+    assert client.calls == ["connect", "sub:2330"]
     assert provider.realtime_connected is True

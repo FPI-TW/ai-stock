@@ -14,9 +14,9 @@ normalised snapshots to `quote_handler`; the provider layer owns the lock.
 Verified SDK behaviour (docs/vendor/fubon/fubon-neo-verified-behavior.md):
 - `login().data` is multi-account and unordered → filter `account_type == "stock"`.
 - The market-data websocket never reconnects by itself; `on_disconnect` only
-  flags, `reconnect_realtime()` rebuilds everything (new token, listeners,
-  connect, resubscribe) and the channel-id map is refilled from `subscribed`
-  events.
+  flags. Calling `connect_realtime()` again rebuilds the socket (new token,
+  listeners, connect) with an empty channel-id map; the provider resubscribes
+  from the set it owns and the map refills from `subscribed` events.
 - Trade-side `set_on_event` codes are *strings*: 300/301/304 mean the login is
   gone; 302 is the echo of our own logout.
 """
@@ -27,7 +27,7 @@ import os
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 
 from app.services.quote.base import QuoteProviderUnavailableError, QuoteSnapshot
 from app.services.quote.fubon.normalize import aggregates_to_snapshot
@@ -35,7 +35,7 @@ from app.services.quote.fubon.normalize import aggregates_to_snapshot
 logger = logging.getLogger(__name__)
 
 QuoteHandler = Callable[[QuoteSnapshot], None]
-FubonLoginFailureCode = Literal["login_rejected", "session_limit", "provider_unavailable", "unknown"]
+FubonLoginFailureCode = Literal["login_rejected", "session_limit", "provider_unavailable"]
 
 _LOGIN_LOST_EVENT_CODES = frozenset({"300", "301", "304"})
 _SESSION_LIMIT_MARKER = "連線限制"
@@ -58,8 +58,6 @@ class FubonCredentials:
 class FubonLoginError(QuoteProviderUnavailableError):
     """Login / session failure with a safe, enumerable code and no SDK text."""
 
-    error_code: ClassVar[str] = "QUOTE_PROVIDER_UNAVAILABLE"
-
     def __init__(self, failure_code: FubonLoginFailureCode) -> None:
         super().__init__("fubon", failure_code)
         self.failure_code: FubonLoginFailureCode = failure_code
@@ -70,7 +68,7 @@ def _default_sdk_factory(ws_url: str | None) -> Callable[[], Any]:
         from fubon_neo.sdk import FubonSDK
 
         # 30s pong interval, disconnect after 2 misses — same as the manual probes.
-        return FubonSDK(30, 2, url=ws_url) if ws_url else FubonSDK(30, 2)
+        return FubonSDK(30, 2, url=ws_url)
 
     return build
 
@@ -101,14 +99,10 @@ class FubonClient:
         self._realtime_mode = realtime_mode
         self._sdk: Any | None = None
         self._quote_handler: QuoteHandler | None = None
-        self._subscribed: set[str] = set()
         self._channels: dict[str, str] = {}
         self.account: Any | None = None
         self.login_alive = False
         self.realtime_connected = False
-
-    def __repr__(self) -> str:  # never leak credentials via logging / tracebacks
-        return f"FubonClient(account={getattr(self.account, 'account', None)!r}, login_alive={self.login_alive})"
 
     # --- session -----------------------------------------------------------
 
@@ -198,23 +192,15 @@ class FubonClient:
             raise QuoteProviderUnavailableError("fubon", "realtime_connect_failed") from exc
         self.realtime_connected = True
 
-    def reconnect_realtime(self) -> None:
-        self.connect_realtime()
-        for symbol in sorted(self._subscribed):
-            self._ws().subscribe({"channel": _CHANNEL, "symbol": symbol})
-
     def subscribe(self, symbol: str) -> None:
-        self._subscribed.add(symbol)
         self._ws().subscribe({"channel": _CHANNEL, "symbol": symbol})
 
     def unsubscribe(self, symbol: str) -> None:
-        self._subscribed.discard(symbol)
+        # The provider owns the subscription set; here we only need the channel id
+        # the broker handed us in the `subscribed` event for this socket.
         channel_id = self._channels.pop(symbol, None)
         if channel_id is not None:
             self._ws().unsubscribe({"id": channel_id})
-
-    def subscribed_symbols(self) -> set[str]:
-        return set(self._subscribed)
 
     def _on_message(self, raw: Any) -> None:
         try:
