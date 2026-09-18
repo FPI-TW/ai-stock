@@ -5,7 +5,7 @@
 
 ## 一句話
 
-**這張票 = 後端跟富邦要今天的委託清單，把「狀態碼 10、50、90」這種數字翻成人看得懂的「委託成功、完全成交、失敗」，再給前端。**
+**這張票 = 拿使用者本人的富邦連線要今天的委託清單，把「狀態碼 10、50、90」這種數字翻成人看得懂的「委託成功、完全成交、失敗」，再給前端。**
 
 ---
 
@@ -19,7 +19,7 @@
 
 ## 這張票做的事（白話）
 
-開一支 `GET /account/orders`，回今天的委託清單，每筆長這樣：
+開一支 `GET /account/orders`，綁定過券商帳號的使用者打它，回他自己帳戶今天的委託清單，每筆長這樣：
 
 | 回傳欄位 | 白話 |
 |---|---|
@@ -50,7 +50,7 @@
 
 這是最容易寫錯的地方：
 
-- **連線層的錯誤**（登入失敗、券商掛了）→ **不給前端看**，只寫進伺服器 log。那種訊息會洩漏券商內部細節。
+- **連線層的錯誤**（券商掛了、連線爆掉）→ **不給前端看**，只寫進伺服器 log。那種訊息會洩漏券商內部細節。
 - **單筆委託的錯誤**（例如「餘額不足」）→ **要給前端看**。那是使用者自己那張單的結果，藏起來反而沒用。
 
 ---
@@ -63,6 +63,7 @@
 | 查歷史成交、查委託歷程 | 等真的開始送單、確定前端要怎麼呈現再說 |
 | 即時推播委託回報 | 這張票是「使用者開頁面時查一次」 |
 | 把委託存進我們的資料庫 | 現在是即時透傳。存 DB 的時機是「開始下單之後」，見下 |
+| 綁定、解綁、重連券商帳號 | [per-user 券商 session 工單](per-user-broker-sessions.md) 負責，本票只取用 |
 | 期貨 | 只做證券 |
 
 ---
@@ -90,7 +91,7 @@
 
 要靠自己記帳撐住，得同時成立三件事：所有單都走我們系統、沒有人賣掉帳上沒有的部位、大家都認我們的數字。任何一條破了帳就是錯的，**而且錯了沒人查得出來**。用來考核績效的數字如果驗不了，不如不做。
 
-**要分人就一人一個證券帳戶**（本來就是實名制），一位交易員一套部署——不是在一套系統裡做子帳號。
+**要分人就一人一個證券帳戶**（本來就是實名制）。2026-09-16 定案的 per-user 綁定就是這條路：同一套部署裡每位使用者綁自己的帳戶，各查各的；**不是**在一個母帳號底下做子帳號。
 
 （順帶：文件裡的「最多 30 把」是 **API Key 的上限**，不是 30 個子帳號，而且用 API Key 登入還是要帶主帳號憑證。就算富邦真有子憑證，也解決不了庫存分不開的問題。）
 
@@ -98,7 +99,7 @@
 
 ## 做完之後
 
-前端可以顯示今天的委託與結果；等下單功能開工時，「送出去的單怎麼查結果」這條路已經是通的，那張票只要專心處理送單就好。
+前端可以顯示使用者本人今天的委託與結果；等下單功能開工時，「送出去的單怎麼查結果」這條路已經是通的，那張票只要專心處理送單就好。
 
 ---
 
@@ -106,32 +107,26 @@
 
 ### Metadata
 
-- 分層：上線後（富邦串接系列）
-- 優先序：F2
+- 分層：富邦串接系列帳務票
 - ROM：**S**
-- 依賴：**[F5](fubon-quote-provider.md)（富邦行情 provider）＝共用登入 session 與取帳號邏輯的擁有者**，
-  本票直接沿用，不另開登入（2026-09-09 變更：原本指向 F1，登入責任已移交 F5，理由見 F5 工單〈登入〉節）。
-  [F1](fubon-account-balance.md) 建立 `schemas/account.py` 與 `routes/account.py`，本票在其上加端點。
-  SDK 安裝已由 `chore/fubon-sdk-install` 完成。
+- 依賴：[per-user 券商 session 工單](per-user-broker-sessions.md) 的 PR1（`FubonClient`）與 PR2（`BrokerSessionPool`、綁定 API）；[F1](fubon-account-balance.md) 建立 `routes/account.py` 與 `schemas/account.py`，本票在其上加端點。不需等 per-user PR3 行情接線。
 - 被誰依賴：未來的下單票——送出委託後要能查回報，就是這支。
-- 交付版本：V1
-- 來源：2026-08-03 富邦方向（`docs/product.md` 第 1、4 點）
+- 來源：2026-08-03 富邦方向；2026-09-16 定案 per-user 綁定後改為本人 session，2026-09-18 依此改寫。
 
 ### 背景
 
 前端目前看不到任何委託狀態。富邦帳戶裡有哪些單、成不成功、成交了多少，全都問不到。
 
-⚠️ **現階段是階段一（只通知、不下單）**，所以帳戶裡的委託不是我方系統送出的，而是使用者自己在
-富邦下的單。這支接口的價值有兩層：
+⚠️ **現階段是階段一（只通知、不下單）**，所以帳戶裡的委託不是我方系統送出的，而是使用者自己在富邦下的單。這支接口的價值有兩層：
 
-1. **現在**：前端能顯示帳戶今日的委託與結果。
-2. **接下來**：下單系統開工後，送出去的單要能查到結果——就是這支。先把「查得到、狀態解讀正確」
-   打通，下單票才不用同時處理送單與回報兩件事。
+1. **現在**：前端能顯示本人帳戶今日的委託與結果。
+2. **接下來**：下單系統開工後，送出去的單要能查到結果——就是這支。先把「查得到、狀態解讀正確」打通，下單票才不用同時處理送單與回報兩件事。
 
-### 富邦 API 事實（`docs/api/fubon-neo-api.md`）
+### 富邦 API 事實
 
-`sdk.stock.get_order_results(account)`（47770 行）回 `Result{ is_success, message, data: List[OrderResult] }`，
-內容是**當日**委託。`OrderResult` 主要欄位：
+出處：`docs/vendor/fubon/fubon-llms-full.txt`、`docs/vendor/fubon/fubon-neo-verified-behavior.md`。
+
+`sdk.stock.get_order_results(account)` 回 `Result{ is_success, message, data: List[OrderResult] }`，內容是**當日**委託。`OrderResult` 主要欄位：
 
 | 欄位 | 說明 |
 |---|---|
@@ -146,9 +141,11 @@
 | `time_in_force` / `order_type` / `market_type` | ROD-FOK-IOC / 現股-融資-融券 / 整股-零股 |
 | `last_time` | 最後異動時間 |
 | `error_message` | 該筆委託的錯誤訊息 |
-| `user_def` | 自訂欄位（本票不用，見下方〈未來方向〉） |
+| `user_def` | 自訂欄位（本票不用，見〈未來方向〉） |
 
-#### 狀態碼對照（文件 29976 行，證券交易）
+實測：`get_order_results` 在測試環境可用（2026-09-17 以此作為 session 存活探針，連續 23.5 小時每分鐘一次全數成功）。
+
+#### 狀態碼對照（證券交易）
 
 | 狀態碼 | 富邦說明 |
 |---|---|
@@ -167,13 +164,11 @@
 
 ### 結論（要做什麼）
 
-新增 `GET /account/orders`，回傳富邦帳戶**今日**的委託清單，**狀態碼在後端翻成語意字串**後再給前端。
+新增 `GET /account/orders`，以 `pool.require(current_user.id)` 取本人 session，回傳該帳戶**今日**的委託清單，**狀態碼在後端翻成語意字串**後再給前端。
 
 #### 核心要求：不要把狀態數字丟給前端
 
-「成功與否」是這張票的重點。後端必須把 `status` 的整數碼映射成語意值，前端不該去背 `10` 是什麼意思：
-
-| 語意值（建議） | 對應狀態碼 | 白話 |
+| 語意值 | 對應狀態碼 | 白話 |
 |---|---|---|
 | `pending` | `0`, `4`, `8`, `9` | 處理中 / 尚未確認 |
 | `accepted` | `10` | 委託成功（尚未成交） |
@@ -183,9 +178,7 @@
 | `failed` | `90`, `19`, `29`, `39` | 失敗 |
 
 - 映射表寫成一個明確的 dict，**不做動態推導**。
-- **遇到表上沒有的狀態碼**（含 `14`/`24`/`34`/`15`/`20` 這些歷程標示）：回一個明確的 `unknown`，
-  把原始碼一起帶出（見下方 `rawStatus`），並寫 warning log。**不可以默默當成成功或失敗**——
-  富邦日後新增狀態碼時，我們要看得出來，而不是靜默誤判。
+- **遇到表上沒有的狀態碼**（含 `14`/`24`/`34`/`15`/`20` 這些歷程標示）：回明確的 `unknown`，把原始碼一起帶出（`rawStatus`），並寫 warning log。**不可以默默當成成功或失敗**。
 - `rawStatus` 一併回傳原始整數：出事時才查得出來前端顯示的語意是從哪個碼翻的。
 
 #### 對外介面
@@ -214,64 +207,47 @@
 }
 ```
 
-- **不回傳 `branch_no` / `account`**（理由同 F1：一套部署一個帳號，帳號屬個資）。
+- **不回傳 `branch_no` / `account`**：遮罩後四碼已由 `GET /me/broker-account` 提供。
 - 無委託時回**空陣列 + 200**，不是 404。
 - 排序：依 `last_time` 由新到舊。若富邦回傳順序已符合就照用，不另外做複雜排序。
 
-#### 兩種 message 要分開處理（別搞混）
+#### 兩種 message 要分開處理
 
 | 來源 | 處理 |
 |---|---|
-| `Result.message`（連線 / 認證層失敗） | **不回前端**，只寫 server log，端點回 502 通用訊息。同 F1。 |
-| `OrderResult.error_message`（單筆委託的失敗原因，如餘額不足） | **回前端**。這是使用者自己那張單的業務結果，看不到反而沒用。 |
+| `Result.message`（連線層失敗） | **不回前端**，只寫 server log，端點回 502 通用訊息。同 F1。 |
+| `OrderResult.error_message`（單筆委託的失敗原因，如餘額不足） | **回前端**。這是使用者自己那張單的業務結果。 |
 
-#### 錯誤碼
+#### 錯誤碼（與 F1 相同，不新增）
 
-| 情境 | 狀態碼 |
-|---|---|
-| 未設定富邦憑證（`FUBON_ENABLED=false`） | 503 |
-| 登入失敗 / `is_success = false` / SDK 例外 | 502 |
+| 情境 | 狀態碼 | 回應 |
+|---|---|---|
+| `QUOTE_PROVIDER` 非 `fubon`（shared 模式，無本人 session） | 503 | `BROKER_ACCOUNTING_DISABLED` |
+| `pool.require(user_id)` 拿不到 session（未綁定、`login_failed`、重連中） | 409 | `BROKER_ACCOUNT_NOT_BOUND` |
+| `is_success = false` / SDK 例外 | 502 | `BROKER_QUERY_FAILED` |
 
 #### 程式落點
 
-- `src/app/services/fubon/order_query.py`（新增）：呼叫 `get_order_results` + 狀態映射 + 轉 dataclass。
-- `src/app/schemas/account.py`（F1 建立）：加委託的 response model。
-- `src/app/api/routes/account.py`（F1 建立）：加這支端點。
-- **沿用 F5 的共用登入 session 與證券帳號**，不要另外開一套登入
-  （富邦交易連線數上限 10，每次 `login()` 吃一條；全 process 只能登一次）。
-- 端點同樣是同步 `def`（SDK 阻塞，`async def` 會卡 event loop）。
-
-#### 取哪個帳號：收斂成一處
-
-`sdk.login()` 回傳的 `accounts.data` **可能有多筆**（文件：「若有多帳號，則回傳多個」；`Account` 物件帶
-`name` / `account` / `branch_no` / `account_type`）。
-
-本票仍固定取第一個證券帳號，但**取得帳號的邏輯只能寫在一個地方**（F5 的共用登入模組內），
-F2 及後續所有票都呼叫它，不要各自散寫 `accounts.data[0]`。
-
-⚠️ 「第一個**證券**帳號」＝先以 `account_type == "stock"` 過濾再取第一個，**不是** `data[0]`。
-登入回證券 + 期權多筆且順序不保證（`docs/api/fubon-neo-verified-behavior.md` 已實測），
-期權帳號打證券 API 會回「帳號類別錯誤」。
-
-理由見下方〈未來方向〉的多帳號待確認事項——真要支援多帳號時，這樣只需改一處。這是零成本的寫法，
-**不是為未來預留的抽象層**：不建 account selector 介面、不做設定驅動的帳號路由。
+- `src/app/services/quote/fubon/client.py`：`FubonClient` 新增 `list_today_orders() -> list[FubonOrderResult]`（frozen dataclass，`status` 保留原始 int）。`client.py` 仍是唯一 `import fubon_neo` 的模組。證券帳號由 `FubonClient.login()` 以 `account_type == "stock"` 過濾後持有，本票不碰 `accounts.data`。
+- `src/app/services/quote/fubon/order_status.py`（新增，純函式）：狀態碼 dict 與 `to_order_status(raw: int) -> str`，查不到回 `unknown` + warning log。
+- `src/app/api/routes/account.py`（F1 建立）：加 `GET /account/orders`，`def` 端點，`pool.require(current_user.id)` → `.client.list_today_orders()` → 映射 → response model。
+- `src/app/api/schemas/account.py`（F1 建立）：加委託的 response model。
+- 不新增環境變數；不做綁定、解綁、重連、重試。
 
 ### 非目標
 
 - **不下單、不改單、不刪單。**
-- 不做歷史成交查詢（`filled_history`，需日期區間）——等真的開始送單、確定前端怎麼呈現再開票。
+- 不做歷史成交查詢（`filled_history`）——等真的開始送單、確定前端怎麼呈現再開票。
 - 不做委託歷程（`get_order_results_detail`）。
-- 不接主動回報（`set_on_order` callback / WebSocket 推播）——本票是使用者開頁面時查一次。
+- 不接主動回報（`set_on_order` callback）——本票是使用者開頁面時查一次。
 - **不把委託寫進我們的資料庫**：本票是即時透傳。委託落 DB 的時機與範圍見〈未來方向〉，前置是下單功能。
 - 不做快取（理由同 F1：手動查看，不是輪詢）。
 - 不做期貨（`sdk.futopt.*`），只做證券。
-- 不做多帳號選擇、不做交易員績效——見〈未來方向〉。
+- 不做多帳號選擇、不做交易員績效歸戶——見〈未來方向〉。
 
 ### 未來方向：委託紀錄怎麼落 DB（本票不實作）
 
-原記於 `PRODUCT_CONTEXT.md`，該檔已於文件重構（PR #91）併入 `docs/product.md`，
-而新版只保留「不做 per-user 券商帳號綁定」這條原則、不收資料界線細節。
-因此以下為這件事的**唯一完整記載**，供做下單票的人不必重想一次：
+原記於 `PRODUCT_CONTEXT.md`，該檔已於文件重構併入 `docs/product.md`，新版不收資料界線細節。因此以下為這件事的**唯一完整記載**，供做下單票的人不必重想一次：
 
 | 資料 | 放哪 |
 |---|---|
@@ -281,15 +257,11 @@ F2 及後續所有票都呼叫它，不要各自散寫 `accounts.data[0]`。
 - 送單時把 `intent_id` 塞進 `user_def`，回報就能直接對回意圖，不必另建索引。
 - ⚠️ **不要自建持倉表**：使用者隨時可能直接用富邦 App 自行買賣，本地快照立刻失真，接著就得寫對帳邏輯。
 - **損益不自己算**：富邦已提供 `realized_gains_and_loses` / `unrealized_gains_and_loses`，原樣呈現帳號數字即可。
-- **時序**：對照表的落點是下單功能實作時（那時才有 `order_no`），現在建即空表。
+- **時序**：對照表的落點是下單功能實作時（那時才有 `order_no`），現在建即空表。per-user 綁定後委託天然掛在本人帳戶下，對照表仍要記 `user_id` 是為了稽核，不是為了分帳。
 
 **❌ 子帳號系統：已於 2026-08-28 整套取消，不要再設計**
 
-曾考慮「主管持憑證、底下多位交易員共用母帳號 + 我方做績效歸戶」。**不可行**：一個帳號只有一個庫存池、股票可替代，
-**「誰的股票被賣掉」這件事根本不存在**；富邦的持倉與損益全是帳號層級合計、`Realized` 又沒有單號，
-券商端**永遠無法佐證**我方歸戶。要分人就一人一戶（＝多套部署），不在一套系統裡做子帳號。
-連帶不做：per-trader 持倉表、per-trader 損益歸戶、`Realized` 模糊配對、per-user 憑證管理或 session pool。
-（順帶：文件的「最多 30 把」是 **API Key 上限**，`apikey_login` 仍需主帳號 ID + 憑證，富邦未提供交易員各自子憑證。）
+曾考慮「主管持憑證、底下多位交易員共用母帳號 + 我方做績效歸戶」。**不可行**：一個帳號只有一個庫存池、股票可替代，**「誰的股票被賣掉」這件事根本不存在**；富邦的持倉與損益全是帳號層級合計、`Realized` 又沒有單號，券商端**永遠無法佐證**我方歸戶。要分人就一人一戶，即 per-user 綁定各綁各的證券帳戶，不在一個母帳號底下做子帳號。連帶不做：per-trader 持倉表、per-trader 損益歸戶、`Realized` 模糊配對。（順帶：文件的「最多 30 把」是 **API Key 上限**，`apikey_login` 仍需主帳號 ID + 憑證，富邦未提供交易員各自子憑證。）
 
 ### 驗收條件
 
@@ -299,20 +271,22 @@ F2 及後續所有票都呼叫它，不要各自散寫 `accounts.data[0]`。
 - [ ] 每筆都帶 `rawStatus` 原始整數。
 - [ ] 帳戶今日無委託 → 200 + 空陣列。
 - [ ] 單筆的 `error_message` 有回前端；連線層 `Result.message` 沒有回前端、只在 log。
-- [ ] 未登入 401；`FUBON_ENABLED=false` → 503；券商查詢失敗 → 502。
-- [ ] 沿用 F5 的共用登入 session，本票程式碼中**沒有任何 `sdk.login()` 呼叫**；取帳號邏輯只有一處。
+- [ ] 未登入 401；shared 模式 503；未綁定或 session 不在 409；券商查詢失敗 502。
+- [ ] A、B 兩人各有 session 時，A 查到的是 A 的 client 回的委託。
+- [ ] 本票程式碼中**沒有任何 `login()` 呼叫**、不碰 `accounts.data`。
 - [ ] `make check` 全綠。
 
 ### 測試要求
 
-`tests/api/test_account_orders.py`，以 monkeypatch 注入 fake SDK（**不連真富邦 API**）：
+`tests/api/test_account_orders.py`，以 fake `FubonClient` 注入 pool（**不連真富邦 API**）：
 
 - 正常清單回 200 與正確 JSON。
 - **每個狀態碼各一個 case**（`0/4/8/9/10/30/40/50/90`）驗證語意映射——這是本票最容易寫錯的地方。
 - 未知狀態碼（例如 `77`）→ `unknown` + `rawStatus: 77`。
 - 空清單 → 200 + `[]`。
 - `is_success = false` → 502 且回應不含券商 message。
-- `FUBON_ENABLED=false` → 503。
+- shared 模式 → 503；未綁定 → 409。
+- 兩個使用者各自的 fake client 回不同清單，驗證各查各的。
 
 真實帳號的連線驗證屬手動 smoke test，寫在 PR 描述。
 
