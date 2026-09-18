@@ -113,7 +113,7 @@ def _snapshot(*, bid: str | None = "589", ask: str | None = "591", last: str | N
         bid_price=Decimal(bid) if bid is not None else None,
         ask_price=Decimal(ask) if ask is not None else None,
         last_price=Decimal(last) if last is not None else None,
-        quote_time=QUOTE_TIME,
+        last_trade_time=QUOTE_TIME,
         received_at=QUOTE_TIME.astimezone(UTC),
     )
 

@@ -124,6 +124,6 @@ def build_snapshot(
         bid_price=_merge_field(bid_price, previous.bid_price if previous else None),
         ask_price=_merge_field(ask_price, previous.ask_price if previous else None),
         last_price=_merge_field(last_price, previous.last_price if previous else None),
-        quote_time=quote_time,
+        last_trade_time=quote_time,
         received_at=now_utc(),
     )

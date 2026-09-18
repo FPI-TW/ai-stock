@@ -12,4 +12,7 @@ from app.services.quote.base import QuoteSnapshot
 
 @runtime_checkable
 class CurrentPriceProvider(Protocol):
+    current_price_source: str
+    """Broker name reported in the current-price response (e.g. "fubon")."""
+
     def get_current_price(self, symbol: str) -> QuoteSnapshot: ...

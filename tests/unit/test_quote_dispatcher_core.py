@@ -48,7 +48,7 @@ def _snapshot(symbol: str = "2330", ask: Decimal | None = Decimal("99")) -> Quot
         bid_price=None,
         ask_price=ask,
         last_price=None,
-        quote_time=QUOTE_TIME,
+        last_trade_time=QUOTE_TIME,
         received_at=QUOTE_TIME,
     )
 
@@ -207,7 +207,7 @@ def _trailing_snapshot() -> QuoteSnapshot:
         bid_price=Decimal("119.5"),
         ask_price=Decimal("120.5"),
         last_price=Decimal("120"),
-        quote_time=TRAILING_NOW,
+        last_trade_time=TRAILING_NOW,
         received_at=TRAILING_NOW,
     )
 

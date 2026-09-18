@@ -56,6 +56,7 @@ production 使用單一 `app` container，同時承載 API、quote callback、TW
 ## 外部整合
 
 - **Shioaji demo**：目前 runtime quote provider，adapter 細節隔離在 `services/quote/shioaji_demo/`；provider 上限與 allowlist 由設定控制。
+- **Fubon Neo**：per-user 行情 provider，隔離在 `services/quote/fubon/`（`client.py` 是唯一 `import fubon_neo` 的模組，wheel 只有 Linux 版，本機測試以 fake SDK 注入）。`QUOTE_PROVIDER=fubon` 需由呼叫端提供該使用者的 `FubonCredentials`，尚未接上 lifespan；接線與 session pool 見 `docs/orders/per-user-broker-sessions.md`。
 - **Telegram outbound**：trigger／TWAP transaction 內建立 notification row 後直接 best-effort 呼叫 Bot API，失敗只寫安全 warning並繼續完成 DB transaction。
 - **Telegram inbound**：webhook secret + chat allowlist，使用 DeepSeek 將文字分類成四種受支援 intent，確認後呼叫相同 core command。
 - **AWS SES**：四個 SES 設定全有值時使用 SMTP，否則使用 logging stub；部分設定會在啟動時 fail fast。
