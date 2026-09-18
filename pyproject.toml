@@ -57,6 +57,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "src/app/services/quote/shioaji_demo/client.py" = ["ANN401"]
 "src/app/services/quote/shioaji_demo/normalize.py" = ["ANN401"]
+# 富邦 SDK 同樣無型別、callback 為動態 payload；隔離範圍同上。
+"src/app/services/quote/fubon/client.py" = ["ANN401"]
+"src/app/services/quote/fubon/normalize.py" = ["ANN401"]
 
 [tool.mypy]
 python_version = "3.13"
