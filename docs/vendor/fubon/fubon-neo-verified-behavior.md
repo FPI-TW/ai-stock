@@ -206,6 +206,42 @@ P1 已定案**自己洗價、自己送委託，不外包富邦條件單**（見 
 
 ---
 
+## 8. 登入 session 跨夜不失效，但行情 WS 收盤後會被斷且 SDK 不重連
+
+實測：2026-09-17 10:26 登入（41610792），單一 SDK 實例訂 2330 `aggregates`，每 60 秒打一次 `stock.get_order_results` 並記錄行情 tick，
+連續跑到 2026-09-18 09:50，約 23.5 小時。重跑腳本：`fubon-test` 專案的 `probe_session_lifetime.py`、`probe_after_hours_reconnect.py`。
+
+| 項目 | 結果 |
+| --- | --- |
+| 交易端登入 | 23.5 小時內授權查詢全數成功，`set_on_event` 沒收到 `300`／`301`／`304`；盤中、收盤後、深夜到隔日開盤後都沒被踢 |
+| 行情 WS | 14:05:49 被富邦端主動關閉（`WebSocketConnectionClosedException('Connection to remote host was lost.')`），`disconnect` 事件不帶 reason，代表**不是** SDK health-check 逾時 |
+| 斷線後 | tick 全停，SDK **不會**自動重連，`disconnect` 之後什麼都不做 |
+| 盤後重連 | 16:33 另一帳號（58581758）盤後可正常連上行情 WS；同一個已登入 SDK 重做 `init_realtime` → 重掛 listener → `connect` → `subscribe` 成功 |
+| 兩帳號並存 | 兩個測試帳號在不同行程同時登入互不影響，第二個登入不會踢掉第一個 |
+| `logout()` | 回 `True`，並觸發 `set_on_event('302', 'manual disconnect')`；logout 後 SDK 背景執行緒不會退出，腳本要自行 `os._exit` |
+
+原因：行情 WS 客戶端是 `fugle_marketdata` 2.5.0rc5 的 `WebSocketClient`，`__on_close` 只 emit `DISCONNECT_EVENT`，沒有任何重連邏輯；
+health-check 只負責偵測（30 秒 ping、連續 2 次沒回應就主動 `disconnect`），不負責恢復。
+
+### 交易端事件代碼（`sdk.set_on_event(callback)`，官方文件「事件代碼 (Event Code)」）
+
+| 代碼 | 意義 | 實測 |
+| --- | --- | --- |
+| `100` | 連線建立成功 | |
+| `200` | 登入成功 | |
+| `201` | 登入警示（例如 90 天未更換密碼） | |
+| `300` | 斷線 | 23.5 小時內未出現 |
+| `301` | 未收到連線 pong 回傳 | 23.5 小時內未出現 |
+| `302` | 用戶執行登出，並斷線 | ✅ `logout()` 後立刻收到 `('302', 'manual disconnect')` |
+| `304` | API Key 異動 (Revoked)，已強制登出（2.2.7 新增） | |
+| `500` | 錯誤 | |
+
+官方「自動重連」範例：收到 `300` → `logout()` → **建新的 `FubonSDK()`** → `login()` → 重新 `set_on_*` 所有 callback → 重連行情 WS，用 lock 防重入。
+callback 的 code 是字串，比對時用 `"300"` 不是 `300`。
+
+對本專案的影響：行情 WS 斷線與登入斷線（`300`／`301`／`304`）都可偵測，交由同一支重建迴圈在交易時段內恢復；登入本身不需要每天重做。
+尚未驗證：登入超過 24 小時、跨週末是否失效（若失效預期會以 `300`／`301` 事件浮現）。
+
 ## ⚠️ 地雷
 
 ### （已修）2.2.8 的 `bank_remain()` 會 panic 打掛整個 Python 行程
