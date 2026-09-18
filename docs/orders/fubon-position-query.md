@@ -5,7 +5,7 @@
 
 ## 一句話
 
-**這張票 = 後端跟富邦要庫存清單，讓前端顯示「我有哪些股票、幾股、可以賣幾股」。**
+**這張票 = 拿使用者本人的富邦連線要庫存清單，讓前端顯示「我有哪些股票、幾股、可以賣幾股」。**
 
 ---
 
@@ -37,7 +37,7 @@
 
 ## 這張票做的事（白話）
 
-開一支 `GET /account/positions`，回庫存清單，每筆長這樣：
+開一支 `GET /account/positions`，綁定過券商帳號的使用者打它，回他自己帳戶的庫存清單，每筆長這樣：
 
 | 回傳欄位 | 白話 |
 |---|---|
@@ -87,6 +87,7 @@
 | 把整股和零股加起來 | 兩者語意不同，合併會出錯。零股原樣給，前端自己決定怎麼呈現 |
 | 把持倉存進我們的資料庫 | 見下 |
 | 下單 / 改單 / 刪單 | 另外的票 |
+| 綁定、解綁、重連券商帳號 | [per-user 券商 session 工單](per-user-broker-sessions.md) 負責，本票只取用 |
 | 期貨 | 只做證券 |
 
 ---
@@ -103,7 +104,7 @@
 
 ## ❌ 順帶：不做「哪些股票是誰的」
 
-子帳號系統已於 2026-08-28 整套取消。一個帳號底下只有一個庫存池、股票是可替代的，**「這 500 張是 A 的」這件事根本不存在**，富邦回的持倉也全是整個帳號的合計。要分人就一人一個證券帳戶、一套部署。
+子帳號系統已於 2026-08-28 整套取消。一個帳號底下只有一個庫存池、股票是可替代的，**「這 500 張是 A 的」這件事根本不存在**，富邦回的持倉也全是整個帳號的合計。要分人就一人一個證券帳戶，即 2026-09-16 定案的 per-user 綁定：同一套部署裡每位使用者綁自己的帳戶，各查各的。
 
 ---
 
@@ -118,17 +119,12 @@
 
 ### Metadata
 
-- 分層：上線後（富邦串接系列）
-- 優先序：F3
+- 分層：富邦串接系列帳務票
 - ROM：**S**
-- 依賴：**[F5](fubon-quote-provider.md)（富邦行情 provider）＝共用登入 session 與「取哪個帳號」的擁有者**，
-  本票直接沿用，不另開登入（2026-09-09 變更：原本指向 F1，登入責任已移交 F5）。
-  [F1](fubon-account-balance.md) 建立 `schemas/account.py` 與 `routes/account.py`，本票在其上加端點。
-  與 [F2](fubon-order-query.md) 無相互依賴，可平行做。
+- 依賴：[per-user 券商 session 工單](per-user-broker-sessions.md) 的 PR1（`FubonClient`）與 PR2（`BrokerSessionPool`、綁定 API）；[F1](fubon-account-balance.md) 建立 `schemas/account.py` 與 `routes/account.py`，本票在其上加端點。與 [F2](fubon-order-query.md) 無相互依賴，可平行做。不需等 per-user PR3 行情接線。
 - 被誰依賴：停損停利建單流程（[P1](stop-loss-take-profit.md)）——使用者要對持有部位設停損，
   前提是知道自己有哪些股票、可賣幾股。
-- 交付版本：V1
-- 來源：2026-08-03 富邦方向（`docs/product.md`〈設計紅線〉：券商是唯一真相，持倉每次讀券商即時值）
+- 來源：2026-08-03 富邦方向（`docs/product.md`〈設計紅線〉：券商是唯一真相，持倉每次讀券商即時值）；2026-09-16 定案 per-user 綁定後改為本人 session，2026-09-18 依此改寫。
 
 ### 背景
 
@@ -208,7 +204,7 @@
 | 把持倉歸戶到 user | 子帳號系統已於 2026-08-28 整套取消，見〈非目標〉 |
 
 **券商是唯一真相來源**，後端的職責只有：查 → 翻 `order_type` → 濾空殼 → 轉 JSON 欄位命名 → 回傳。
-（登入不在本票職責內，走 F5 的共用 session。）
+（登入、重連不在本票職責內，session 由 per-user 工單的 `BrokerSessionPool` 管，本票以 `pool.require(current_user.id)` 取用。）
 
 #### `order_type` 映射（比照 F2 的狀態碼原則）
 
@@ -271,7 +267,7 @@
 }
 ```
 
-- **不回傳 `branch_no` / `account`**（理由同 F1：一套部署一個帳號，帳號屬個資）。
+- **不回傳 `branch_no` / `account`**：遮罩後四碼已由 `GET /me/broker-account` 提供，理由同 F1。
 - `date` 是富邦給的資料日期，**原樣透傳斜線格式，不要幫它轉 ISO**（同 F2 `last_time` 的教訓：
   後端自作聰明改格式，跨日或格式變動時會出事）。每筆的 `date` 都相同，提到頂層即可；
   若富邦回傳的各筆 `date` 不一致，以第一筆為準並寫 warning log。
@@ -280,23 +276,21 @@
 
 #### 錯誤處理（比照 F1 / F2，不要另創一套）
 
-| 情境 | 狀態碼 |
-|---|---|
-| 未設定富邦憑證（`FUBON_ENABLED=false`） | 503 |
-| 登入失敗 / `is_success = false` / SDK 例外 | 502 |
+| 情境 | 狀態碼 | 回應 |
+|---|---|---|
+| `QUOTE_PROVIDER` 非 `fubon`（shared 模式，無本人 session） | 503 | `BROKER_ACCOUNTING_DISABLED` |
+| `pool.require(user_id)` 拿不到 session（未綁定、`login_failed`、重連中） | 409 | `BROKER_ACCOUNT_NOT_BOUND` |
+| `is_success = false` / SDK 例外 | 502 | `BROKER_QUERY_FAILED` |
 
 `Result.message`（連線 / 認證層失敗）**不回前端**，只寫 server log。
 
 #### 程式落點
 
-- `src/app/services/fubon/position_query.py`（新增）：`inventories` 查詢 + `order_type` 映射 + 濾空殼 + 轉 dataclass。
-- `src/app/schemas/account.py`（F1 建立）：加持倉的 response model。
-- `src/app/api/routes/account.py`（F1 建立）：加這支端點。
-- **沿用 F5 的共用登入 session 與取帳號邏輯**，不要另開一套（富邦交易連線數上限 10，
-  每次 `login()` 吃一條，全 process 只能登一次），也不要各自寫 `accounts.data[0]`
-  ——取帳號須以 `account_type == "stock"` 過濾，登入回證券 + 期權多筆且順序不保證
-  （`docs/api/fubon-neo-verified-behavior.md` 已實測），期權帳號打證券 API 會回「帳號類別錯誤」。
-- 端點同樣是同步 `def`（SDK 阻塞，`async def` 會卡 event loop）。
+- `src/app/services/quote/fubon/client.py`：`FubonClient` 新增 `list_inventories() -> list[FubonInventory]`（frozen dataclass，`order_type` 以 `str(...)` 轉成原始字串保留）。`client.py` 仍是唯一 `import fubon_neo` 的模組。證券帳號由 `FubonClient.login()` 以 `account_type == "stock"` 過濾後持有，本票不碰 `accounts.data`。
+- `src/app/services/quote/fubon/position_query.py`（新增，純函式）：`order_type` 映射 + 濾空殼。
+- `src/app/api/schemas/account.py`（F1 建立）：加持倉的 response model。
+- `src/app/api/routes/account.py`（F1 建立）：加這支端點，`def` 端點，`pool.require(current_user.id)` → `.client.list_inventories()` → 映射與濾除 → response model。
+- 不新增環境變數；不做綁定、解綁、重連、重試。
 
 ### 非目標
 
@@ -322,7 +316,7 @@
 - 不做多帳號選擇。
 - **不做 per-trader 持倉／績效歸戶**：子帳號系統已於 2026-08-28 整套取消。
   一個帳號底下只有一個庫存池、股票可替代，「誰的股票被賣掉」這件事不存在；
-  富邦的持倉全是帳號層級合計，券商端永遠無法佐證我方歸戶。要分人就一人一戶（＝多套部署）。
+  富邦的持倉全是帳號層級合計，券商端永遠無法佐證我方歸戶。要分人就一人一戶，即 per-user 綁定各綁各的證券帳戶。
 
 ### 驗收條件
 
@@ -337,14 +331,15 @@
 - [ ] 帳戶無持倉（或全被濾掉）→ 200 + 空陣列。
 - [ ] 回應與 log 皆不含 `account` / `branch_no`。
 - [ ] `is_success = false` 或 SDK 例外 → 502，券商 `message` 只在 log。
-- [ ] 未登入 401；`FUBON_ENABLED=false` → 503。
+- [ ] 未登入 401；shared 模式 503；未綁定或 session 不在 409。
+- [ ] A、B 兩人各有 session 時，A 查到的是 A 的 client 回的持倉。
 - [ ] 後端沒有任何成本均價、市值、手續費、稅、報酬率的計算；沒有新增任何持倉相關資料表。
-- [ ] 沿用 F5 的共用登入 session，本票程式碼中**沒有任何 `sdk.login()` 呼叫**；取帳號邏輯只有一處。
+- [ ] 本票程式碼中**沒有任何 `login()` 呼叫**、不碰 `accounts.data`。
 - [ ] `make check` 全綠。
 
 ### 測試要求
 
-`tests/api/test_account_positions.py`，以 monkeypatch 注入 fake SDK（**不連真富邦 API**）。
+`tests/api/test_account_positions.py`，以 fake `FubonClient` 注入 pool（**不連真富邦 API**）。
 fake 資料直接照 2026-08-31 的實打結果建（帳號與分行代號改成假值）：
 
 - 正常持倉回 200 與正確 JSON。
@@ -356,7 +351,8 @@ fake 資料直接照 2026-08-31 的實打結果建（帳號與分行代號改成
 - `odd` 有值時原樣回傳，未與整股相加。
 - 空清單 → 200 + `[]`；全部都是全零 → 200 + `[]`。
 - `is_success = false` → 502 且回應不含券商 message。
-- `FUBON_ENABLED=false` → 503。
+- shared 模式 → 503；未綁定 → 409。
+- 兩個使用者各自的 fake client 回不同持倉，驗證各查各的。
 - 回應 JSON 不含 `account` / `branchNo`。
 
 真實帳號的連線驗證屬手動 smoke test，寫在 PR 描述。
@@ -365,7 +361,7 @@ fake 資料直接照 2026-08-31 的實打結果建（帳號與分行代號改成
 
 - `order_type` 映射是一個 dict + 一個「查不到就 unknown」的分支，**不要**做成 enum 階層、策略類別或設定檔驅動。
 - `order_type` 從 SDK 拿到的是 Rust 擴充的列舉物件，不是純字串。取原值時用 `str(...)` 轉一次再查表，
-  並在測試裡確認 fake 與真實 SDK 的行為一致（實打的 repr 顯示為 `Stock` / `Margin` / `Short`）。
+  並在測試裡確認 fake 與真實 SDK 的行為一致（實打的 repr 顯示為 `Stock` / `Margin` / `Short`）；這個轉換放在 `client.py`，`position_query.py` 只看字串。
 - 股數單位是**股**（實打的 `500000` ＝ 500 張）。後端不換算張數，前端要顯示張數自己除。
 - 金額與股數的型別以富邦實際回傳為準，比照 F1 的教訓（文件標 int、範例給字串）：
   施工時實打確認，該轉就轉一次再放進 response model，不要直接信任文件型別。
