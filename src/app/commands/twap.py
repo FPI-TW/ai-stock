@@ -5,10 +5,12 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import Select
 
 from app.commands.intent_lifecycle import IntentLifecycleCommand
-from app.commands.trade_intent import IntentLimits
-from app.db.models.core import Notification, TradeIntent, TwapSlice
+from app.commands.trade_intent_core import IntentLimits
+from app.db.models.core import Notification
+from app.db.models.trade_intent_core import TradeIntentCore, TradeIntentTwapParams, TradeIntentTwapSlice
 from app.domain.price import InvalidTypeError, SecurityType
 from app.domain.trade_intent import (
     SymbolIntentLimitExceededError,
@@ -20,13 +22,12 @@ from app.domain.twap import (
     TWAP_EXECUTION_MODE,
     TWAP_PRICE_FOLLOWUP_DELAY_SECONDS,
     TWAP_PRICE_FOLLOWUP_MAX_ATTEMPTS,
-    TWAP_STRATEGY,
     TWAP_TIME_IN_FORCE,
     TWAP_TRIGGER_REFERENCE_PRICE_TYPE,
     TwapPlan,
     build_twap_plan,
 )
-from app.repositories.intent_repository import IntentRepository
+from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.services.kill_switch import KillSwitchProvider
 from app.services.notification_template import render_twap_price_followup, render_twap_slice
 from app.services.quote.base import QuoteProvider, QuoteProviderError, QuoteSnapshot
@@ -55,6 +56,19 @@ class TwapConfirmOutput:
 @dataclass(frozen=True)
 class TwapWorkerOutput:
     processed_count: int
+
+
+# 切片 + 其委託 + TWAP 參數：拆衛星表後 position_side / 切片總數住在 params，兩個
+# loader 都要，故一併 JOIN 回來（1:1，不會放大列數）。
+TwapSliceRow = tuple[TradeIntentTwapSlice, TradeIntentCore, TradeIntentTwapParams]
+
+
+def _slice_with_intent() -> Select[TwapSliceRow]:
+    return (
+        select(TradeIntentTwapSlice, TradeIntentCore, TradeIntentTwapParams)
+        .join(TradeIntentCore, TradeIntentTwapSlice.trade_intent_id == TradeIntentCore.id)
+        .join(TradeIntentTwapParams, TradeIntentTwapParams.trade_intent_id == TradeIntentCore.id)
+    )
 
 
 class TwapPlanCommand:
@@ -94,7 +108,7 @@ class TwapConfirmCommand(TwapPlanCommand):
         self,
         symbol_service: SymbolService,
         session_service: TradingSessionService,
-        intent_repo: IntentRepository,
+        intent_repo: TradeIntentCoreRepository,
         quote_provider: QuoteProvider,
         db: Session,
         limits: IntentLimits | None = None,
@@ -156,7 +170,7 @@ class TwapSliceWorkerCommand:
 
     def process_due_slices(self, *, limit: int = 100) -> TwapWorkerOutput:
         now = self._session_service.now_taipei()
-        IntentLifecycleCommand(IntentRepository(self._db), self._session_service).run()
+        IntentLifecycleCommand(TradeIntentCoreRepository(self._db), self._session_service).run()
         if self._session_service.get_trading_day_phase(now) != TradingDayPhase.REGULAR_SESSION:
             return TwapWorkerOutput(processed_count=0)
         # Kill switch (§18): global trigger-halt suppresses TWAP slice notifications
@@ -166,8 +180,8 @@ class TwapSliceWorkerCommand:
             return TwapWorkerOutput(processed_count=0)
         try:
             rows = self._load_due_slices(now, limit)
-            for slice_row, intent_row in rows:
-                self._process_due_slice(slice_row, intent_row, now)
+            for slice_row, intent_row, params_row in rows:
+                self._process_due_slice(slice_row, intent_row, params_row, now)
             self._db.commit()
         except Exception:
             self._db.rollback()
@@ -176,7 +190,7 @@ class TwapSliceWorkerCommand:
 
     def process_price_followups(self, *, limit: int = 100) -> TwapWorkerOutput:
         now = self._session_service.now_taipei()
-        IntentLifecycleCommand(IntentRepository(self._db), self._session_service).run()
+        IntentLifecycleCommand(TradeIntentCoreRepository(self._db), self._session_service).run()
         if self._session_service.get_trading_day_phase(now) != TradingDayPhase.REGULAR_SESSION:
             return TwapWorkerOutput(processed_count=0)
         # Kill switch (§18): a price follow-up is itself a notification, so a halt
@@ -185,55 +199,60 @@ class TwapSliceWorkerCommand:
             return TwapWorkerOutput(processed_count=0)
         try:
             rows = self._load_followup_slices(now, limit)
-            for slice_row, intent_row in rows:
-                self._process_followup(slice_row, intent_row, now)
+            for slice_row, intent_row, params_row in rows:
+                self._process_followup(slice_row, intent_row, params_row, now)
             self._db.commit()
         except Exception:
             self._db.rollback()
             raise
         return TwapWorkerOutput(processed_count=len(rows))
 
-    def _load_due_slices(self, now: datetime, limit: int) -> list[tuple[TwapSlice, TradeIntent]]:
+    def _load_due_slices(self, now: datetime, limit: int) -> list[TwapSliceRow]:
         stmt = (
-            select(TwapSlice, TradeIntent)
-            .join(TradeIntent, TwapSlice.trade_intent_id == TradeIntent.id)
+            _slice_with_intent()
             .where(
-                TwapSlice.status == "pending",
-                TwapSlice.scheduled_at <= now,
-                TradeIntent.strategy == TWAP_STRATEGY,
-                TradeIntent.status.in_(("scheduled", "active")),
+                TradeIntentTwapSlice.status == "pending",
+                TradeIntentTwapSlice.scheduled_at <= now,
+                TradeIntentCore.status.in_(("scheduled", "active")),
             )
-            .order_by(TwapSlice.scheduled_at.asc(), TwapSlice.sequence_no.asc())
+            .order_by(TradeIntentTwapSlice.scheduled_at.asc(), TradeIntentTwapSlice.sequence_no.asc())
             .limit(limit)
             .with_for_update(skip_locked=True)
         )
         return list(self._db.execute(stmt).tuples().all())
 
-    def _load_followup_slices(self, now: datetime, limit: int) -> list[tuple[TwapSlice, TradeIntent]]:
+    def _load_followup_slices(self, now: datetime, limit: int) -> list[TwapSliceRow]:
         stmt = (
-            select(TwapSlice, TradeIntent)
-            .join(TradeIntent, TwapSlice.trade_intent_id == TradeIntent.id)
+            _slice_with_intent()
             .where(
-                TwapSlice.price_followup_required.is_(True),
-                TwapSlice.price_followup_notification_id.is_(None),
-                TwapSlice.price_followup_attempts < TWAP_PRICE_FOLLOWUP_MAX_ATTEMPTS,
-                TwapSlice.next_price_followup_at <= now,
-                TradeIntent.strategy == TWAP_STRATEGY,
-                TradeIntent.status != "cancelled",
+                TradeIntentTwapSlice.price_followup_required.is_(True),
+                TradeIntentTwapSlice.price_followup_notification_id.is_(None),
+                TradeIntentTwapSlice.price_followup_attempts < TWAP_PRICE_FOLLOWUP_MAX_ATTEMPTS,
+                TradeIntentTwapSlice.next_price_followup_at <= now,
+                # 不能收窄成 status IN ('scheduled','active')：最後一片通知完會把委託推成
+                # triggered，那一片的補價還沒送。只排除「計畫已被取消」的兩種狀態——
+                # 帳號停用用的是 cancelled_by_account_disabled，漏掉會讓停用帳號續收補價通知。
+                TradeIntentCore.status.notin_(("cancelled", "cancelled_by_account_disabled")),
             )
-            .order_by(TwapSlice.next_price_followup_at.asc(), TwapSlice.sequence_no.asc())
+            .order_by(TradeIntentTwapSlice.next_price_followup_at.asc(), TradeIntentTwapSlice.sequence_no.asc())
             .limit(limit)
             .with_for_update(skip_locked=True)
         )
         return list(self._db.execute(stmt).tuples().all())
 
-    def _process_due_slice(self, slice_row: TwapSlice, intent_row: TradeIntent, now: datetime) -> None:
-        price, price_type, quote_time = self._get_reference_price(intent_row.symbol, intent_row.position_side)
+    def _process_due_slice(
+        self,
+        slice_row: TradeIntentTwapSlice,
+        intent_row: TradeIntentCore,
+        params_row: TradeIntentTwapParams,
+        now: datetime,
+    ) -> None:
+        price, price_type, quote_time = self._get_reference_price(intent_row.symbol, params_row.position_side)
         title, body = render_twap_slice(
             symbol=intent_row.symbol,
-            position_side=_required_position_side(intent_row),
+            position_side=params_row.position_side,
             sequence_no=slice_row.sequence_no,
-            total_slices=_required_materialized_slice_count(intent_row),
+            total_slices=params_row.twap_materialized_slice_count,
             planned_quantity_lots=slice_row.planned_quantity_lots,
             reference_price=price,
             reference_price_type=price_type,
@@ -242,7 +261,7 @@ class TwapSliceWorkerCommand:
         notification = Notification(
             id=uuid4(),
             owner_user_id=slice_row.owner_user_id,
-            trade_intent_id=slice_row.trade_intent_id,
+            trade_intent_core_id=slice_row.trade_intent_id,
             type="twap_slice",
             rendered_title=title,
             rendered_body=body,
@@ -269,9 +288,15 @@ class TwapSliceWorkerCommand:
             intent_row.updated_at = now
         self._complete_intent_if_all_slices_done(intent_row, now)
 
-    def _process_followup(self, slice_row: TwapSlice, intent_row: TradeIntent, now: datetime) -> None:
+    def _process_followup(
+        self,
+        slice_row: TradeIntentTwapSlice,
+        intent_row: TradeIntentCore,
+        params_row: TradeIntentTwapParams,
+        now: datetime,
+    ) -> None:
         attempts = slice_row.price_followup_attempts + 1
-        price, price_type, _quote_time = self._get_reference_price(intent_row.symbol, intent_row.position_side)
+        price, price_type, _quote_time = self._get_reference_price(intent_row.symbol, params_row.position_side)
         slice_row.price_followup_attempts = attempts
         slice_row.updated_at = now
         if price is None or price_type is None:
@@ -285,7 +310,7 @@ class TwapSliceWorkerCommand:
         title, body = render_twap_price_followup(
             symbol=intent_row.symbol,
             sequence_no=slice_row.sequence_no,
-            total_slices=_required_materialized_slice_count(intent_row),
+            total_slices=params_row.twap_materialized_slice_count,
             reference_price=price,
             reference_price_type=price_type,
             sent_at=now,
@@ -293,7 +318,7 @@ class TwapSliceWorkerCommand:
         notification = Notification(
             id=uuid4(),
             owner_user_id=slice_row.owner_user_id,
-            trade_intent_id=slice_row.trade_intent_id,
+            trade_intent_core_id=slice_row.trade_intent_id,
             type="twap_price_followup",
             rendered_title=title,
             rendered_body=body,
@@ -306,14 +331,14 @@ class TwapSliceWorkerCommand:
         slice_row.price_followup_notification_id = notification.id
         slice_row.price_followup_sent_at = now
 
-    def _complete_intent_if_all_slices_done(self, intent_row: TradeIntent, now: datetime) -> None:
+    def _complete_intent_if_all_slices_done(self, intent_row: TradeIntentCore, now: datetime) -> None:
         self._db.flush()
         pending_count = self._db.execute(
             select(func.count())
-            .select_from(TwapSlice)
+            .select_from(TradeIntentTwapSlice)
             .where(
-                TwapSlice.trade_intent_id == intent_row.id,
-                TwapSlice.status == "pending",
+                TradeIntentTwapSlice.trade_intent_id == intent_row.id,
+                TradeIntentTwapSlice.status == "pending",
             )
         ).scalar_one()
         if int(pending_count) == 0 and intent_row.status in {"scheduled", "active"}:
@@ -346,15 +371,3 @@ def _select_reference_price(
     if snapshot.last_price is not None:
         return snapshot.last_price, "last_fallback", snapshot.quote_time
     return None, None, None
-
-
-def _required_position_side(intent_row: TradeIntent) -> str:
-    if intent_row.position_side is None:
-        raise RuntimeError(f"TWAP intent missing position_side: {intent_row.id}")
-    return intent_row.position_side
-
-
-def _required_materialized_slice_count(intent_row: TradeIntent) -> int:
-    if intent_row.twap_materialized_slice_count is None:
-        raise RuntimeError(f"TWAP intent missing slice count: {intent_row.id}")
-    return intent_row.twap_materialized_slice_count
