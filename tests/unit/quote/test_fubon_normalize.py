@@ -67,3 +67,16 @@ def test_missing_book_keys_yield_none_bid_ask() -> None:
 
     assert snapshot.bid_price is None
     assert snapshot.ask_price is None
+
+
+def test_missing_last_trade_yields_none_price_and_time() -> None:
+    # Before the first match of the day the frame has a book but no `lastTrade`;
+    # the order forbids falling back to `lastPrice` (trial matching).
+    payload = _payload_with_trade()
+    del payload["lastTrade"]
+
+    snapshot = aggregates_to_snapshot(payload)
+
+    assert snapshot.last_price is None
+    assert snapshot.last_trade_time is None
+    assert snapshot.bid_price == Decimal("567")

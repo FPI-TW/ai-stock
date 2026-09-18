@@ -42,12 +42,13 @@ def _top_of_book(levels: Any) -> Decimal | None:
 
 
 def aggregates_to_snapshot(data: dict[str, Any]) -> QuoteSnapshot:
-    last_trade = data["lastTrade"]
+    last_trade = data.get("lastTrade") or {}
+    trade_time = last_trade.get("time")
     return QuoteSnapshot(
         symbol=data["symbol"],
         bid_price=_top_of_book(data.get("bids")),
         ask_price=_top_of_book(data.get("asks")),
-        last_price=_to_decimal(last_trade["price"]),
-        last_trade_time=_micros_to_taipei(last_trade["time"]),
+        last_price=_to_decimal(last_trade.get("price")),
+        last_trade_time=_micros_to_taipei(trade_time) if trade_time is not None else None,
         received_at=datetime.now(tz=UTC),
     )
