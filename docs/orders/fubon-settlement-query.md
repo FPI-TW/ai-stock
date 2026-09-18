@@ -5,7 +5,7 @@
 
 ## 一句話
 
-**這張票 = 後端跟富邦要「近三個交易日的交割款」，讓前端顯示哪天要付多少錢、哪天有多少錢進來。**
+**這張票 = 拿使用者本人的富邦連線要「近三個交易日的交割款」，讓前端顯示哪天要付多少錢、哪天有多少錢進來。**
 
 ---
 
@@ -26,8 +26,8 @@
 
 ## 這張票做的事（白話）
 
-開一支 `GET /account/settlements`，把富邦回的近三個交易日交割資料**原樣**丟給前端。
-不算、不改、不補、不排序。後端只做兩件事：查 → 把帳號欄位拿掉。（登入是共用的，由 F5 那張票統一處理。）
+開一支 `GET /account/settlements`，綁定過券商帳號的使用者打它，把富邦回的他自己帳戶近三個交易日交割資料**原樣**丟給前端。
+不算、不改、不補、不排序。後端只做兩件事：查 → 把帳號欄位拿掉。（登入、重連由 [per-user 券商 session 工單](per-user-broker-sessions.md) 統一處理，本票只取用他的連線。）
 
 就這樣。這是本系列最小的一張票。
 
@@ -94,6 +94,7 @@ F3（持倉）把「全部是零」的庫存筆濾掉，因為那些筆**沒有�
   （順帶一提：富邦官方文件的回傳範例，自己就對不起來。）
 - 不換算幣別、不把交割資料寫進我們的資料庫、不做對帳。
 - 不做損益、不做銀行餘額、不做期貨、不下單。
+- 不做綁定、解綁、重連券商帳號，那是 per-user 券商 session 工單的事。
 
 ---
 
@@ -108,16 +109,11 @@ F3（持倉）把「全部是零」的庫存筆濾掉，因為那些筆**沒有�
 
 ### Metadata
 
-- 分層：上線後（富邦串接系列）
-- 優先序：F4
+- 分層：富邦串接系列帳務票
 - ROM：**S**（比 F3 更小：無狀態碼映射、無濾除規則，只有查 → 轉 JSON）
-- 依賴：**[F5](fubon-quote-provider.md)（富邦行情 provider）＝共用登入 session 與「取哪個帳號」的擁有者**，
-  本票直接沿用，不另開登入（2026-09-09 變更：原本指向 F1，登入責任已移交 F5）。
-  [F1](fubon-account-balance.md) 建立 `schemas/account.py` 與 `routes/account.py`，本票在其上加端點。
-  與 [F2](fubon-order-query.md)、[F3](fubon-position-query.md) 無相互依賴，可平行做。
+- 依賴：[per-user 券商 session 工單](per-user-broker-sessions.md) 的 PR1（`FubonClient`）與 PR2（`BrokerSessionPool`、綁定 API）；[F1](fubon-account-balance.md) 建立 `schemas/account.py` 與 `routes/account.py`，本票在其上加端點。與 [F2](fubon-order-query.md)、[F3](fubon-position-query.md) 無相互依賴，可平行做。不需等 per-user PR3 行情接線。
 - 被誰依賴：無硬依賴。階段二／三開始下單後價值放大（賣出後何時入帳、買進後 T+2 要準備多少錢）。
-- 交付版本：V1
-- 來源：2026-08-03 富邦方向（`docs/product.md`〈設計紅線〉）；[富邦持倉查詢](fubon-position-query.md)〈非目標〉列的「交割金額要哪個另開票」
+- 來源：2026-08-03 富邦方向（`docs/product.md`〈設計紅線〉）；2026-09-16 定案 per-user 綁定後改為本人 session，2026-09-18 依此改寫；[富邦持倉查詢](fubon-position-query.md)〈非目標〉列的「交割金額要哪個另開票」
 
 ### 背景
 
@@ -211,7 +207,7 @@ Settlement { date: "2026/09/01", settlement_date: None, buy_value: None, ... cur
 | 日期格式轉 ISO | 同 F2 `last_time`、F3 `date` 的教訓，原樣透傳 |
 
 **券商是唯一真相來源**，後端職責只有：查 → 去掉帳號欄位 → 轉 JSON 欄位命名 → 回傳。
-（登入不在本票職責內，走 F5 的共用 session。）
+（登入、重連不在本票職責內，session 由 per-user 工單的 `BrokerSessionPool` 管，本票以 `pool.require(current_user.id)` 取用。）
 
 #### 為什麼不濾空殼列（F3 濾、這裡不濾）
 
@@ -267,30 +263,27 @@ F3 濾掉全零庫存，是因為那 9 筆裡有 3 筆純粹是雜訊、**沒有
 }
 ```
 
-- **不回傳 `branch_no` / `account`**（理由同 F1：一套部署一個帳號，帳號屬個資）。
+- **不回傳 `branch_no` / `account`**：遮罩後四碼已由 `GET /me/broker-account` 提供，理由同 F1。
 - 排序：照富邦回傳順序（實打是日期升冪），**不另外排序、不反轉**。
 - `details` 為空 → 200 + 空陣列，不是 404。
 - 不提供 `range` query param（見〈非目標〉）。
 
 #### 錯誤處理（比照 F1 / F2 / F3，不要另創一套）
 
-| 情境 | 狀態碼 |
-|---|---|
-| 未設定富邦憑證（`FUBON_ENABLED=false`） | 503 |
-| 登入失敗 / `is_success = false` / `data` 為 `None` / SDK 例外 | 502 |
+| 情境 | 狀態碼 | 回應 |
+|---|---|---|
+| `QUOTE_PROVIDER` 非 `fubon`（shared 模式，無本人 session） | 503 | `BROKER_ACCOUNTING_DISABLED` |
+| `pool.require(user_id)` 拿不到 session（未綁定、`login_failed`、重連中） | 409 | `BROKER_ACCOUNT_NOT_BOUND` |
+| `is_success = false` / `data` 為 `None` / SDK 例外 | 502 | `BROKER_QUERY_FAILED` |
 
 `Result.message`**不回前端**，只寫 server log。
 
 #### 程式落點
 
-- `src/app/services/fubon/settlement_query.py`（新增）：`query_settlement` 查詢 + 轉 dataclass。
-- `src/app/schemas/account.py`（F1 建立）：加交割款的 response model。
-- `src/app/api/routes/account.py`（F1 建立）：加這支端點。
-- **沿用 F5 的共用登入 session 與取帳號邏輯**，不要另開一套（富邦交易連線數上限 10，
-  每次 `login()` 吃一條，全 process 只能登一次），也不要各自寫 `accounts.data[0]`
-  ——取帳號須以 `account_type == "stock"` 過濾，登入會回證券 + 期權多筆且順序不保證，
-  見 `docs/api/fubon-neo-verified-behavior.md`。
-- 端點同樣是同步 `def`（SDK 阻塞，`async def` 會卡 event loop）。
+- `src/app/services/quote/fubon/client.py`：`FubonClient` 新增 `query_settlements() -> list[FubonSettlement]`（frozen dataclass，數值欄位一律 `int | None`，固定打 `"3d"`）。`client.py` 仍是唯一 `import fubon_neo` 的模組。證券帳號由 `FubonClient.login()` 以 `account_type == "stock"` 過濾後持有，本票不碰 `accounts.data`。
+- `src/app/api/schemas/account.py`（F1 建立）：加交割款的 response model。
+- `src/app/api/routes/account.py`（F1 建立）：加這支端點，`def` 端點，`pool.require(current_user.id)` → `.client.query_settlements()` → response model。
+- 不新增環境變數；不做綁定、解綁、重連、重試。本票沒有純加工邏輯，不另開 service 模組。
 
 ### 非目標
 
@@ -306,7 +299,7 @@ F3 濾掉全零庫存，是因為那 9 筆裡有 3 筆純粹是雜訊、**沒有
 - **不把交割資料寫進我們的資料庫**（見上表，這是產品紅線不是本票偷懶）。
 - 不做快取（理由同 F1：手動查看，不是輪詢）。
 - 不做期貨（`sdk.futopt.*`），只做證券。
-- 不做多帳號選擇。
+- 不做多帳號選擇；一人一戶由 per-user 綁定保證。
 
 ### 驗收條件
 
@@ -320,13 +313,14 @@ F3 濾掉全零庫存，是因為那 9 筆裡有 3 筆純粹是雜訊、**沒有
 - [ ] 回應與 log 皆不含 `account` / `branch_no`。
 - [ ] `details` 為空 → 200 + `[]`。
 - [ ] `is_success = false`、`data` 為 `None` 或 SDK 例外 → 502，券商 `message` 只在 log。
-- [ ] 未登入 401；`FUBON_ENABLED=false` → 503。
-- [ ] 沒有新增任何交割相關資料表；沿用 F5 的共用登入 session，本票程式碼中**沒有任何 `sdk.login()` 呼叫**。
+- [ ] 未登入 401；shared 模式 503；未綁定或 session 不在 409。
+- [ ] A、B 兩人各有 session 時，A 查到的是 A 的 client 回的交割資料。
+- [ ] 沒有新增任何交割相關資料表；本票程式碼中**沒有任何 `login()` 呼叫**、不碰 `accounts.data`。
 - [ ] `make check` 全綠。
 
 ### 測試要求
 
-`tests/api/test_account_settlements.py`，以 monkeypatch 注入 fake SDK（**不連真富邦 API**）。
+`tests/api/test_account_settlements.py`，以 fake `FubonClient` 注入 pool（**不連真富邦 API**）。
 fake 資料直接照 2026-09-01 的實打結果建（帳號與分行代號改成假值）：
 
 - 正常查詢回 200 與正確 JSON（三筆：null 列、有資料列、null 列）。
@@ -337,7 +331,8 @@ fake 資料直接照 2026-09-01 的實打結果建（帳號與分行代號改成
 - `details` 空清單 → 200 + `[]`。
 - `is_success = false` → 502 且回應不含券商 message。
 - `data` 為 `None`（`is_success = true` 但無 data）→ 502，不是 500。
-- `FUBON_ENABLED=false` → 503。
+- shared 模式 → 503；未綁定 → 409。
+- 兩個使用者各自的 fake client 回不同交割資料，驗證各查各的。
 - 回應 JSON 不含 `account` / `branchNo`。
 
 真實帳號的連線驗證屬手動 smoke test，寫在 PR 描述。
