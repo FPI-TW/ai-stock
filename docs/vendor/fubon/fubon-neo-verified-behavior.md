@@ -239,6 +239,22 @@ health-check 只負責偵測（30 秒 ping、連續 2 次沒回應就主動 `dis
 官方「自動重連」範例：收到 `300` → `logout()` → **建新的 `FubonSDK()`** → `login()` → 重新 `set_on_*` 所有 callback → 重連行情 WS，用 lock 防重入。
 callback 的 code 是字串，比對時用 `"300"` 不是 `300`。
 
+### 殘留 session 會讓行情 WS 被拒（2026-09-18 實測）
+
+同一帳號（41610792）先後有三個行程未經 `logout()` 就結束（一個被 `kill`、兩個因例外中止）後，
+新行程 `login()` **仍成功**，但 `init_realtime` → `connect()` 立刻收到伺服器關閉：
+
+```
+opcode=8 data=b'\x03\xe9Maximum number of connections reached'
+→ fugle_marketdata 端拋 Exception("authentication timeout")
+```
+
+換乾淨的帳號（58581758）同一段程式一次通過。結論：
+
+- 殘留 session 佔的是**行情 WS 額度**，交易端登入不受影響；額度多久釋放未測。
+- 這是「WS 連線失敗」不是「登入失效」：程式不可據此重登，否則每次重試都再多一條殘留。
+- 任何實測腳本一律 `try/finally: sdk.logout()`；用 `os._exit` 前記得 `sys.stdout.reconfigure(line_buffering=True)`，不然輸出會被吃掉。
+
 對本專案的影響：行情 WS 斷線與登入斷線（`300`／`301`／`304`）都可偵測，交由同一支重建迴圈在交易時段內恢復；登入本身不需要每天重做。
 尚未驗證：登入超過 24 小時、跨週末是否失效（若失效預期會以 `300`／`301` 事件浮現）。
 

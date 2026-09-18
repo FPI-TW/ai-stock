@@ -336,3 +336,32 @@ def test_logout_calls_sdk_and_marks_login_dead() -> None:
 
     assert sdk.logged_out is True
     assert client.login_alive is False
+
+
+def test_ws_connect_failure_keeps_login_alive() -> None:
+    # Real-SDK smoke (2026-09-18): the trade login succeeded but the market-data
+    # websocket was refused with "Maximum number of connections reached". That is a
+    # realtime-layer failure, not a lost login — the reconnect loop must not
+    # escalate it into a full re-login.
+    sdk = FakeSdk(login_result=_ok_login())
+    client = _client(sdk)
+    client.login()
+    original_init = sdk.init_realtime
+
+    def init_then_refuse(mode: object) -> None:
+        original_init(mode)
+
+        def refuse() -> None:
+            raise RuntimeError("authentication timeout")
+
+        sdk.ws.connect = refuse  # type: ignore[method-assign]
+
+    sdk.init_realtime = init_then_refuse  # type: ignore[method-assign]
+
+    with pytest.raises(QuoteProviderUnavailableError) as exc_info:
+        client.connect_realtime()
+
+    assert not isinstance(exc_info.value, FubonLoginError)
+    assert exc_info.value.details() == {"provider": "fubon", "reason": "realtime_connect_failed"}
+    assert client.login_alive is True
+    assert client.realtime_connected is False

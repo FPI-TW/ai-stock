@@ -176,19 +176,26 @@ class FubonClient:
     def connect_realtime(self) -> None:
         sdk = self._require_sdk()
         mode = self._realtime_mode if self._realtime_mode is not None else _default_realtime_mode()
+        self._channels = {}
+        self.realtime_connected = False
         try:
-            sdk.init_realtime(mode)
+            sdk.init_realtime(mode)  # exchanges the trade login for a market-data token
+        except Exception as exc:
+            # No token means the login behind it is gone → full re-login needed.
+            self.login_alive = False
+            logger.warning("fubon realtime token exchange raised %s", type(exc).__name__)
+            raise FubonLoginError("provider_unavailable") from exc
+        try:
             ws = sdk.marketdata.websocket_client.stock
             ws.on("message", self._on_message)
             ws.on("disconnect", self._on_disconnect)
             ws.on("error", self._on_error)
             ws.connect()
         except Exception as exc:
-            # A failed token exchange / connect means the login behind it is gone.
-            self.login_alive = False
-            logger.warning("fubon realtime connect raised %s", type(exc).__name__)
-            raise FubonLoginError("provider_unavailable") from exc
-        self._channels = {}
+            # Websocket-level refusal (e.g. connection cap, auth timeout): the trade
+            # login is still valid, only the realtime leg failed. Seen live 2026-09-18.
+            logger.warning("fubon realtime websocket connect raised %s", type(exc).__name__)
+            raise QuoteProviderUnavailableError("fubon", "realtime_connect_failed") from exc
         self.realtime_connected = True
 
     def reconnect_realtime(self) -> None:
