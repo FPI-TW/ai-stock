@@ -26,6 +26,7 @@ import logging
 import os
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, ClassVar, Literal
 
 from app.services.quote.base import QuoteProviderUnavailableError, QuoteSnapshot
@@ -39,6 +40,19 @@ FubonLoginFailureCode = Literal["login_rejected", "session_limit", "provider_una
 _LOGIN_LOST_EVENT_CODES = frozenset({"300", "301", "304"})
 _SESSION_LIMIT_MARKER = "連線限制"
 _CHANNEL = "aggregates"
+
+
+@dataclass(frozen=True, repr=False)
+class FubonCredentials:
+    """One user's Fubon login material, in memory only. Never logged, never persisted here."""
+
+    personal_id: str
+    password: str
+    cert_pfx: bytes
+    cert_password: str
+
+    def __repr__(self) -> str:
+        return "FubonCredentials(personal_id='***', password='***', cert_pfx=<bytes>, cert_password='***')"
 
 
 class FubonLoginError(QuoteProviderUnavailableError):

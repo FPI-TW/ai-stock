@@ -8,9 +8,9 @@ from uuid import UUID
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-QuoteProviderName = Literal["shioaji_demo", "in_memory"]
-REQUIRED_CURRENT_PRICE_PROVIDER: QuoteProviderName = "shioaji_demo"
-CURRENT_PRICE_SOURCE_NAME = "shioaji"
+QuoteProviderName = Literal["shioaji_demo", "in_memory", "fubon"]
+# 富邦預設連測試環境；真單環境以 FUBON_WS_URL 切換（product.md〈下單能力演進〉）。
+FUBON_TEST_WS_URL = "wss://neoapitest.fbs.com.tw/TASP/XCPXWS"
 
 # Fixed dev secret used ONLY when LOCAL_MODE=true and no JWT_ACCESS_SECRET is set,
 # so local runs / tests exercise the full auth flow without env wiring. Production
@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     # quote provider switch — single mechanism for choosing the runtime quote source.
     # V0.5 accepts: "shioaji_demo" (default, runtime) | "in_memory" (tests / CI).
     quote_provider: QuoteProviderName = Field(default="shioaji_demo", alias="QUOTE_PROVIDER")
+
+    # Fubon（per-user）：只有連線位址，帳密與憑證由使用者綁定時提供，不走 .env。
+    fubon_ws_url: str = Field(default=FUBON_TEST_WS_URL, alias="FUBON_WS_URL")
 
     # Shioaji-demo-only settings; read only when quote_provider == "shioaji_demo".
     shioaji_api_key: str | None = Field(default=None, alias="SHIOAJI_API_KEY")

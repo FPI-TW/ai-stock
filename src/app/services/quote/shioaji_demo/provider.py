@@ -44,6 +44,8 @@ logger = logging.getLogger(__name__)
 
 
 class ShioajiQuoteProvider(QuoteProvider):
+    current_price_source = "shioaji"
+
     def __init__(
         self,
         *,

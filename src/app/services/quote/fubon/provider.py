@@ -49,6 +49,8 @@ class FubonSubscriptionLimitExceeded(QuoteProviderError):
 
 
 class FubonQuoteProvider(QuoteProvider):
+    current_price_source = "fubon"
+
     def __init__(self, *, client: "FubonClient", max_subscriptions: int = DEFAULT_MAX_SUBSCRIPTIONS) -> None:
         self._client = client
         self._max = max_subscriptions

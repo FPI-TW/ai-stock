@@ -32,6 +32,8 @@ def _snapshot(symbol: str = "2330") -> QuoteSnapshot:
 
 
 class CurrentPriceOnlyProvider:
+    current_price_source = "fake"
+
     def __init__(self, snapshot: QuoteSnapshot) -> None:
         self.snapshot = snapshot
         self.current_price_symbols: list[str] = []
@@ -53,6 +55,8 @@ class CacheOnlyProvider:
 
 
 class CurrentPriceUnavailableProvider(CacheOnlyProvider):
+    current_price_source = "fake"
+
     def __init__(self, snapshot: QuoteSnapshot) -> None:
         super().__init__(snapshot)
         self.current_price_symbols: list[str] = []
