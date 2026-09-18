@@ -21,6 +21,7 @@ BUG_LOG.md
 .mcp.json
 
 # Logs
+log/
 logs/
 *.log
 # 富邦 SDK 在 cwd 自建的 log 目錄（檔名為 xxx.log.YYYYMMDD，`*.log` 擋不到）

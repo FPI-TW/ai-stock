@@ -35,6 +35,25 @@ make test-integration
 
 完整安裝、資料庫與 admin 操作見 [開發指南](docs/development.md)。
 
+## 富邦 Neo SDK wheel
+
+Fubon Neo SDK 不上 PyPI，只提供平台專用 wheel，故以本地檔案安裝：wheel 放在 `vendor/fubon/`，由 `pyproject.toml` 的 `[tool.uv.sources]` 以 path source 指向，`uv.lock` 記錄 sha256。
+
+- **下載來源**：<https://www.fbs.com.tw/TradeAPI/docs/download/download-sdk/>（公開下載，不需帳號）
+- **只保留 Linux x86_64 wheel**。macOS wheel 不進版控，因此 macOS 開發機的 venv 不會安裝 `fubon_neo`，相關測試會自動跳過，程式碼在本機需 mock。
+- wheel 是 `cp37-abi3`（stable ABI），一顆吃 Python 3.8–3.13。⚠️ 富邦不支援 3.14，升 Python 版本前先確認官方相容性表。
+
+> ⚠️ **沒有 arm64 wheel**（只有 `manylinux_2_17_x86_64`）。在 Apple Silicon 上建置容器需指定 `--platform linux/amd64`，否則 `uv sync` 會找不到可用 wheel。EC2 與 GitHub Actions runner 都是 x86_64，不受影響。
+
+升版步驟：
+
+```bash
+# 1. 從上方網址下載新版 Linux wheel，放進 vendor/fubon/ 並刪除舊的那顆
+# 2. 更新 pyproject.toml [tool.uv.sources] 的檔名，然後：
+uv lock
+make check
+```
+
 ## 文件
 
 - [文件索引與維護規則](docs/index.md)
