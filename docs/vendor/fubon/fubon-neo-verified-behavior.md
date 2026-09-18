@@ -209,11 +209,11 @@ P1 已定案**自己洗價、自己送委託，不外包富邦條件單**（見 
 ## 8. 登入 session 跨夜不失效，但行情 WS 收盤後會被斷且 SDK 不重連
 
 實測：2026-09-17 10:26 登入（41610792），單一 SDK 實例訂 2330 `aggregates`，每 60 秒打一次 `stock.get_order_results` 並記錄行情 tick，
-連續跑到 2026-09-18 08:16。重跑腳本：`fubon-test` 專案的 `probe_session_lifetime.py`、`probe_after_hours_reconnect.py`。
+連續跑到 2026-09-18 09:50，約 23.5 小時。重跑腳本：`fubon-test` 專案的 `probe_session_lifetime.py`、`probe_after_hours_reconnect.py`。
 
 | 項目 | 結果 |
 | --- | --- |
-| 交易端登入 | 22 小時內 1309 次授權查詢全數成功，`set_on_event` 沒收到任何事件；盤中、收盤後、深夜都沒被踢 |
+| 交易端登入 | 23.5 小時內授權查詢全數成功，`set_on_event` 沒收到 `300`／`301`／`304`；盤中、收盤後、深夜到隔日開盤後都沒被踢 |
 | 行情 WS | 14:05:49 被富邦端主動關閉（`WebSocketConnectionClosedException('Connection to remote host was lost.')`），`disconnect` 事件不帶 reason，代表**不是** SDK health-check 逾時 |
 | 斷線後 | tick 全停，SDK **不會**自動重連，`disconnect` 之後什麼都不做 |
 | 盤後重連 | 16:33 另一帳號（58581758）盤後可正常連上行情 WS；同一個已登入 SDK 重做 `init_realtime` → 重掛 listener → `connect` → `subscribe` 成功 |
