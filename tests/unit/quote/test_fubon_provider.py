@@ -86,6 +86,24 @@ def test_startup_logs_in_wires_handler_and_connects() -> None:
     assert client.calls == ["login", "connect"]
 
 
+def test_startup_logs_out_when_connect_realtime_fails() -> None:
+    class ConnectFailsClient(FakeClient):
+        def connect_realtime(self) -> None:
+            self.calls.append("connect")
+            raise RuntimeError("ws down")
+
+    client = ConnectFailsClient()
+    provider = FubonQuoteProvider(client=client, max_subscriptions=300)  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError):
+        provider.startup()
+
+    assert client.calls == ["login", "connect", "logout"]
+    assert client.login_alive is False
+    provider.shutdown()  # never started → no second logout
+    assert client.calls == ["login", "connect", "logout"]
+
+
 def test_shutdown_unsubscribes_everything_then_logs_out() -> None:
     provider, client = _started()
     provider.subscribe("2330")

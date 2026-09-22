@@ -67,8 +67,14 @@ class FubonQuoteProvider(QuoteProvider):
             if self._started:
                 return
             self._client.login()
-            self._client.set_quote_handler(self._on_snapshot)
-            self._client.connect_realtime()
+            try:
+                self._client.set_quote_handler(self._on_snapshot)
+                self._client.connect_realtime()
+            except Exception:
+                # Login already succeeded: release it, or shutdown() (gated on
+                # `_started`) never will and the broker keeps the session.
+                self._client.logout()
+                raise
             self._started = True
             logger.info("fubon session started")
 
