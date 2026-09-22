@@ -54,10 +54,16 @@ class QuoteProvider(Protocol):
     """Interface every concrete provider implements.
 
     The split: `subscribe` / `unsubscribe` manage the broker-side subscription set;
-    `get_quotes` reads from the in-memory snapshot cache the provider keeps fresh
-    from callbacks. `startup` / `shutdown` bracket session lifecycle and are called
-    by FastAPI's lifespan — pure providers (`InMemoryQuoteProvider`) treat them as
-    no-ops.
+    `get_quotes` reads the in-memory snapshot cache that broker callbacks update.
+    `startup` / `shutdown` bracket session lifecycle and are called by FastAPI's
+    lifespan — pure providers (`InMemoryQuoteProvider`) treat them as no-ops.
+
+    `get_quotes` returns the LAST KNOWN snapshot per symbol, never a
+    guaranteed-fresh one. A dropped market-data socket leaves the cache frozen
+    until the next update; no provider clears it on disconnect. Callers that act
+    on a price must gate on `QuoteSnapshot.quote_time` themselves — that is what
+    `QuoteEvaluator`'s freshness check exists for, and every new-track consumer
+    goes through it.
 
     `add_quote_listener` / `remove_quote_listener` let upper layers (the evaluation
     dispatcher) subscribe to / unsubscribe from snapshot updates so the broker
