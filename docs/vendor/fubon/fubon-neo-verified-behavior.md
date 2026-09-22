@@ -268,8 +268,26 @@ opcode=8 data=b'\x03\xe9Maximum number of connections reached'
 | lifespan：`provider.startup()` 之後 DB reconcile 或 dispatcher 掛載失敗 | startup 之後到 `yield` 的整段都在同一個 try/finally 內，失敗一律 `provider.shutdown()` | 同上 |
 | `provider.shutdown()` 的 unsubscribe | 每筆各自 best-effort，拋錯只記 warning，`logout()` 必跑 | 14:05 券商主動關 WS 且不重連，晚間停機時 unsubscribe 會拋 `WebSocketConnectionClosedException` |
 | `client.logout()` | 先 best-effort `ws.disconnect()` 再 `sdk.logout()`；主動關閉觸發的 `disconnect` 事件記 info 不記 warning | `logout()` 不關 WS（上表） |
+| `client.subscribe()`／`unsubscribe()` 在 WS 已斷後被呼叫 | SDK 拋自己的 `WebSocketConnectionClosedException`，client 轉成 `QuoteProviderUnavailableError("fubon", "subscribe_failed"/"unsubscribe_failed")`，不夾帶 SDK 原文；API 層只把 `QuoteProviderError` 映射成 503，否則建單掉 500、取消時 provider 的本地訂閱狀態清不掉 | 14:05 券商主動關 WS 且不重連；對齊 `ShioajiClient` 的包裝方式 |
 
-尚未驗證（合併前 Linux 冒煙一併做）：`disconnect()` 後 process 是否能不靠 `os._exit` 自然結束；登入被拒（`is_success=False`）後 SDK 是否殘留連線；`aggregates` frame 的 `lastUpdated` 在只有掛單變動（無成交）時是否前進——`quote_time` 的新鮮度判斷依賴它，挑一檔冷門股對照 `lastTrade.time` 即可。
+尚未驗證（合併前 Linux 冒煙一併做）：`disconnect()` 後 process 是否能不靠 `os._exit` 自然結束；登入被拒（`is_success=False`）後 SDK 是否殘留連線；`aggregates` frame 的 `lastUpdated` 在只有掛單變動（無成交）時是否前進（見下節）。
+
+### 行情 frame 的兩個時間：`lastUpdated` 與 `lastTrade.time`（2026-09-22，PR #95 review 定案）
+
+`aggregates` 頻道與 REST `intraday/quote` 的 frame 都同時帶兩個時間，意義不同，本專案分開用：
+
+| 欄位 | 意義 | 對應 `QuoteSnapshot` 欄位 | 用途 |
+| --- | --- | --- | --- |
+| `lastUpdated` | frame 最後更新時間，掛單（`bids`／`asks`）變動就會動 | `quote_time`（缺時退回 `received_at`；官方文件未標為必揭示欄位） | 交易時段檢查與 10 秒新鮮度閘門。觸發先讀 bid／ask，所以新鮮度看掛單時間 |
+| `lastTrade.time` | 最後一筆成交時間，沒人成交就不動 | `last_trade_time`（`lastTrade` 缺時為 `None`） | 只在 bid／ask 缺失、退用 `lastTrade.price` 時檢查：成交超過 10 秒視為無成交價 |
+
+為什麼要分：冷門股可能幾十分鐘沒成交但掛單一直在動。若新鮮度綁 `lastTrade.time`，每個 frame 都被判過期，限價／到價意圖要等下一筆成交才可能觸發（PR1 原本就是這樣寫，review 抓到）。反過來若只看 `lastUpdated`，掛單全空時會拿十分鐘前的成交價當現價，這是組長的顧慮，所以備援路徑另看成交時間。
+
+永豐對照：tick／bidask 各自帶一個時間，`quote_time` 取各 frame 時間，`last_trade_time` 只在 tick frame 更新。REST snapshot 只有一個 `ts`，兩欄同值。
+
+`lastPrice` 含試撮，觸發一律不用（既有結論）。
+
+⚠️ 未實測：`lastUpdated` 在只有掛單變動時是否真的前進，官方文件只寫「最後更新時間」。挑一檔冷門股訂閱幾分鐘，對照 `lastUpdated` 與 `lastTrade.time` 的變化即可確認；若不前進，`quote_time` 要改退回 `received_at`。
 
 對本專案的影響：行情 WS 斷線與登入斷線（`300`／`301`／`304`）都可偵測，交由同一支重建迴圈在交易時段內恢復；登入本身不需要每天重做。
 尚未驗證：登入超過 24 小時、跨週末是否失效（若失效預期會以 `300`／`301` 事件浮現）。
