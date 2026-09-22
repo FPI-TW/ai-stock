@@ -188,13 +188,20 @@ def test_login_session_limit_maps_to_session_limit_code() -> None:
     assert exc_info.value.failure_code == "session_limit"
 
 
-def test_login_without_stock_account_is_rejected() -> None:
-    sdk = FakeSdk(login_result=SimpleNamespace(is_success=True, message=None, data=[_account("futopt", "9623985")]))
+@pytest.mark.parametrize("data", [[_account("futopt", "9623985")], []], ids=["futopt_only", "empty"])
+def test_login_without_stock_account_is_rejected_and_released(data: list[SimpleNamespace]) -> None:
+    # sdk.login() already succeeded here, so the trade session exists at the
+    # broker; rejecting locally must not leak it (self._sdk is never set, so a
+    # later client.logout() would be a no-op).
+    sdk = FakeSdk(login_result=SimpleNamespace(is_success=True, message=None, data=data))
+    client = _client(sdk)
 
     with pytest.raises(FubonLoginError) as exc_info:
-        _client(sdk).login()
+        client.login()
 
     assert exc_info.value.failure_code == "login_rejected"
+    assert sdk.logged_out is True
+    assert client.login_alive is False
 
 
 # --- realtime ------------------------------------------------------------

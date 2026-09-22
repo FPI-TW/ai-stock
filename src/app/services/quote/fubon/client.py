@@ -124,6 +124,10 @@ class FubonClient:
         stock_accounts = [a for a in (result.data or []) if getattr(a, "account_type", None) == "stock"]
         if not stock_accounts:
             logger.warning("fubon login returned no stock account")
+            try:
+                sdk.logout()  # the trade login already exists at the broker; don't leak it
+            except Exception as exc:
+                logger.warning("fubon logout after rejected login raised %s", type(exc).__name__)
             raise FubonLoginError("login_rejected")
         self.account = stock_accounts[0]
         sdk.set_on_event(self._on_trade_event)
