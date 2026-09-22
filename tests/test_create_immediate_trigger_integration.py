@@ -106,6 +106,10 @@ def quote_provider() -> InMemoryQuoteProvider:
 
 
 class CurrentPriceOnlyQuoteProvider(InMemoryQuoteProvider):
+    # CurrentPriceProvider is a runtime_checkable Protocol with a data member;
+    # isinstance() requires this attribute or the market-order path never asks us.
+    current_price_source = "fake"
+
     def __init__(self, snapshot: QuoteSnapshot) -> None:
         super().__init__()
         self.snapshot = snapshot
