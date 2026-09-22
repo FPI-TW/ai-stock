@@ -218,7 +218,7 @@ P1 已定案**自己洗價、自己送委託，不外包富邦條件單**（見 
 | 斷線後 | tick 全停，SDK **不會**自動重連，`disconnect` 之後什麼都不做 |
 | 盤後重連 | 16:33 另一帳號（58581758）盤後可正常連上行情 WS；同一個已登入 SDK 重做 `init_realtime` → 重掛 listener → `connect` → `subscribe` 成功 |
 | 兩帳號並存 | 兩個測試帳號在不同行程同時登入互不影響，第二個登入不會踢掉第一個 |
-| `logout()` | 回 `True`，並觸發 `set_on_event('302', 'manual disconnect')`；logout 後 SDK 背景執行緒不會退出，腳本要自行 `os._exit` |
+| `logout()` | 回 `True`，並觸發 `set_on_event('302', 'manual disconnect')`；**只登出交易端，不關行情 WS**：`fugle_marketdata` 的 reader thread 是 non-daemon `Thread(run_forever)`，logout 後不會退出，腳本要自行 `os._exit`。要收乾淨得先 `sdk.marketdata.websocket_client.stock.disconnect()`（會 `ws.close()` 並取消 auth／ping timer） |
 
 原因：行情 WS 客戶端是 `fugle_marketdata` 2.5.0rc5 的 `WebSocketClient`，`__on_close` 只 emit `DISCONNECT_EVENT`，沒有任何重連邏輯；
 health-check 只負責偵測（30 秒 ping、連續 2 次沒回應就主動 `disconnect`），不負責恢復。
@@ -254,6 +254,22 @@ opcode=8 data=b'\x03\xe9Maximum number of connections reached'
 - 殘留 session 佔的是**行情 WS 額度**，交易端登入不受影響；額度多久釋放未測。
 - 這是「WS 連線失敗」不是「登入失效」：程式不可據此重登，否則每次重試都再多一條殘留。
 - 任何實測腳本一律 `try/finally: sdk.logout()`；用 `os._exit` 前記得 `sys.stdout.reconfigure(line_buffering=True)`，不然輸出會被吃掉。
+
+### 本專案 client 的 session 釋放規則（2026-09-22，PR #95 review 定案）
+
+上面兩節的共同結論是「登入一旦成功，任何失敗路徑都必須把 session 還給券商」，否則殘留累積到 WS 額度上限。
+`FubonClient`／`FubonQuoteProvider` 依此收斂成下列規則，每條都有對應的單元測試：
+
+| 路徑 | 規則 | 依據 |
+| --- | --- | --- |
+| `login()` 成功但 `data` 內無 `account_type == "stock"` | 先 `sdk.logout()` 再拒絕；此時 `_sdk` 尚未設定，之後的 `client.logout()` 會是 no-op，所以必須在原地釋放 | `login().data` 多筆、測試帳號期權帳戶排前面（見地雷節） |
+| `login()` 回 `is_success=False` | **不**呼叫 logout；未實測登入被拒後 SDK 是否殘留連線，也未驗證對未登入成功的 SDK 呼叫 `logout()` 的行為 | 待 Linux 冒煙 probe |
+| `provider.startup()`：login 成功、`connect_realtime()` 失敗 | 補 `client.logout()` 再 re-raise；`shutdown()` 以 `_started` 為門檻，此時仍為 False 不會替你 logout | 2026-09-18「殘留 session 會讓行情 WS 被拒」 |
+| lifespan：`provider.startup()` 之後 DB reconcile 或 dispatcher 掛載失敗 | startup 之後到 `yield` 的整段都在同一個 try/finally 內，失敗一律 `provider.shutdown()` | 同上 |
+| `provider.shutdown()` 的 unsubscribe | 每筆各自 best-effort，拋錯只記 warning，`logout()` 必跑 | 14:05 券商主動關 WS 且不重連，晚間停機時 unsubscribe 會拋 `WebSocketConnectionClosedException` |
+| `client.logout()` | 先 best-effort `ws.disconnect()` 再 `sdk.logout()`；主動關閉觸發的 `disconnect` 事件記 info 不記 warning | `logout()` 不關 WS（上表） |
+
+尚未驗證（合併前 Linux 冒煙一併做）：`disconnect()` 後 process 是否能不靠 `os._exit` 自然結束；登入被拒（`is_success=False`）後 SDK 是否殘留連線。
 
 對本專案的影響：行情 WS 斷線與登入斷線（`300`／`301`／`304`）都可偵測，交由同一支重建迴圈在交易時段內恢復；登入本身不需要每天重做。
 尚未驗證：登入超過 24 小時、跨週末是否失效（若失效預期會以 `300`／`301` 事件浮現）。
