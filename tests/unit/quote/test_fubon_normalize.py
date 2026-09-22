@@ -4,7 +4,7 @@ Pure-function tests: no SDK, no network. Payload shape follows the official
 `aggregates` channel example (docs/vendor/fubon/fubon-llms-full.txt).
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -80,3 +80,25 @@ def test_missing_last_trade_yields_none_price_and_time() -> None:
     assert snapshot.last_price is None
     assert snapshot.last_trade_time is None
     assert snapshot.bid_price == Decimal("567")
+
+
+def test_quote_time_follows_last_updated_not_last_trade() -> None:
+    # Thin stock: the book keeps moving (`lastUpdated`) while the last match is
+    # old. Freshness must follow the frame, or every book-only update is stale.
+    trade_micros = 1685338200000000  # 13:30:00
+    later_micros = trade_micros + 600_000_000  # +10 min, book-only update
+    payload = _payload_with_trade(lastUpdated=later_micros)
+
+    snapshot = aggregates_to_snapshot(payload)
+
+    assert snapshot.quote_time == datetime(2023, 5, 29, 13, 40, tzinfo=TAIPEI)
+    assert snapshot.last_trade_time == datetime(2023, 5, 29, 13, 30, tzinfo=TAIPEI)
+
+
+def test_missing_last_updated_falls_back_to_received_at() -> None:
+    # `lastUpdated` is not a mandatory field in the vendor spec.
+    snapshot = aggregates_to_snapshot(_payload_with_trade())
+
+    assert snapshot.quote_time == snapshot.received_at.astimezone(TAIPEI)
+    assert snapshot.quote_time.tzinfo is not None
+    assert snapshot.received_at.tzinfo is UTC

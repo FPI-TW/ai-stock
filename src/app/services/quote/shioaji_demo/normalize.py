@@ -116,14 +116,17 @@ def build_snapshot(
 
     Tick callbacks only know `last_price`; bidask callbacks only know `bid` / `ask`.
     We retain whatever field the other channel last set so `get_quotes` always
-    surfaces the most recent value per field.
+    surfaces the most recent value per field. `quote_time` is this frame's time;
+    `last_trade_time` only moves on tick frames (a bidask frame is not a trade).
     """
 
+    is_tick = last_price is not _UNSET
     return QuoteSnapshot(
         symbol=symbol,
         bid_price=_merge_field(bid_price, previous.bid_price if previous else None),
         ask_price=_merge_field(ask_price, previous.ask_price if previous else None),
         last_price=_merge_field(last_price, previous.last_price if previous else None),
-        last_trade_time=quote_time,
+        quote_time=quote_time,
+        last_trade_time=quote_time if is_tick else (previous.last_trade_time if previous else None),
         received_at=now_utc(),
     )

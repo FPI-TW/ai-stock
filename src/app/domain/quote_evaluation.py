@@ -9,7 +9,7 @@ live in the trigger-transaction layer.
 shape into the evaluator.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
@@ -64,6 +64,14 @@ class QuoteEvaluator:
         if now - quote.quote_time > QUOTE_FRESHNESS_THRESHOLD:
             return EvaluationResult(should_trigger=False, skip_reason=SkipReason.QUOTE_STALE)
 
+        # `last_price` is only ever a fallback for a missing book. A fresh frame
+        # does not make an old trade current (thin stock: book moves for an hour
+        # with no match), so a stale trade is treated as no trade at all.
+        if quote.last_price is not None and not self._trade_is_fresh(quote, now):
+            quote = replace(quote, last_price=None)
+            if quote.bid_price is None and quote.ask_price is None:
+                return EvaluationResult(should_trigger=False, skip_reason=SkipReason.QUOTE_STALE)
+
         validation_failure = self._validate_quote(quote)
         if validation_failure is not None:
             return EvaluationResult(should_trigger=False, skip_reason=validation_failure)
@@ -79,6 +87,10 @@ class QuoteEvaluator:
         if intent.strategy == "trailing_stop_alert":
             return self._evaluate_trailing_stop(quote, intent, now)
         return EvaluationResult(should_trigger=False, skip_reason=SkipReason.UNSUPPORTED_STRATEGY)
+
+    @staticmethod
+    def _trade_is_fresh(quote: QuoteSnapshot, now: datetime) -> bool:
+        return quote.last_trade_time is not None and now - quote.last_trade_time <= QUOTE_FRESHNESS_THRESHOLD
 
     @staticmethod
     def _validate_quote(quote: QuoteSnapshot) -> SkipReason | None:

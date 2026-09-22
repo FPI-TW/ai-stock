@@ -18,28 +18,26 @@ from fastapi import status
 class QuoteSnapshot:
     """The latest known quote for a single symbol.
 
-    `last_trade_time` is the broker-supplied timestamp of the last trade (Asia/Taipei,
-    tz-aware), or None when the frame carries no trade yet (pre-open book-only frames).
-    `received_at` is when the provider observed it locally (UTC, tz-aware).
-    Either field being naive is a bug — providers must attach timezone info before
-    constructing this dataclass.
+    Two broker-supplied timestamps, one per price kind (Asia/Taipei, tz-aware):
+
+    - `quote_time`: when this frame (the book: bid/ask) was last updated. Session
+      and freshness checks use it, because triggers read bid/ask first.
+    - `last_trade_time`: when `last_price` actually traded, or None before the
+      first match of the day. A thin stock can have a fresh book and a trade from
+      an hour ago; the evaluator only accepts `last_price` as a fallback when this
+      is fresh too.
+
+    `received_at` is when the provider observed the frame locally (UTC, tz-aware).
+    Any of these being naive is a bug — providers attach timezone info first.
     """
 
     symbol: str
     bid_price: Decimal | None
     ask_price: Decimal | None
     last_price: Decimal | None
+    quote_time: datetime
     last_trade_time: datetime | None
     received_at: datetime
-
-    @property
-    def quote_time(self) -> datetime:
-        """Timestamp to attribute this quote to: the last trade if any, else when we received it.
-
-        Session checks, freshness checks and notifications all want *a* time; a
-        book-only frame is still a quote we observed at `received_at`.
-        """
-        return self.last_trade_time if self.last_trade_time is not None else self.received_at
 
 
 QuoteListener = Callable[[QuoteSnapshot], None]

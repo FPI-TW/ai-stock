@@ -58,6 +58,7 @@ def _snapshot(symbol: str = "2330") -> QuoteSnapshot:
         bid_price=Decimal("590"),
         ask_price=Decimal("591"),
         last_price=Decimal("590.5"),
+        quote_time=datetime(2026, 5, 26, 10, 30, tzinfo=TAIPEI),
         last_trade_time=datetime(2026, 5, 26, 10, 30, tzinfo=TAIPEI),
         received_at=datetime(2026, 5, 26, 2, 30, 1, tzinfo=UTC),
     )
@@ -87,6 +88,7 @@ def test_current_price_returns_shioaji_snapshot_for_allowed_symbol(monkeypatch: 
             "bidPrice": "590.00",
             "askPrice": "591.00",
             "quoteTime": "2026-05-26T10:30:00+08:00",
+            "lastTradeTime": "2026-05-26T10:30:00+08:00",
             "receivedAt": "2026-05-26T02:30:01Z",
             "source": "shioaji",
             "testFeature": True,

@@ -42,7 +42,7 @@
 
 - 所有時間以 timezone-aware datetime 處理，DB 存 UTC；台股市場規則使用 Asia/Taipei。
 - day intent 在盤前建立為 `scheduled`，盤中建立為 `active`；盤後或週末建立時由 trading session service 選定下一個平日。目前沒有正式市場日曆，不處理國定假日或臨時休市。
-- evaluator 只接受一般交易時段內、相對目前時間不超過 10 秒的行情。
+- evaluator 只接受一般交易時段內、相對目前時間不超過 10 秒的行情（以 `quote_time`，即券商 frame 時間判斷）。`last_price` 只在 bid／ask 缺失時作為備援，且其成交時間也必須在 10 秒內，否則視為無成交價；冷門股只有掛單在動時仍可依 bid／ask 觸發。
 - 任一價格非正數、bid 大於 ask 或 bid／ask／last 全缺時不觸發。
 - 建單時已符合條件可在建立 transaction 內立即觸發；取不到行情不阻擋建單，之後由 dispatcher 評估。
 

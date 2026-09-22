@@ -76,6 +76,7 @@ def test_build_snapshot_keeps_previous_fields_on_partial_update() -> None:
         bid_price=Decimal("589"),
         ask_price=Decimal("591"),
         last_price=Decimal("590"),
+        quote_time=quote_time,
         last_trade_time=quote_time,
         received_at=datetime.now(tz=UTC),
     )
@@ -94,6 +95,7 @@ def test_build_snapshot_clears_bidask_when_bidask_channel_reports_missing_values
         bid_price=Decimal("589"),
         ask_price=Decimal("591"),
         last_price=Decimal("590"),
+        quote_time=quote_time,
         last_trade_time=quote_time,
         received_at=datetime.now(tz=UTC),
     )
@@ -105,3 +107,27 @@ def test_build_snapshot_clears_bidask_when_bidask_channel_reports_missing_values
     assert result.ask_price is None
     assert result.last_price == Decimal("590")
     assert result.quote_time == later
+
+
+def test_build_snapshot_bidask_frame_keeps_previous_trade_time_and_tick_moves_it() -> None:
+    trade_time = datetime(2026, 5, 11, 10, 30, tzinfo=TAIPEI)
+    previous = QuoteSnapshot(
+        symbol="2330",
+        bid_price=Decimal("589"),
+        ask_price=Decimal("591"),
+        last_price=Decimal("590"),
+        quote_time=trade_time,
+        last_trade_time=trade_time,
+        received_at=datetime.now(tz=UTC),
+    )
+    later = datetime(2026, 5, 11, 10, 31, tzinfo=TAIPEI)
+
+    bidask = build_snapshot(symbol="2330", previous=previous, bid_price=Decimal("590"), quote_time=later)
+    assert bidask.quote_time == later
+    assert bidask.last_trade_time == trade_time  # a bidask frame is not a trade
+
+    tick = build_snapshot(symbol="2330", previous=bidask, last_price=Decimal("590.5"), quote_time=later)
+    assert tick.last_trade_time == later
+
+    first = build_snapshot(symbol="2330", previous=None, bid_price=Decimal("1"), quote_time=later)
+    assert first.last_trade_time is None

@@ -27,6 +27,7 @@ def _make(
         bid_price=Decimal(bid) if bid is not None else None,
         ask_price=Decimal(ask) if ask is not None else None,
         last_price=Decimal(last) if last is not None else None,
+        quote_time=quote_time,
         last_trade_time=quote_time,
         received_at=datetime.now(tz=ZoneInfo("UTC")),
     )
@@ -92,6 +93,7 @@ def _make_without_trade(*, received_at: datetime) -> QuoteSnapshot:
         bid_price=Decimal("590.0000"),
         ask_price=Decimal("591.0000"),
         last_price=None,
+        quote_time=received_at,
         last_trade_time=None,
         received_at=received_at,
     )

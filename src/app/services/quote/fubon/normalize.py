@@ -8,6 +8,8 @@ Rules (docs/orders/per-user-broker-sessions.md, PR1):
 - `last_price` comes from `lastTrade.price`; `lastPrice` includes pre-open trial
   matching and must not be used for triggers.
 - Top of book is `bids[0]` / `asks[0]`.
+- `quote_time` is the frame's `lastUpdated` (moves on book-only updates, which is
+  what keeps thin stocks evaluable); `last_trade_time` is `lastTrade.time`.
 - Timestamps are epoch microseconds; expose them as tz-aware Asia/Taipei.
 """
 
@@ -42,13 +44,16 @@ def _top_of_book(levels: Any) -> Decimal | None:
 
 
 def aggregates_to_snapshot(data: dict[str, Any]) -> QuoteSnapshot:
+    received_at = datetime.now(tz=UTC)
     last_trade = data.get("lastTrade") or {}
     trade_time = last_trade.get("time")
+    last_updated = data.get("lastUpdated")  # not a mandatory field in the vendor spec
     return QuoteSnapshot(
         symbol=data["symbol"],
         bid_price=_top_of_book(data.get("bids")),
         ask_price=_top_of_book(data.get("asks")),
         last_price=_to_decimal(last_trade.get("price")),
+        quote_time=_micros_to_taipei(last_updated) if last_updated is not None else received_at.astimezone(_TAIPEI_TZ),
         last_trade_time=_micros_to_taipei(trade_time) if trade_time is not None else None,
-        received_at=datetime.now(tz=UTC),
+        received_at=received_at,
     )

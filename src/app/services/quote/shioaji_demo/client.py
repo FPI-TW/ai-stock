@@ -135,12 +135,14 @@ class ShioajiClient:
 
         snapshot = snapshots[0]
         code = str(getattr(snapshot, "code", symbol) or symbol)
+        snapshot_time = timestamp_to_taipei(getattr(snapshot, "ts", None))
         return QuoteSnapshot(
             symbol=code,
             bid_price=to_decimal(getattr(snapshot, "buy_price", None)),
             ask_price=to_decimal(getattr(snapshot, "sell_price", None)),
             last_price=to_decimal(getattr(snapshot, "close", None)),
-            last_trade_time=timestamp_to_taipei(getattr(snapshot, "ts", None)),
+            quote_time=snapshot_time,
+            last_trade_time=snapshot_time,  # the REST snapshot carries one ts for both
             received_at=now_utc(),
         )
 

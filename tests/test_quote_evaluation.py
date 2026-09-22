@@ -50,18 +50,25 @@ def make_intent(
     )
 
 
+_SAME_AS_QUOTE_TIME = object()
+
+
 def _snapshot(
     *,
     quote_time: datetime = SESSION_QUOTE_TIME,
     bid_price: Decimal | None = None,
     ask_price: Decimal | None = None,
     last_price: Decimal | None = None,
+    last_trade_time: datetime | None | object = _SAME_AS_QUOTE_TIME,
 ) -> QuoteSnapshot:
     # received_at defaults to quote_time — the evaluator never inspects it,
     # so tests only differentiate when a specific value matters.
+    trade_time = quote_time if last_trade_time is _SAME_AS_QUOTE_TIME else last_trade_time
+    assert trade_time is None or isinstance(trade_time, datetime)
     return QuoteSnapshot(
         symbol="2330",
-        last_trade_time=quote_time,
+        quote_time=quote_time,
+        last_trade_time=trade_time,
         received_at=quote_time,
         bid_price=bid_price,
         ask_price=ask_price,
@@ -457,3 +464,52 @@ class TestTriggerInvariant:
 
         # 掃描確實踩到觸發分支（否則不變量恆真、測試空過）。
         assert triggered > 0
+
+
+def test_fresh_book_triggers_even_when_last_trade_is_old(evaluator: QuoteEvaluator) -> None:
+    # Thin stock: ask reached the target an hour after the last match. Buy-side
+    # intents read the ask, so the trade's age must not block them.
+    quote = _snapshot(
+        ask_price=Decimal("99"),
+        last_price=Decimal("120"),
+        last_trade_time=SESSION_QUOTE_TIME - timedelta(hours=1),
+    )
+
+    result = evaluator.evaluate(quote, make_intent(target=Decimal("100")), SESSION_NOW)
+
+    assert result.should_trigger is True
+    assert result.trigger_reference_price_type == "ask"
+
+
+def test_stale_last_trade_cannot_stand_in_for_missing_book(evaluator: QuoteEvaluator) -> None:
+    # No book at all and the only price is an old trade → stale, not a fallback trigger.
+    quote = _snapshot(last_price=Decimal("99"), last_trade_time=SESSION_QUOTE_TIME - timedelta(seconds=11))
+
+    result = evaluator.evaluate(quote, make_intent(target=Decimal("100")), SESSION_NOW)
+
+    assert result.should_trigger is False
+    assert result.skip_reason == SkipReason.QUOTE_STALE
+
+
+def test_fresh_last_trade_still_falls_back_when_book_is_missing(evaluator: QuoteEvaluator) -> None:
+    quote = _snapshot(last_price=Decimal("99"))
+
+    result = evaluator.evaluate(quote, make_intent(target=Decimal("100")), SESSION_NOW)
+
+    assert result.should_trigger is True
+    assert result.fallback_used is True
+
+
+def test_stale_last_trade_is_ignored_when_other_side_of_book_exists(evaluator: QuoteEvaluator) -> None:
+    # Buy intent, ask missing, bid present, trade stale: no fallback, no trigger,
+    # and not reported as stale because the frame itself is current.
+    quote = _snapshot(
+        bid_price=Decimal("98"),
+        last_price=Decimal("99"),
+        last_trade_time=SESSION_QUOTE_TIME - timedelta(minutes=5),
+    )
+
+    result = evaluator.evaluate(quote, make_intent(target=Decimal("100")), SESSION_NOW)
+
+    assert result.should_trigger is False
+    assert result.skip_reason == SkipReason.CONDITION_NOT_MET

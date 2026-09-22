@@ -63,6 +63,7 @@ def _snapshot(symbol: str = "2330", last: str = "568") -> QuoteSnapshot:
         bid_price=Decimal("567"),
         ask_price=Decimal("568"),
         last_price=Decimal(last),
+        quote_time=datetime(2026, 5, 11, 10, 30, tzinfo=TAIPEI),
         last_trade_time=datetime(2026, 5, 11, 10, 30, tzinfo=TAIPEI),
         received_at=datetime.now(tz=UTC),
     )

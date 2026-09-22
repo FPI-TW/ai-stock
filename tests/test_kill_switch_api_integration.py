@@ -120,6 +120,7 @@ def admin_client(quote_provider: InMemoryQuoteProvider) -> TestClient:
 def _snapshot(ask: str = "99.5") -> QuoteSnapshot:
     return QuoteSnapshot(
         symbol="2330",
+        quote_time=SESSION_QUOTE_TIME,
         last_trade_time=SESSION_QUOTE_TIME,
         received_at=SESSION_QUOTE_TIME,
         ask_price=Decimal(ask),

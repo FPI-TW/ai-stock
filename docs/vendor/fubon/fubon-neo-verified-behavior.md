@@ -269,7 +269,7 @@ opcode=8 data=b'\x03\xe9Maximum number of connections reached'
 | `provider.shutdown()` 的 unsubscribe | 每筆各自 best-effort，拋錯只記 warning，`logout()` 必跑 | 14:05 券商主動關 WS 且不重連，晚間停機時 unsubscribe 會拋 `WebSocketConnectionClosedException` |
 | `client.logout()` | 先 best-effort `ws.disconnect()` 再 `sdk.logout()`；主動關閉觸發的 `disconnect` 事件記 info 不記 warning | `logout()` 不關 WS（上表） |
 
-尚未驗證（合併前 Linux 冒煙一併做）：`disconnect()` 後 process 是否能不靠 `os._exit` 自然結束；登入被拒（`is_success=False`）後 SDK 是否殘留連線。
+尚未驗證（合併前 Linux 冒煙一併做）：`disconnect()` 後 process 是否能不靠 `os._exit` 自然結束；登入被拒（`is_success=False`）後 SDK 是否殘留連線；`aggregates` frame 的 `lastUpdated` 在只有掛單變動（無成交）時是否前進——`quote_time` 的新鮮度判斷依賴它，挑一檔冷門股對照 `lastTrade.time` 即可。
 
 對本專案的影響：行情 WS 斷線與登入斷線（`300`／`301`／`304`）都可偵測，交由同一支重建迴圈在交易時段內恢復；登入本身不需要每天重做。
 尚未驗證：登入超過 24 小時、跨週末是否失效（若失效預期會以 `300`／`301` 事件浮現）。
