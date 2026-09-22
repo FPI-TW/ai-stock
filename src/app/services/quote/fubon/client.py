@@ -100,6 +100,7 @@ class FubonClient:
         self._sdk: Any | None = None
         self._quote_handler: QuoteHandler | None = None
         self._channels: dict[str, str] = {}
+        self._closing_realtime = False
         self.account: Any | None = None
         self.login_alive = False
         self.realtime_connected = False
@@ -146,6 +147,16 @@ class FubonClient:
         sdk = self._sdk
         if sdk is None:
             return
+        # sdk.logout() only emits event 302 (verified live); the market-data socket
+        # and its non-daemon reader thread stay up until we close them ourselves,
+        # which blocks interpreter exit and leaks a WS slot on in-process restart.
+        marketdata = getattr(sdk, "marketdata", None)
+        if marketdata is not None:
+            self._closing_realtime = True
+            try:
+                marketdata.websocket_client.stock.disconnect()
+            except Exception as exc:  # best-effort: the broker may already have closed it
+                logger.warning("fubon realtime disconnect raised %s", type(exc).__name__)
         try:
             sdk.logout()
         except Exception as exc:  # pragma: no cover - best-effort teardown
@@ -171,6 +182,7 @@ class FubonClient:
         sdk = self._require_sdk()
         mode = self._realtime_mode if self._realtime_mode is not None else _default_realtime_mode()
         self._channels = {}
+        self._closing_realtime = False
         self.realtime_connected = False
         try:
             sdk.init_realtime(mode)  # exchanges the trade login for a market-data token
@@ -216,7 +228,10 @@ class FubonClient:
 
     def _on_disconnect(self, *_args: Any) -> None:
         self.realtime_connected = False
-        logger.warning("fubon realtime websocket disconnected")
+        if self._closing_realtime:
+            logger.info("fubon realtime websocket closed by logout")
+        else:
+            logger.warning("fubon realtime websocket disconnected")
 
     def _on_error(self, *_args: Any) -> None:
         logger.warning("fubon realtime websocket error")

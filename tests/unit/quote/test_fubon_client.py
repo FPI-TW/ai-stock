@@ -22,13 +22,20 @@ class FakeWs:
         self.subscribed: list[dict[str, str]] = []
         self.unsubscribed: list[dict[str, str]] = []
         self.connect_calls = 0
+        self.disconnect_calls = 0
         self._next_channel = 0
+        self.owner: FakeSdk | None = None
 
     def on(self, event: str, handler: Callable[..., None]) -> None:
         self.handlers[event] = handler
 
     def connect(self) -> None:
         self.connect_calls += 1
+
+    def disconnect(self) -> None:
+        self.disconnect_calls += 1
+        if self.owner is not None:
+            self.owner.teardown_order.append("disconnect")
 
     def subscribe(self, params: dict[str, str]) -> None:
         self.subscribed.append(params)
@@ -61,6 +68,7 @@ class FakeSdk:
         self.init_realtime_calls: list[object] = []
         self.ws_instances: list[FakeWs] = []
         self.logged_out = False
+        self.teardown_order: list[str] = []
         self._quote_payload = quote_payload
         self._quote_error = quote_error
         self.marketdata: Any = None
@@ -78,6 +86,7 @@ class FakeSdk:
     def init_realtime(self, mode: object) -> None:
         self.init_realtime_calls.append(mode)
         ws = FakeWs()
+        ws.owner = self
         self.ws_instances.append(ws)
         sdk = self
 
@@ -95,6 +104,7 @@ class FakeSdk:
 
     def logout(self) -> bool:
         self.logged_out = True
+        self.teardown_order.append("logout")
         return True
 
     @property
@@ -339,6 +349,50 @@ def test_logout_calls_sdk_and_marks_login_dead() -> None:
 
     assert sdk.logged_out is True
     assert client.login_alive is False
+
+
+def test_logout_closes_realtime_socket_before_sdk_logout() -> None:
+    # Verified live: sdk.logout() only emits event 302 and leaves the market-data
+    # socket (non-daemon reader thread) open; we must close it ourselves.
+    sdk = FakeSdk(login_result=_ok_login())
+    client = _client(sdk)
+    client.login()
+    client.connect_realtime()
+
+    client.logout()
+
+    assert sdk.ws.disconnect_calls == 1
+    assert sdk.teardown_order == ["disconnect", "logout"]
+    assert client.realtime_connected is False
+
+
+def test_logout_still_logs_out_when_disconnect_raises() -> None:
+    sdk = FakeSdk(login_result=_ok_login())
+    client = _client(sdk)
+    client.login()
+    client.connect_realtime()
+
+    def boom() -> None:
+        raise RuntimeError("socket already gone")
+
+    sdk.ws.disconnect = boom  # type: ignore[method-assign]
+
+    client.logout()
+
+    assert sdk.logged_out is True
+    assert client.login_alive is False
+
+
+def test_logout_without_realtime_does_not_touch_marketdata() -> None:
+    # BUG-009 path: login succeeded, connect_realtime never ran → no marketdata yet.
+    sdk = FakeSdk(login_result=_ok_login())
+    client = _client(sdk)
+    client.login()
+
+    client.logout()
+
+    assert sdk.logged_out is True
+    assert sdk.ws_instances == []
 
 
 def test_ws_connect_failure_keeps_login_alive() -> None:
