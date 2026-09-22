@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from app.services.quote.base import QuoteProviderUnavailableError, QuoteSnapshot
+from app.services.quote.base import QuoteProviderError, QuoteProviderUnavailableError, QuoteSnapshot
 from app.services.quote.fubon.client import FubonClient, FubonLoginError
 
 PFX_BYTES = b"not-really-a-pfx"
@@ -205,6 +205,30 @@ def test_login_without_stock_account_is_rejected_and_released(data: list[SimpleN
 
 
 # --- realtime ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("method", ["subscribe", "unsubscribe"])
+def test_socket_failure_on_subscribe_paths_maps_to_provider_error(method: str) -> None:
+    # After the broker closes the socket (~14:05) the SDK raises its own
+    # WebSocketConnectionClosedException. The API layer only maps
+    # QuoteProviderError to 503, so the client must translate here.
+    sdk = FakeSdk(login_result=_ok_login())
+    client = _client(sdk)
+    client.login()
+    client.connect_realtime()
+    client.subscribe("2330")  # so unsubscribe has a channel id to send
+    native = RuntimeError("Connection to remote host was lost.")
+
+    def boom(_params: dict[str, str]) -> None:
+        raise native
+
+    setattr(sdk.ws, method, boom)
+
+    with pytest.raises(QuoteProviderUnavailableError) as exc_info:
+        getattr(client, method)("2330")
+
+    assert exc_info.value.__cause__ is native
+    assert isinstance(exc_info.value, QuoteProviderError)
 
 
 def test_connect_realtime_subscribes_and_tracks_channel_ids() -> None:

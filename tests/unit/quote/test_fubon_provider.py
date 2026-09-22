@@ -202,6 +202,25 @@ def test_unsubscribe_drops_cache_and_is_noop_when_unknown() -> None:
         provider.get_quotes(["2330"])
 
 
+def test_unsubscribe_clears_local_state_when_client_reports_provider_error() -> None:
+    class UnsubscribeUnavailableClient(FakeClient):
+        def unsubscribe(self, symbol: str) -> None:
+            self.calls.append(f"unsub:{symbol}")
+            raise QuoteProviderUnavailableError("fubon", "unsubscribe_failed")
+
+    client = UnsubscribeUnavailableClient()
+    provider = FubonQuoteProvider(client=client, max_subscriptions=300)  # type: ignore[arg-type]
+    provider.startup()
+    provider.subscribe("2330")
+    client.push(_snapshot())
+
+    provider.unsubscribe("2330")  # must not raise
+
+    assert provider.active_subscriptions() == set()
+    with pytest.raises(QuoteUnavailableError):
+        provider.get_quotes(["2330"])
+
+
 def test_get_current_price_delegates_to_rest() -> None:
     provider, client = _started()
     client.rest_snapshot = _snapshot(symbol="2317")

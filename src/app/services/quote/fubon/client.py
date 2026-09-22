@@ -29,7 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.services.quote.base import QuoteProviderUnavailableError, QuoteSnapshot
+from app.services.quote.base import QuoteProviderError, QuoteProviderUnavailableError, QuoteSnapshot
 from app.services.quote.fubon.normalize import aggregates_to_snapshot
 
 logger = logging.getLogger(__name__)
@@ -209,14 +209,29 @@ class FubonClient:
         self.realtime_connected = True
 
     def subscribe(self, symbol: str) -> None:
-        self._ws().subscribe({"channel": _CHANNEL, "symbol": symbol})
+        try:
+            self._ws().subscribe({"channel": _CHANNEL, "symbol": symbol})
+        except QuoteProviderError:
+            raise  # _require_sdk already maps "not logged in"
+        except Exception as exc:
+            # Closed socket (broker drops it ~14:05) raises the SDK's own type;
+            # the API only maps QuoteProviderError to 503, so translate here.
+            logger.warning("fubon subscribe raised %s symbol=%s", type(exc).__name__, symbol)
+            raise QuoteProviderUnavailableError("fubon", "subscribe_failed") from exc
 
     def unsubscribe(self, symbol: str) -> None:
         # The provider owns the subscription set; here we only need the channel id
         # the broker handed us in the `subscribed` event for this socket.
         channel_id = self._channels.pop(symbol, None)
-        if channel_id is not None:
+        if channel_id is None:
+            return
+        try:
             self._ws().unsubscribe({"id": channel_id})
+        except QuoteProviderError:
+            raise
+        except Exception as exc:
+            logger.warning("fubon unsubscribe raised %s symbol=%s", type(exc).__name__, symbol)
+            raise QuoteProviderUnavailableError("fubon", "unsubscribe_failed") from exc
 
     def _on_message(self, raw: Any) -> None:
         try:
