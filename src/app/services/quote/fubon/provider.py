@@ -83,7 +83,13 @@ class FubonQuoteProvider(QuoteProvider):
             if not self._started:
                 return
             for symbol in list(self._subscribed):
-                self._client.unsubscribe(symbol)
+                try:
+                    self._client.unsubscribe(symbol)
+                except Exception:
+                    # The broker closes the market-data socket itself after
+                    # hours (verified ~14:05); unsubscribe on shutdown is
+                    # best-effort, logout below is the step that must run.
+                    logger.warning("fubon unsubscribe on shutdown failed symbol=%s", symbol)
             self._client.logout()
             self._subscribed.clear()
             self._snapshots.clear()

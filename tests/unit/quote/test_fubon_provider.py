@@ -104,6 +104,27 @@ def test_startup_logs_out_when_connect_realtime_fails() -> None:
     assert client.calls == ["login", "connect", "logout"]
 
 
+def test_shutdown_still_logs_out_when_unsubscribe_raises() -> None:
+    class UnsubscribeFailsClient(FakeClient):
+        def unsubscribe(self, symbol: str) -> None:
+            self.calls.append(f"unsub:{symbol}")
+            raise RuntimeError("Connection to remote host was lost.")
+
+    client = UnsubscribeFailsClient()
+    provider = FubonQuoteProvider(client=client, max_subscriptions=300)  # type: ignore[arg-type]
+    provider.startup()
+    provider.subscribe("2330")
+    provider.subscribe("2317")
+    client.calls.clear()
+
+    provider.shutdown()  # must not raise
+
+    assert client.calls[-1] == "logout"
+    assert set(client.calls[:-1]) == {"unsub:2330", "unsub:2317"}
+    assert client.login_alive is False
+    assert provider.active_subscriptions() == set()
+
+
 def test_shutdown_unsubscribes_everything_then_logs_out() -> None:
     provider, client = _started()
     provider.subscribe("2330")
