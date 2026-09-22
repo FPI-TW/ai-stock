@@ -36,7 +36,7 @@ class FakeWs:
     def disconnect(self) -> None:
         self.disconnect_calls += 1
         if self.owner is not None:
-            self.owner.teardown_order.append("disconnect")
+            self.owner.call_order.append("disconnect")
 
     def subscribe(self, params: dict[str, str]) -> None:
         self.subscribed.append(params)
@@ -69,7 +69,7 @@ class FakeSdk:
         self.init_realtime_calls: list[object] = []
         self.ws_instances: list[FakeWs] = []
         self.logged_out = False
-        self.teardown_order: list[str] = []
+        self.call_order: list[str] = []
         self._quote_payload = quote_payload
         self._quote_error = quote_error
         self.marketdata: Any = None
@@ -85,6 +85,7 @@ class FakeSdk:
         self.on_event = callback
 
     def init_realtime(self, mode: object) -> None:
+        self.call_order.append("init_realtime")
         self.init_realtime_calls.append(mode)
         ws = FakeWs()
         ws.owner = self
@@ -105,7 +106,7 @@ class FakeSdk:
 
     def logout(self) -> bool:
         self.logged_out = True
-        self.teardown_order.append("logout")
+        self.call_order.append("logout")
         return True
 
     @property
@@ -344,6 +345,24 @@ def test_undocumented_event_names_are_ignored() -> None:
     assert received == []
 
 
+def test_reconnect_closes_previous_socket_before_opening_a_new_one() -> None:
+    # `init_realtime` only rebinds sdk.marketdata: the previous WebSocketClient
+    # keeps its reader thread and our registered _on_message, so every frame
+    # would arrive twice and the dead socket would still hold a WS slot.
+    sdk = FakeSdk(login_result=_ok_login())
+    client = _client(sdk)
+    client.login()
+    client.connect_realtime()
+    first_ws = sdk.ws
+    assert sdk.call_order == ["init_realtime"]  # nothing to close on the first connect
+
+    client.connect_realtime()
+
+    assert sdk.ws is not first_ws
+    assert first_ws.disconnect_calls == 1
+    assert sdk.call_order == ["init_realtime", "disconnect", "init_realtime"]
+
+
 def test_disconnect_only_flags_and_connect_again_rebuilds_channel_map() -> None:
     # Resubscribing is the provider's job (it owns the subscription set); the
     # client only has to come back with a fresh websocket and an empty channel map.
@@ -469,7 +488,7 @@ def test_logout_closes_realtime_socket_before_sdk_logout() -> None:
     client.logout()
 
     assert sdk.ws.disconnect_calls == 1
-    assert sdk.teardown_order == ["disconnect", "logout"]
+    assert sdk.call_order[-2:] == ["disconnect", "logout"]
     assert client.realtime_connected is False
 
 

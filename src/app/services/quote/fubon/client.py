@@ -155,13 +155,7 @@ class FubonClient:
         # sdk.logout() only emits event 302 (verified live); the market-data socket
         # and its non-daemon reader thread stay up until we close them ourselves,
         # which blocks interpreter exit and leaks a WS slot on in-process restart.
-        marketdata = getattr(sdk, "marketdata", None)
-        if marketdata is not None:
-            self._closing_realtime = True
-            try:
-                marketdata.websocket_client.stock.disconnect()
-            except Exception as exc:  # best-effort: the broker may already have closed it
-                logger.warning("fubon realtime disconnect raised %s", type(exc).__name__)
+        self._close_realtime_socket(sdk)
         try:
             sdk.logout()
         except Exception as exc:  # pragma: no cover - best-effort teardown
@@ -187,8 +181,12 @@ class FubonClient:
         sdk = self._require_sdk()
         mode = self._realtime_mode if self._realtime_mode is not None else _default_realtime_mode()
         self._channels = {}
-        self._closing_realtime = False
         self.realtime_connected = False
+        # `init_realtime` below only rebinds `sdk.marketdata`. Without this the
+        # previous socket would keep its reader thread and its registered
+        # `_on_message`, delivering every frame twice and holding a WS slot.
+        self._close_realtime_socket(sdk)
+        self._closing_realtime = False
         try:
             sdk.init_realtime(mode)  # exchanges the trade login for a market-data token
         except Exception as exc:
@@ -276,6 +274,21 @@ class FubonClient:
         return aggregates_to_snapshot(payload)
 
     # --- internals -----------------------------------------------------------
+
+    def _close_realtime_socket(self, sdk: Any) -> None:
+        """Best-effort close of the market-data socket this SDK currently holds.
+
+        No-op before the first `init_realtime`. Sets `_closing_realtime` so the
+        resulting `disconnect` event is logged as ours, not as a broker-side drop.
+        """
+        marketdata = getattr(sdk, "marketdata", None)
+        if marketdata is None:
+            return
+        self._closing_realtime = True
+        try:
+            marketdata.websocket_client.stock.disconnect()
+        except Exception as exc:  # best-effort: the broker may already have closed it
+            logger.warning("fubon realtime disconnect raised %s", type(exc).__name__)
 
     def _require_sdk(self) -> Any:
         if self._sdk is None:
