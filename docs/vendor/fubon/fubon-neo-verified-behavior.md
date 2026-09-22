@@ -223,6 +223,9 @@ P1 已定案**自己洗價、自己送委託，不外包富邦條件單**（見 
 原因：行情 WS 客戶端是 `fugle_marketdata` 2.5.0rc5 的 `WebSocketClient`，`__on_close` 只 emit `DISCONNECT_EVENT`，沒有任何重連邏輯；
 health-check 只負責偵測（30 秒 ping、連續 2 次沒回應就主動 `disconnect`），不負責恢復。
 
+同一個 `WebSocketClient.connect()` 是**無 sleep 的 busy-spin**：起 reader thread 後 `while True:` 輪詢 `auth_status`，直到 auth ack 或 `auth_timer`（約 5 秒）逾時，期間該 thread 滿載搶 GIL。
+呼叫端不能把它放在任何 lock 內，也不能直接在 asyncio event loop 上呼叫。
+
 ### 交易端事件代碼（`sdk.set_on_event(callback)`，官方文件「事件代碼 (Event Code)」）
 
 | 代碼 | 意義 | 實測 |
@@ -268,6 +271,7 @@ opcode=8 data=b'\x03\xe9Maximum number of connections reached'
 | lifespan：`provider.startup()` 之後 DB reconcile 或 dispatcher 掛載失敗 | startup 之後到 `yield` 的整段都在同一個 try/finally 內，失敗一律 `provider.shutdown()` | 同上 |
 | `provider.shutdown()` 的 unsubscribe | 每筆各自 best-effort，拋錯只記 warning，`logout()` 必跑 | 14:05 券商主動關 WS 且不重連，晚間停機時 unsubscribe 會拋 `WebSocketConnectionClosedException` |
 | `client.logout()` | 先 best-effort `ws.disconnect()` 再 `sdk.logout()`；主動關閉觸發的 `disconnect` 事件記 info 不記 warning | `logout()` 不關 WS（上表） |
+| `provider.startup()`／`reconnect_realtime()` 的 login／connect | 在 lock 外執行；lock 內只設 `_connecting` 旗標（已在連線中則直接返回，防重入）。連線期間 `subscribe()` 只記錄 `_subscribed` 不打 client，重連完成後在 lock 內一次重送整組，每檔恰好一次。PR2 的重連迴圈須以 `asyncio.to_thread` 呼叫 | `connect()` 是 busy-spin（上節）；否則 `get_quotes`／`subscribe`／`_on_snapshot` 全部排隊最長 5 秒，N 個使用者就是 N×5 秒 |
 | `client.subscribe()`／`unsubscribe()` 在 WS 已斷後被呼叫 | SDK 拋自己的 `WebSocketConnectionClosedException`，client 轉成 `QuoteProviderUnavailableError("fubon", "subscribe_failed"/"unsubscribe_failed")`，不夾帶 SDK 原文；API 層只把 `QuoteProviderError` 映射成 503，否則建單掉 500、取消時 provider 的本地訂閱狀態清不掉 | 14:05 券商主動關 WS 且不重連；對齊 `ShioajiClient` 的包裝方式 |
 
 尚未驗證（合併前 Linux 冒煙一併做）：`disconnect()` 後 process 是否能不靠 `os._exit` 自然結束；登入被拒（`is_success=False`）後 SDK 是否殘留連線；`aggregates` frame 的 `lastUpdated` 在只有掛單變動（無成交）時是否前進（見下節）。
