@@ -226,6 +226,14 @@ health-check 只負責偵測（30 秒 ping、連續 2 次沒回應就主動 `dis
 同一個 `WebSocketClient.connect()` 是**無 sleep 的 busy-spin**：起 reader thread 後 `while True:` 輪詢 `auth_status`，直到 auth ack 或 `auth_timer`（約 5 秒）逾時，期間該 thread 滿載搶 GIL。
 呼叫端不能把它放在任何 lock 內，也不能直接在 asyncio event loop 上呼叫。
 
+行情 callback 拋例外不會弄斷連線，但會被記成假的連線錯誤：`pyee` 的 `_emit_run` 不攔例外，一路傳回 `websocket-client` 的 `_callback`，
+那裡 catch 後改呼叫 `on_error`，於是 `fugle` emit `ERROR_EVENT`、我方 `_on_error` 記一條「websocket error」——但 socket 與 reader thread 都還活著，真正發生的只是那一筆 frame 被丟掉。
+另外 `fugle.__on_message` 是**先** emit `MESSAGE_EVENT` 才處理 `authenticated`／`error`，所以 handler 拋例外還會跳過 SDK 自己的認證記帳。
+結論：我方的行情 handler 必須自己攔下所有例外，不得拋回 SDK thread。
+
+WS 事件名稱以廠商文件為準，只有 `authenticated`、`data`、`error`、`heartbeat`、`pong`、`subscribed`、`unsubscribed` 七種；
+文件查無 `snapshot` 事件（PR1 曾誤加該分支，2026-09-22 移除）。
+
 ### 交易端事件代碼（`sdk.set_on_event(callback)`，官方文件「事件代碼 (Event Code)」）
 
 | 代碼 | 意義 | 實測 |
@@ -271,6 +279,7 @@ opcode=8 data=b'\x03\xe9Maximum number of connections reached'
 | lifespan：`provider.startup()` 之後 DB reconcile 或 dispatcher 掛載失敗 | startup 之後到 `yield` 的整段都在同一個 try/finally 內，失敗一律 `provider.shutdown()` | 同上 |
 | `provider.shutdown()` 的 unsubscribe | 每筆各自 best-effort，拋錯只記 warning，`logout()` 必跑 | 14:05 券商主動關 WS 且不重連，晚間停機時 unsubscribe 會拋 `WebSocketConnectionClosedException` |
 | `client.logout()` | 先 best-effort `ws.disconnect()` 再 `sdk.logout()`；主動關閉觸發的 `disconnect` 事件記 info 不記 warning | `logout()` 不關 WS（上表） |
+| `client._on_message()` 收到畸形 `data` frame | 正規化與 handler 整段包 try/except，記 `frame dropped` warning 後繼續；每筆記一條，不去重也不限流 | 例外會被 SDK 吞掉並轉成假的 `websocket error`（上節）；廠商標 `symbol`／`time` 必填，實際觸發機率低但代價是誤導性告警 |
 | `provider.startup()`／`reconnect_realtime()` 的 login／connect | 在 lock 外執行；lock 內只設 `_connecting` 旗標（已在連線中則直接返回，防重入）。連線期間 `subscribe()` 只記錄 `_subscribed` 不打 client，重連完成後在 lock 內一次重送整組，每檔恰好一次。PR2 的重連迴圈須以 `asyncio.to_thread` 呼叫 | `connect()` 是 busy-spin（上節）；否則 `get_quotes`／`subscribe`／`_on_snapshot` 全部排隊最長 5 秒，N 個使用者就是 N×5 秒 |
 | `client.subscribe()`／`unsubscribe()` 在 WS 已斷後被呼叫 | SDK 拋自己的 `WebSocketConnectionClosedException`，client 轉成 `QuoteProviderUnavailableError("fubon", "subscribe_failed"/"unsubscribe_failed")`，不夾帶 SDK 原文；API 層只把 `QuoteProviderError` 映射成 503，否則建單掉 500、取消時 provider 的本地訂閱狀態清不掉 | 14:05 券商主動關 WS 且不重連；對齊 `ShioajiClient` 的包裝方式 |
 

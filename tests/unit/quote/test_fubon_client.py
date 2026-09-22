@@ -305,6 +305,45 @@ def test_data_frames_reach_quote_handler_as_snapshots() -> None:
     assert received[0].last_price == Decimal("568")
 
 
+def test_malformed_frame_is_dropped_without_raising_into_sdk_thread() -> None:
+    # An exception here would travel back through pyee into websocket-client's
+    # _callback, which swallows it and fires on_error — logging a socket error
+    # that never happened, while this frame is lost either way.
+    sdk = FakeSdk(login_result=_ok_login())
+    client = _client(sdk)
+    received: list[QuoteSnapshot] = []
+    client.set_quote_handler(received.append)
+    client.login()
+    client.connect_realtime()
+    client.subscribe("2330")
+
+    broken = _aggregates()
+    del broken["symbol"]  # vendor marks it mandatory; a missing key must not crash us
+    sdk.ws.emit({"event": "data", "data": broken})
+    sdk.ws.emit({"event": "data", "data": {"symbol": "2330", "lastUpdated": "not-a-number"}})
+
+    assert received == []
+
+    sdk.ws.emit({"event": "data", "data": _aggregates()})  # stream keeps working
+
+    assert [s.symbol for s in received] == ["2330"]
+
+
+def test_undocumented_event_names_are_ignored() -> None:
+    # "snapshot" is not in the vendor event list (authenticated / data / error /
+    # heartbeat / pong / subscribed / unsubscribed); it used to be dispatched.
+    sdk = FakeSdk(login_result=_ok_login())
+    client = _client(sdk)
+    received: list[QuoteSnapshot] = []
+    client.set_quote_handler(received.append)
+    client.login()
+    client.connect_realtime()
+
+    sdk.ws.emit({"event": "snapshot", "data": _aggregates()})
+
+    assert received == []
+
+
 def test_disconnect_only_flags_and_connect_again_rebuilds_channel_map() -> None:
     # Resubscribing is the provider's job (it owns the subscription set); the
     # client only has to come back with a fresh websocket and an empty channel map.

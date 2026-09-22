@@ -243,8 +243,14 @@ class FubonClient:
         data = message.get("data") or {}
         if event == "subscribed":
             self._channels[str(data.get("symbol"))] = str(data.get("id"))
-        elif event in ("data", "snapshot") and self._quote_handler is not None:
-            self._quote_handler(aggregates_to_snapshot(data))
+        elif event == "data" and self._quote_handler is not None:
+            try:
+                self._quote_handler(aggregates_to_snapshot(data))
+            except Exception as exc:
+                # Never raise into the SDK thread: pyee does not catch, so it
+                # lands in websocket-client's _callback, which swallows it and
+                # fires on_error — a socket error we would log but never had.
+                logger.warning("fubon frame dropped %s symbol=%s", type(exc).__name__, data.get("symbol"))
 
     def _on_disconnect(self, *_args: Any) -> None:
         self.realtime_connected = False
