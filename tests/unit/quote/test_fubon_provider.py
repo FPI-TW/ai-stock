@@ -5,6 +5,7 @@ recording fake so the provider's bookkeeping (started flag, subscription set,
 snapshot cache, listeners, quota) is what gets exercised.
 """
 
+import threading
 from datetime import UTC, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -249,6 +250,112 @@ def test_remove_listener_is_idempotent() -> None:
     client.push(_snapshot())
 
     assert seen == []
+
+
+class BlockingConnectClient(FakeClient):
+    """connect_realtime() parks until released, standing in for the SDK's busy-spin."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.block_connect = False
+
+    def connect_realtime(self) -> None:
+        self.calls.append("connect")
+        if self.block_connect:
+            self.entered.set()
+            assert self.release.wait(timeout=5), "test never released connect"
+        self.realtime_connected = True
+
+
+def _reconnect_in_background(provider: FubonQuoteProvider, client: BlockingConnectClient) -> threading.Thread:
+    client.block_connect = True
+    worker = threading.Thread(target=provider.reconnect_realtime)
+    worker.start()
+    assert client.entered.wait(timeout=5)
+    return worker
+
+
+def test_reconnect_does_not_hold_lock_while_connecting() -> None:
+    client = BlockingConnectClient()
+    provider = FubonQuoteProvider(client=client, max_subscriptions=300)  # type: ignore[arg-type]
+    provider.startup()
+    provider.subscribe("2330")
+    client.calls.clear()
+    worker = _reconnect_in_background(provider, client)
+
+    # While connect is spinning, lock users must not queue behind it. A blocked
+    # call would hang until `release`, so a prompt return is the assertion.
+    done = threading.Event()
+
+    def use_provider() -> None:
+        provider.subscribe("2317")  # deferred: only recorded, sent after connect
+        with pytest.raises(QuoteUnavailableError):
+            provider.get_quotes(["2317"])
+        provider.reconnect_realtime()  # already reconnecting → returns at once
+        done.set()
+
+    threading.Thread(target=use_provider).start()
+    assert done.wait(timeout=2), "provider calls blocked behind connect_realtime()"
+    assert client.calls == ["connect"]
+
+    client.release.set()
+    worker.join(timeout=5)
+
+    assert client.calls == ["connect", "sub:2317", "sub:2330"]  # each once, after connect
+    assert provider.active_subscriptions() == {"2330", "2317"}
+
+
+def test_reconnect_failure_clears_connecting_flag() -> None:
+    class ConnectFailsOnce(FakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_next = False
+
+        def connect_realtime(self) -> None:
+            self.calls.append("connect")
+            if self.fail_next:
+                self.fail_next = False
+                raise RuntimeError("ws down")
+            self.realtime_connected = True
+
+    client = ConnectFailsOnce()
+    provider = FubonQuoteProvider(client=client, max_subscriptions=300)  # type: ignore[arg-type]
+    provider.startup()
+    provider.subscribe("2330")
+    client.fail_next = True
+    client.calls.clear()
+
+    with pytest.raises(RuntimeError):
+        provider.reconnect_realtime()
+    provider.subscribe("2317")  # not deferred any more: flag was cleared
+    provider.reconnect_realtime()
+
+    assert client.calls == ["connect", "sub:2317", "connect", "sub:2317", "sub:2330"]
+
+
+def test_startup_does_not_hold_lock_while_connecting() -> None:
+    client = BlockingConnectClient()
+    client.block_connect = True
+    provider = FubonQuoteProvider(client=client, max_subscriptions=300)  # type: ignore[arg-type]
+    worker = threading.Thread(target=provider.startup)
+    worker.start()
+    assert client.entered.wait(timeout=5)
+
+    done = threading.Event()
+
+    def use_provider() -> None:
+        with pytest.raises(QuoteUnavailableError):
+            provider.get_quotes(["2330"])
+        done.set()
+
+    threading.Thread(target=use_provider).start()
+    assert done.wait(timeout=2), "get_quotes blocked behind startup's connect_realtime()"
+
+    client.release.set()
+    worker.join(timeout=5)
+    assert client.calls == ["login", "connect"]
 
 
 def test_reconnect_realtime_reconnects_then_resubscribes_owned_set() -> None:

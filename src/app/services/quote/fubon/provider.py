@@ -59,13 +59,18 @@ class FubonQuoteProvider(QuoteProvider):
         self._listeners: list[QuoteListener] = []
         self._lock = threading.RLock()
         self._started = False
+        # True while login/connect runs OUTSIDE the lock (the SDK's connect() busy-spins
+        # up to ~5s). subscribe() defers the broker call while set; reconnect resends.
+        self._connecting = False
 
     # --- lifecycle -----------------------------------------------------------
 
     def startup(self) -> None:
         with self._lock:
-            if self._started:
+            if self._started or self._connecting:
                 return
+            self._connecting = True
+        try:
             self._client.login()
             try:
                 self._client.set_quote_handler(self._on_snapshot)
@@ -75,8 +80,12 @@ class FubonQuoteProvider(QuoteProvider):
                 # `_started`) never will and the broker keeps the session.
                 self._client.logout()
                 raise
-            self._started = True
-            logger.info("fubon session started")
+            with self._lock:
+                self._started = True
+        finally:
+            with self._lock:
+                self._connecting = False
+        logger.info("fubon session started")
 
     def shutdown(self) -> None:
         with self._lock:
@@ -102,7 +111,19 @@ class FubonQuoteProvider(QuoteProvider):
         The provider owns the subscription set, so it is the one that resubscribes.
         """
         with self._lock:
+            if self._connecting:
+                return  # another thread is already rebuilding the socket
+            self._connecting = True
+        try:
             self._client.connect_realtime()
+        except Exception:
+            with self._lock:
+                self._connecting = False
+            raise
+        with self._lock:
+            self._connecting = False
+            # Symbols subscribed while we were connecting were only recorded;
+            # this single pass sends every owned symbol exactly once.
             for symbol in sorted(self._subscribed):
                 self._client.subscribe(symbol)
 
@@ -135,7 +156,8 @@ class FubonQuoteProvider(QuoteProvider):
             self._require_started()
             if len(self._subscribed) >= self._max:
                 raise FubonSubscriptionLimitExceeded(symbol=symbol, current=len(self._subscribed), limit=self._max)
-            self._client.subscribe(symbol)
+            if not self._connecting:  # else reconnect_realtime() resends the whole set
+                self._client.subscribe(symbol)
             self._subscribed.add(symbol)
 
     def unsubscribe(self, symbol: str) -> None:
