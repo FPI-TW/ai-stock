@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
@@ -129,9 +130,45 @@ def _client(sdk: FakeSdk) -> FubonClient:
         password="pw",
         cert_pfx=PFX_BYTES,
         cert_password="certpw",
+        ws_url="wss://test.invalid/never-connected",  # fake SDK below never dials
         sdk_factory=lambda: sdk,
         realtime_mode="normal",
     )
+
+
+def test_ws_url_is_required() -> None:
+    # The SDK binary's built-in default is the PRODUCTION trade endpoint; a
+    # caller that forgets ws_url must fail at construction, not log in to prod.
+    with pytest.raises(TypeError):
+        FubonClient(  # type: ignore[call-arg]
+            personal_id="A123456789",
+            password="pw",
+            cert_pfx=PFX_BYTES,
+            cert_password="certpw",
+        )
+
+
+def test_default_sdk_factory_passes_ws_url_to_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
+    built: list[tuple[int, int, str | None]] = []
+
+    class FakeFubonSDK:
+        def __init__(self, pong_interval: int, max_missed: int, *, url: str | None) -> None:
+            built.append((pong_interval, max_missed, url))
+
+    fake_pkg = SimpleNamespace(sdk=SimpleNamespace(FubonSDK=FakeFubonSDK))
+    monkeypatch.setitem(sys.modules, "fubon_neo", fake_pkg)
+    monkeypatch.setitem(sys.modules, "fubon_neo.sdk", fake_pkg.sdk)
+
+    client = FubonClient(
+        personal_id="A123456789",
+        password="pw",
+        cert_pfx=PFX_BYTES,
+        cert_password="certpw",
+        ws_url="wss://neoapitest.fbs.com.tw/TASP/XCPXWS",
+    )
+    client._sdk_factory()  # what login() would call
+
+    assert built == [(30, 2, "wss://neoapitest.fbs.com.tw/TASP/XCPXWS")]
 
 
 def _aggregates(symbol: str = "2330") -> dict[str, Any]:

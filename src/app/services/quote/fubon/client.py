@@ -63,11 +63,12 @@ class FubonLoginError(QuoteProviderUnavailableError):
         self.failure_code: FubonLoginFailureCode = failure_code
 
 
-def _default_sdk_factory(ws_url: str | None) -> Callable[[], Any]:
+def _default_sdk_factory(ws_url: str) -> Callable[[], Any]:
     def build() -> Any:
         from fubon_neo.sdk import FubonSDK
 
         # 30s pong interval, disconnect after 2 misses — same as the manual probes.
+        # `url` is always explicit: the SDK's own default is the production endpoint.
         return FubonSDK(30, 2, url=ws_url)
 
     return build
@@ -87,7 +88,7 @@ class FubonClient:
         password: str,
         cert_pfx: bytes,
         cert_password: str,
-        ws_url: str | None = None,
+        ws_url: str,
         sdk_factory: Callable[[], Any] | None = None,
         realtime_mode: Any | None = None,
     ) -> None:

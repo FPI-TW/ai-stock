@@ -313,6 +313,13 @@ Python 層 `try/except` **攔不住**。根因是 Rust 核心對缺值欄位直�
 再接進服務——第三方 Rust 綁定的失敗模式不一定是回傳值，可能是直接殺行程，
 `is_success` 這層防禦是假的。
 
+### `FubonSDK(url=...)` 不傳就是正式環境
+
+2.2.9 二進位裡唯一內建的交易端 WS URL 是 `wss://neoapi.fbs.com.tw/TASP/XCPXWS`（production）；`url=None` 或省略就連真單，
+登入照樣成功、不會有任何警告。測試環境 `wss://neoapitest.fbs.com.tw/TASP/XCPXWS` 一定要明傳。
+本專案 `FubonClient` 的 `ws_url` 因此是必填參數（漏傳在建構時就 `TypeError`），設定層由 `FUBON_WS_URL` 供值、預設測試環境；
+任何 dev script 或綁定流程直接建 client 都不得省略。
+
 ### `login().data` 是多筆，不能寫死 `data[0]`
 
 一次登入會回傳證券帳號 + 期權帳號（測試帳號 58581758 就是兩筆），**順序不保證**。
