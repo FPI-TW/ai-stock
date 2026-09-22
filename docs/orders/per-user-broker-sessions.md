@@ -182,3 +182,4 @@
 - `MFA_ENCRYPTION_KEY` 現在同時保護券商金鑰。
 - SDK Rust 核心 panic 攔不住，會殺掉整個 process，所有使用者一起斷。
 - mac 無 SDK，per-user 真連線只能在 Linux／EC2 驗證。
+- `last_trade_time` 兩個 provider 語意不同：富邦取 `lastTrade.time`，是真實成交時間，尚無成交時為 `None`；永豐的 REST 快照（`get_stock_snapshot`，供 `GET /quotes/current-price` 與市價單建單使用）沒有成交時間欄位，目前填快照自身的 `ts`，所以永遠不是 `None`，且會讓久無成交的標的看起來剛成交過。永豐的串流路徑沒有這個問題（掛單 frame 沿用前一筆成交時間，沒成交過即 `None`）。影響面窄，因為 `last_price` 只在 bid／ask 皆缺時作為備援。**停損自盯若要直接讀 `last_trade_time`，開工前必須先決定如何處理這個差異**；永豐實測確認 `ts` 語意後，再以獨立 PR 決定是否改成 `None`（改了之後書空時將無法以收盤價觸發市價單）。

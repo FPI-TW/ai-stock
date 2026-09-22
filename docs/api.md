@@ -51,7 +51,7 @@ Access token 過期時以 refresh 取得新 session。refresh token rotation 偵
 ### Symbols 與行情
 
 - `GET /symbols?q=&limit=`、`GET /symbols/{symbol}`
-- `GET /quotes/current-price/{symbol}`：測試查價能力，需目前 provider 支援即時查價（`shioaji_demo`、`fubon`），否則回 503 `QUOTE_PROVIDER_UNAVAILABLE`；`source` 由 provider 自報；`quoteTime` 是行情 frame 時間，`lastTradeTime` 是最後成交時間、尚無成交時為 `null`。不是通用市場資料 API。
+- `GET /quotes/current-price/{symbol}`：測試查價能力，需目前 provider 支援即時查價（`shioaji_demo`、`fubon`），否則回 503 `QUOTE_PROVIDER_UNAVAILABLE`；`source` 由 provider 自報；`quoteTime` 是行情 frame 時間；`lastTradeTime` 是最後成交時間，語意依 provider 而定——富邦回報真實成交時間（尚無成交時為 `null`），永豐的 REST 快照沒有成交時間欄位，填的是快照自身時間、不會是 `null`。不是通用市場資料 API。
 
 ### Trade intents
 

@@ -142,7 +142,14 @@ class ShioajiClient:
             ask_price=to_decimal(getattr(snapshot, "sell_price", None)),
             last_price=to_decimal(getattr(snapshot, "close", None)),
             quote_time=snapshot_time,
-            last_trade_time=snapshot_time,  # the REST snapshot carries one ts for both
+            # The shioaji snapshot has no trade timestamp at all: `ts` is when the
+            # snapshot was taken, `close` is whatever last traded. Reusing `ts` here
+            # therefore claims a thin stock's hour-old trade is current, which is the
+            # exact lie the two-field split exists to prevent. Accepted for now because
+            # the alternative (None) would stop `last_price` from standing in when the
+            # book is empty, and `ts` semantics are not yet verified against a live
+            # snapshot. Tracked as a known divergence in the per-user-broker ticket.
+            last_trade_time=snapshot_time,
             received_at=now_utc(),
         )
 
