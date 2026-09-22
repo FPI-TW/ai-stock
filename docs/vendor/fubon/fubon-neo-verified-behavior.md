@@ -233,7 +233,21 @@ health-check 只負責偵測（30 秒 ping、連續 2 次沒回應就主動 `dis
 
 `init_realtime()` 只是換屬性，不會關掉舊連線：`fubon_neo/sdk.py` 裡它就一行 `self.marketdata = MarketData(sdk_token, mode, version)`。
 舊的 `WebSocketClient` 仍被自己的 reader thread 參考著而不會被回收，`self.ee` 又是每個實例一份，所以我方先前掛上去的 `_on_message` 依然有效。
-在舊 socket 還活著時重做 `init_realtime`，結果是每筆 frame 送進 handler 兩次，且舊 socket continue 佔一個 WS 配額。重建前一定要自己 `disconnect()` 舊的。
+在舊 socket 還活著時重做 `init_realtime`，結果是每筆 frame 送進 handler 兩次，且舊 socket 繼續佔一個 WS 配額。重建前一定要自己 `disconnect()` 舊的。
+
+**2026-09-22 14:18 盤後實測**（測試環境、帳號 58581758、SDK 2.2.9 mac arm64、腳本 `fubon-test/probe_teardown_and_reinit.py`）：
+
+| 階段 | `threading.enumerate()`（主執行緒除外） |
+| --- | --- |
+| 登入後、尚未 `init_realtime` | 空 |
+| 第一條 socket connect + subscribe 後 | `Thread-1 (run_forever)` **non-daemon**、`Thread-2` non-daemon、`Thread-3` |
+| **不 disconnect** 直接重做 `init_realtime` + connect | `Thread-1 (run_forever)` **仍在**、`Thread-4 (run_forever)` non-daemon、`Thread-5` non-daemon、`Thread-3`／`Thread-6` |
+| 兩條都 `disconnect()` 後 | **空** |
+| 再 `logout()` 後 | 空 |
+
+結論：(1) 兩個 `run_forever` reader thread 確實並存，BUG-018 的前提為實測確認，不是推論；
+(2) `disconnect()` 是收掉 reader thread 的**必要且充分**步驟，`logout()` 不負責這件事——上表第四列 disconnect 之後就已經清空，logout 沒有再改變什麼；
+(3) `main()` 返回後行程自然結束，exit code 0，**不需要 `os._exit`**，證實 BUG-011 的修法有效。
 
 WS 事件名稱以廠商文件為準，只有 `authenticated`、`data`、`error`、`heartbeat`、`pong`、`subscribed`、`unsubscribed` 七種；
 文件查無 `snapshot` 事件（PR1 曾誤加該分支，2026-09-22 移除）。
@@ -288,7 +302,7 @@ opcode=8 data=b'\x03\xe9Maximum number of connections reached'
 | `provider.startup()`／`reconnect_realtime()` 的 login／connect | 在 lock 外執行；lock 內只設 `_connecting` 旗標（已在連線中則直接返回，防重入）。連線期間 `subscribe()` 只記錄 `_subscribed` 不打 client，重連完成後在 lock 內一次重送整組，每檔恰好一次。PR2 的重連迴圈須以 `asyncio.to_thread` 呼叫 | `connect()` 是 busy-spin（上節）；否則 `get_quotes`／`subscribe`／`_on_snapshot` 全部排隊最長 5 秒，N 個使用者就是 N×5 秒 |
 | `client.subscribe()`／`unsubscribe()` 在 WS 已斷後被呼叫 | SDK 拋自己的 `WebSocketConnectionClosedException`，client 轉成 `QuoteProviderUnavailableError("fubon", "subscribe_failed"/"unsubscribe_failed")`，不夾帶 SDK 原文；API 層只把 `QuoteProviderError` 映射成 503，否則建單掉 500、取消時 provider 的本地訂閱狀態清不掉 | 14:05 券商主動關 WS 且不重連；對齊 `ShioajiClient` 的包裝方式 |
 
-尚未驗證（合併前 Linux 冒煙一併做）：`disconnect()` 後 process 是否能不靠 `os._exit` 自然結束；登入被拒（`is_success=False`）後 SDK 是否殘留連線；`aggregates` frame 的 `lastUpdated` 在只有掛單變動（無成交）時是否前進（見下節）。
+尚未驗證（合併前一併做）：登入被拒（`is_success=False`）後 SDK 是否殘留連線（需刻意失敗登入，有鎖帳號風險，未執行）；`aggregates` frame 的 `lastUpdated` 在只有掛單變動（無成交）時是否前進（需盤中，見下節）。`disconnect()` 後行程能否自然結束已於 2026-09-22 實測通過（見上表）。
 
 ### 行情 frame 的兩個時間：`lastUpdated` 與 `lastTrade.time`（2026-09-22，PR #95 review 定案）
 
