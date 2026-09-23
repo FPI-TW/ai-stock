@@ -42,7 +42,10 @@
 
 - 所有時間以 timezone-aware datetime 處理，DB 存 UTC；台股市場規則使用 Asia/Taipei。
 - day intent 在盤前建立為 `scheduled`，盤中建立為 `active`；盤後或週末建立時由 trading session service 選定下一個平日。目前沒有正式市場日曆，不處理國定假日或臨時休市。
-- evaluator 只接受一般交易時段內、相對目前時間不超過 10 秒的行情（以 `quote_time`，即券商 frame 時間判斷）。`last_price` 只在 bid／ask 缺失時作為備援，且其成交時間也必須在 10 秒內，否則視為無成交價；冷門股只有掛單在動時仍可依 bid／ask 觸發。
+- evaluator 只接受一般交易時段內的行情，且兩種價格各有自己的新鮮度窗：
+  - **掛單（bid／ask）以 `quote_time` 判斷，窗為 10 分鐘**。掛單是掛著就有效的狀態，沒有變動不等於資料過期；券商只在變動時推送，冷門股實測 frame 間隔中位 192 秒、最長 360 秒（`docs/vendor/fubon/fubon-neo-verified-behavior.md` §8），10 秒窗會讓讀快取的路徑（建單即時檢查、REST 現價）幾乎必被判 stale。
+  - **`last_price` 以 `last_trade_time` 判斷，窗維持 10 秒**，且只在 bid／ask 缺失時作為備援。成交價是過去的量測值，會過期；掛單窗放寬不得順帶放寬它。
+  - 兩者皆超窗時回 `quote_stale`。冷門股只有掛單在動時仍可依 bid／ask 觸發。
 - 任一價格非正數、bid 大於 ask 或 bid／ask／last 全缺時不觸發。
 - 建單時已符合條件可在建立 transaction 內立即觸發；取不到行情不阻擋建單，之後由 dispatcher 評估。
 

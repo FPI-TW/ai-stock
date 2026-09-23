@@ -139,6 +139,14 @@ class FubonQuoteProvider(QuoteProvider):
 
     def get_quotes(self, symbols: list[str]) -> list[QuoteSnapshot]:
         with self._lock:
+            # The book window is 10 minutes wide (BOOK_FRESHNESS_THRESHOLD), so a
+            # cached snapshot now outlives a short disconnect. While the socket is
+            # down we cannot tell a standing book from one that moved unseen, so
+            # refuse to serve the cache instead of letting it pass as current.
+            # Callers already treat a missing quote as non-blocking. The listener
+            # path is unaffected: a frame arriving *is* proof of a live socket.
+            if not self._client.realtime_connected:
+                raise QuoteProviderUnavailableError("fubon", "realtime_disconnected")
             missing = [s for s in symbols if s not in self._snapshots]
             if missing:
                 raise QuoteUnavailableError(missing[0])

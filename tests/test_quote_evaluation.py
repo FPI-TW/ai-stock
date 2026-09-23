@@ -362,16 +362,42 @@ class TestSessionGuard:
 
 class TestQuoteValidation:
     def test_stale_quote_skips(self, evaluator: QuoteEvaluator) -> None:
-        stale = SESSION_NOW - timedelta(seconds=11)
+        stale = SESSION_NOW - timedelta(minutes=10, seconds=1)
         result = evaluator.evaluate(_snapshot(quote_time=stale, ask_price=Decimal("99")), make_intent(), SESSION_NOW)
         assert not result.should_trigger
         assert result.skip_reason is SkipReason.QUOTE_STALE
 
     def test_quote_exactly_at_freshness_boundary_passes(self, evaluator: QuoteEvaluator) -> None:
-        # 10s old — threshold is inclusive.
-        boundary = SESSION_NOW - timedelta(seconds=10)
+        # 10min old — threshold is inclusive.
+        boundary = SESSION_NOW - timedelta(minutes=10)
         result = evaluator.evaluate(_snapshot(quote_time=boundary, ask_price=Decimal("99")), make_intent(), SESSION_NOW)
         assert result.should_trigger
+
+    def test_thin_symbol_book_older_than_ten_seconds_still_triggers(self, evaluator: QuoteEvaluator) -> None:
+        """冷門股實測間隔（中位 192s、最長 360s）落在掛單窗內，不得再被判 stale。"""
+        book = SESSION_NOW - timedelta(seconds=360)
+        result = evaluator.evaluate(
+            _snapshot(quote_time=book, ask_price=Decimal("99"), last_trade_time=None),
+            make_intent(),
+            SESSION_NOW,
+        )
+        assert result.should_trigger
+        assert result.trigger_reference_price_type == "ask"
+
+    def test_trade_window_stays_at_ten_seconds_while_book_window_is_wide(self, evaluator: QuoteEvaluator) -> None:
+        """掛單窗放寬不得順帶放寬成交價：11 秒前的成交價仍不可當現價用。"""
+        book = SESSION_NOW - timedelta(minutes=5)
+        result = evaluator.evaluate(
+            _snapshot(
+                quote_time=book,
+                last_price=Decimal("99"),
+                last_trade_time=SESSION_NOW - timedelta(seconds=11),
+            ),
+            make_intent(),
+            SESSION_NOW,
+        )
+        assert not result.should_trigger
+        assert result.skip_reason is SkipReason.QUOTE_STALE
 
     def test_bid_greater_than_ask_skips(self, evaluator: QuoteEvaluator) -> None:
         result = evaluator.evaluate(

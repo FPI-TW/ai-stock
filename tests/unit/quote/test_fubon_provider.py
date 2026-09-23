@@ -346,7 +346,11 @@ def test_startup_does_not_hold_lock_while_connecting() -> None:
     done = threading.Event()
 
     def use_provider() -> None:
-        with pytest.raises(QuoteUnavailableError):
+        # Mid-connect the socket is not up yet, so the cache guard answers first.
+        # What this test pins is that the call *returns* instead of blocking on
+        # the lock (BUG-016); which of the two non-blocking errors it raises is
+        # incidental.
+        with pytest.raises(QuoteProviderUnavailableError):
             provider.get_quotes(["2330"])
         done.set()
 
@@ -373,3 +377,21 @@ def test_reconnect_realtime_reconnects_then_resubscribes_owned_set() -> None:
 
     assert client.calls == ["connect", "sub:2330"]
     assert provider.realtime_connected is True
+
+
+def test_get_quotes_refuses_cache_while_realtime_is_disconnected() -> None:
+    # The book window is 10 minutes wide, so a cached snapshot outlives a short
+    # disconnect. While the socket is down a standing book and one that moved
+    # unseen look identical, so the cache must not be served as current.
+    provider, client = _started()
+    provider.subscribe("2330")
+    client.push(_snapshot())
+    assert provider.get_quotes(["2330"])[0].symbol == "2330"
+
+    client.realtime_connected = False
+
+    with pytest.raises(QuoteProviderUnavailableError):
+        provider.get_quotes(["2330"])
+
+    client.realtime_connected = True
+    assert provider.get_quotes(["2330"])[0].symbol == "2330"

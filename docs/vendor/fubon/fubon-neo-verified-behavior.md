@@ -319,7 +319,32 @@ opcode=8 data=b'\x03\xe9Maximum number of connections reached'
 
 `lastPrice` 含試撮，觸發一律不用（既有結論）。
 
-⚠️ 未實測：`lastUpdated` 在只有掛單變動時是否真的前進，官方文件只寫「最後更新時間」。挑一檔冷門股訂閱幾分鐘，對照 `lastUpdated` 與 `lastTrade.time` 的變化即可確認；若不前進，`quote_time` 要改退回 `received_at`。
+已實測（2026-09-23 09:02–09:55 盤中，測試環境帳號 58581758，probe：`~/Desktop/work_place/fubon-test/probe_last_updated_advance.py`）：**`lastUpdated` 確實會在只有掛單變動、沒有新成交時前進**，`quote_time` 綁 `lastUpdated` 的前提成立，不需要改回 `received_at`。
+
+| 標的 | frames（30 分鐘） | 只有掛單動<br>（`lastUpdated` 前進、`lastTrade.time` 不變） | 成交同步前進 | frame 間隔中位／最大 |
+| --- | --- | --- | --- | --- |
+| 1324 地球（幾乎不成交） | 11 | 8 | 2 | 192s／360s |
+| 2420（微量成交） | 174 | 160 | 12 | 0.4s／187s |
+| 2330 台積電（對照組） | 7016 | 6321 | 661 | 0.1s／5.9s |
+
+三檔都以「掛單動、成交不動」的 frame 為多數。最直接的單筆證據是 2420 在 09:25:53～09:25:55 連續三個 frame，`lastUpdated` 一路前進而 `lastTrade.time` 停在 09:16:22（9 分鐘前），`bid`／`ask` 維持 53.9／54。`lastUpdated` 在任何 frame 都沒有缺漏。
+
+⚠️ **新鮮度閘門對冷門股的影響，只發生在「讀快取／REST」的路徑上**（2026-09-23 實測後修正）：
+
+先釐清一件容易誤判的事——**串流 frame 一到達就評估，幾乎不可能過期**。實測 frame 到達時間與其 `lastUpdated` 的落差，三檔的中位數都是 0.028 秒（1324 n=11、2420 n=174、2330 n=7016）。也就是 dispatcher 這條路（`add_quote_listener` → 每個 frame 觸發一次評估）上，`now - quote_time` 永遠遠小於門檻。唯一超過 10 秒的是 subscribe 當下那個 `snapshot` 事件（1324 823 秒、2420 58 秒），而 client 的 `_on_message` 不處理 `snapshot`，它根本進不到 evaluator。
+
+真正被 10 秒門檻擋住的是**不靠 frame 驅動、改讀最後已知快照的路徑**：
+
+- 建單當下的立即檢查（`_fetch_quote_for_create` → `get_quotes`）讀的是快取，冷門股可能是幾分鐘前的。
+- 市價單先打的 REST 現價，帶的是券商端的 `lastUpdated`，實測比當下舊 19 秒（1324，10:08:15 查到 10:07:56.287）。
+
+所以症狀不是「永不觸發」，而是**建單當下沒反應**（市價單尤其明顯，正是 `_fetch_quote_for_create` docstring 要避免的「按了沒反應」體感），要等下一個 frame 進來才會補觸發。已於 `feat/thin-symbol-quote-freshness` 拆成兩個窗處置（掛單 10 分鐘、成交價 10 秒）。
+
+另一個**與門檻無關、尚未處置**的限制：偵測延遲的上限就是 frame 間隔本身。1324 的 frame 中位 192 秒、最長 360 秒，條件成立後最慢要 6 分鐘才會被發現——因為沒有 frame 就沒有評估。放寬門檻完全不會改善這點，要改善只能加定時重評估，屬另一個決策。
+
+未採用但已確認可行的選項：伺服器**確實會送 `event: "snapshot"`**（subscribe 後立刻送，payload 形狀與 `data` 相同，1324 的名稱「地球」就是從它來的），但這個事件名不在富邦文件的 event 清單（文件只列 authenticated／data／error／heartbeat／pong／subscribed／unsubscribed），BUG-017 review 也以「文件沒有」為由刪掉了它的 dispatch。接住它可以讓剛訂閱的冷門股立刻有一份快取（否則要等最長 6 分鐘），代價是依賴未公開事件；要不要恢復屬 review 決策，未動。
+
+已排除的解法：**用 REST 定期輪詢刷新時間無效**（2026-09-23 10:08–10:11 盤中實測，probe：`~/Desktop/work_place/fubon-test/probe_rest_refresh.py`）。`intraday/quote` 的 `lastUpdated` 是券商端「這檔資料最後變動的時間」，與我們何時發出查詢無關：1324 連續查 12 次（每 15 秒一次，共 3 分鐘）都回同一個 `10:07:56.287`，前進 0 次；2420 只在掛單真的變動時前進 2 次；2330 因為本來就一直在變，12 次查詢 12 個值。所以輪詢只會消耗速率額度，不會讓冷門股通過新鮮度閘門。
 
 對本專案的影響：行情 WS 斷線與登入斷線（`300`／`301`／`304`）都可偵測，交由同一支重建迴圈在交易時段內恢復；登入本身不需要每天重做。
 尚未驗證：登入超過 24 小時、跨週末是否失效（若失效預期會以 `300`／`301` 事件浮現）。
