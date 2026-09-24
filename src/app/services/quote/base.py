@@ -18,10 +18,17 @@ from fastapi import status
 class QuoteSnapshot:
     """The latest known quote for a single symbol.
 
-    `quote_time` is the broker-supplied timestamp of the quote itself (Asia/Taipei,
-    tz-aware). `received_at` is when the provider observed it locally (UTC, tz-aware).
-    Either field being naive is a bug — providers must attach timezone info before
-    constructing this dataclass.
+    Two broker-supplied timestamps, one per price kind (Asia/Taipei, tz-aware):
+
+    - `quote_time`: when this frame (the book: bid/ask) was last updated. Session
+      and freshness checks use it, because triggers read bid/ask first.
+    - `last_trade_time`: when `last_price` actually traded, or None before the
+      first match of the day. A thin stock can have a fresh book and a trade from
+      an hour ago; the evaluator only accepts `last_price` as a fallback when this
+      is fresh too.
+
+    `received_at` is when the provider observed the frame locally (UTC, tz-aware).
+    Any of these being naive is a bug — providers attach timezone info first.
     """
 
     symbol: str
@@ -29,6 +36,7 @@ class QuoteSnapshot:
     ask_price: Decimal | None
     last_price: Decimal | None
     quote_time: datetime
+    last_trade_time: datetime | None
     received_at: datetime
 
 
@@ -46,10 +54,16 @@ class QuoteProvider(Protocol):
     """Interface every concrete provider implements.
 
     The split: `subscribe` / `unsubscribe` manage the broker-side subscription set;
-    `get_quotes` reads from the in-memory snapshot cache the provider keeps fresh
-    from callbacks. `startup` / `shutdown` bracket session lifecycle and are called
-    by FastAPI's lifespan — pure providers (`InMemoryQuoteProvider`) treat them as
-    no-ops.
+    `get_quotes` reads the in-memory snapshot cache that broker callbacks update.
+    `startup` / `shutdown` bracket session lifecycle and are called by FastAPI's
+    lifespan — pure providers (`InMemoryQuoteProvider`) treat them as no-ops.
+
+    `get_quotes` returns the LAST KNOWN snapshot per symbol, never a
+    guaranteed-fresh one. A dropped market-data socket leaves the cache frozen
+    until the next update; no provider clears it on disconnect. Callers that act
+    on a price must gate on `QuoteSnapshot.quote_time` themselves — that is what
+    `QuoteEvaluator`'s freshness check exists for, and every new-track consumer
+    goes through it.
 
     `add_quote_listener` / `remove_quote_listener` let upper layers (the evaluation
     dispatcher) subscribe to / unsubscribe from snapshot updates so the broker

@@ -27,11 +27,14 @@ def _snapshot(symbol: str = "2330") -> QuoteSnapshot:
         ask_price=Decimal("600"),
         last_price=Decimal("599.5"),
         quote_time=datetime(2026, 5, 11, 10, 0, tzinfo=TAIPEI),
+        last_trade_time=datetime(2026, 5, 11, 10, 0, tzinfo=TAIPEI),
         received_at=datetime(2026, 5, 11, 2, 0, tzinfo=UTC),
     )
 
 
 class CurrentPriceOnlyProvider:
+    current_price_source = "fake"
+
     def __init__(self, snapshot: QuoteSnapshot) -> None:
         self.snapshot = snapshot
         self.current_price_symbols: list[str] = []
@@ -53,6 +56,8 @@ class CacheOnlyProvider:
 
 
 class CurrentPriceUnavailableProvider(CacheOnlyProvider):
+    current_price_source = "fake"
+
     def __init__(self, snapshot: QuoteSnapshot) -> None:
         super().__init__(snapshot)
         self.current_price_symbols: list[str] = []
@@ -93,6 +98,7 @@ class NoUsablePriceProvider(CacheOnlyProvider):
                 ask_price=None,
                 last_price=None,
                 quote_time=datetime(2026, 5, 11, 10, 0, tzinfo=TAIPEI),
+                last_trade_time=datetime(2026, 5, 11, 10, 0, tzinfo=TAIPEI),
                 received_at=datetime(2026, 5, 11, 2, 0, tzinfo=UTC),
             )
         )

@@ -17,6 +17,8 @@ UTC = ZoneInfo("UTC")
 
 
 class FakeCurrentPriceProvider:
+    current_price_source = "shioaji"
+
     def __init__(self, snapshot: QuoteSnapshot) -> None:
         self.snapshot = snapshot
         self.requested_symbols: list[str] = []
@@ -57,14 +59,15 @@ def _snapshot(symbol: str = "2330") -> QuoteSnapshot:
         ask_price=Decimal("591"),
         last_price=Decimal("590.5"),
         quote_time=datetime(2026, 5, 26, 10, 30, tzinfo=TAIPEI),
+        last_trade_time=datetime(2026, 5, 26, 10, 30, tzinfo=TAIPEI),
         received_at=datetime(2026, 5, 26, 2, 30, 1, tzinfo=UTC),
     )
 
 
 def _client(monkeypatch: pytest.MonkeyPatch, provider: FakeCurrentPriceProvider) -> TestClient:
-    monkeypatch.setenv("QUOTE_PROVIDER", "shioaji_demo")
-    monkeypatch.setenv("SHIOAJI_API_KEY", "dummy")
-    monkeypatch.setenv("SHIOAJI_SECRET_KEY", "dummy")
+    # Any provider name works: the endpoint gates on the CurrentPriceProvider
+    # capability of the injected provider, not on QUOTE_PROVIDER.
+    monkeypatch.setenv("QUOTE_PROVIDER", "in_memory")
     get_settings.cache_clear()
     app = create_app()
     app.dependency_overrides[get_quote_provider] = lambda: provider
@@ -85,6 +88,7 @@ def test_current_price_returns_shioaji_snapshot_for_allowed_symbol(monkeypatch: 
             "bidPrice": "590.00",
             "askPrice": "591.00",
             "quoteTime": "2026-05-26T10:30:00+08:00",
+            "lastTradeTime": "2026-05-26T10:30:00+08:00",
             "receivedAt": "2026-05-26T02:30:01Z",
             "source": "shioaji",
             "testFeature": True,
@@ -113,13 +117,15 @@ def test_current_price_rejects_symbol_before_provider_check(client_factory: Call
     assert body["error"]["details"] == {"symbol": "2230", "allowed": ["0050", "00878", "2317", "2330"]}
 
 
-def test_current_price_requires_shioaji_provider(client_factory: Callable[[], TestClient]) -> None:
+def test_current_price_requires_current_price_capability(client_factory: Callable[[], TestClient]) -> None:
+    # The default in_memory provider has no `get_current_price`; the gate is the
+    # capability, not the provider name.
     response = client_factory().get("/quotes/current-price/2330")
 
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     body = response.json()
     assert body["error"]["code"] == "QUOTE_PROVIDER_UNAVAILABLE"
     assert body["error"]["details"] == {
-        "requiredProvider": "shioaji_demo",
+        "requiredCapability": "current_price",
         "currentProvider": "in_memory",
     }

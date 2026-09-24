@@ -52,6 +52,7 @@ def _snapshot(symbol: str = "2330", ask: Decimal | None = Decimal("99")) -> Quot
         ask_price=ask,
         last_price=None,
         quote_time=QUOTE_TIME,
+        last_trade_time=QUOTE_TIME,
         received_at=QUOTE_TIME,
     )
 

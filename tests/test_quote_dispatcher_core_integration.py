@@ -126,6 +126,7 @@ def _snapshot(ask: str) -> QuoteSnapshot:
         ask_price=Decimal(ask),
         last_price=None,
         quote_time=NOW,
+        last_trade_time=NOW,
         received_at=NOW,
     )
 
