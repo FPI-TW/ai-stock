@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.exc import OperationalError
 from tests.pfx_helpers import build_test_pfx
-from tests.unit.test_broker_session_pool import FakeProvider
+from tests.unit.test_broker_session_pool import FakeProvider, live_session, token_free
 
 from app.commands.broker_account import (
     BindBrokerAccountCommand,
@@ -245,8 +245,8 @@ def test_commit_failure_rolls_back_and_logs_the_candidate_out() -> None:
 
     assert db.rollbacks == 1
     assert built[0].started and built[0].stopped
-    assert pool.get(user_id) is None
-    assert not pool.is_binding(user_id)
+    assert live_session(pool, user_id) is None
+    assert token_free(pool, user_id)
 
 
 def test_subscribe_failure_after_login_is_cleaned_up_and_surfaces_as_provider_error() -> None:
@@ -262,7 +262,7 @@ def test_subscribe_failure_after_login_is_cleaned_up_and_surfaces_as_provider_er
 
     assert db.commits == 0 and db.rollbacks == 1
     assert built[0].stopped
-    assert pool.get(user_id) is None
+    assert live_session(pool, user_id) is None
 
 
 def test_rebind_failure_before_commit_leaves_the_live_session_untouched() -> None:
@@ -275,7 +275,7 @@ def test_rebind_failure_before_commit_leaves_the_live_session_untouched() -> Non
     with pytest.raises(OperationalError):
         command.execute(_input(user_id))
 
-    assert pool.get(user_id) is live
+    assert live_session(pool, user_id) is live
     assert not live.stopped
     assert built[1].stopped
 
@@ -294,11 +294,11 @@ def test_rollback_raising_on_a_dead_connection_still_logs_the_candidate_out() ->
     assert info.value is dead  # the original failure surfaces, not the rollback's
     assert db.rollbacks == 1
     assert built[0].stopped
-    assert pool.get(user_id) is None
-    assert not pool.is_binding(user_id)
+    assert live_session(pool, user_id) is None
+    assert token_free(pool, user_id)
     # The user is not wedged: the token is free for the next bind.
     pool.activate(pool.prepare(user_id, _CREDS))
-    assert pool.get(user_id) is built[1]
+    assert live_session(pool, user_id) is built[1]
 
 
 def test_activate_failure_after_commit_logs_the_candidate_out(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -316,7 +316,7 @@ def test_activate_failure_after_commit_logs_the_candidate_out(monkeypatch: pytes
 
     assert db.commits == 1
     assert built[0].stopped
-    assert pool.get(user_id) is None
+    assert live_session(pool, user_id) is None
 
 
 def test_unbind_rollback_raising_on_a_dead_connection_still_releases_the_claim() -> None:
@@ -343,8 +343,8 @@ def test_unbind_rollback_raising_on_a_dead_connection_still_releases_the_claim()
 
     assert info.value is dead  # the commit failure surfaces, not the rollback's
     assert db.rollbacks == 1
-    assert not pool.is_binding(user_id)  # claim released even though rollback raised
-    assert pool.get(user_id) is live and not live.stopped  # nothing committed, session stays
+    assert token_free(pool, user_id)  # claim released even though rollback raised
+    assert live_session(pool, user_id) is live and not live.stopped  # nothing committed, session stays
     # Not wedged: a bind and an unbind both proceed afterwards.
     pool.discard(pool.prepare(user_id, _CREDS))
     pool.stop(pool.claim(user_id))
@@ -365,8 +365,8 @@ def test_rebind_hands_the_replaced_session_back_instead_of_stopping_it_inline() 
 
     assert result.replaced_session is old
     assert not old.stopped  # nothing blocking happened after activate
-    assert pool.get(user_id) is built[1]
-    assert not pool.is_binding(user_id)
+    assert live_session(pool, user_id) is built[1]
+    assert token_free(pool, user_id)
     retire_broker_session(old, user_id)
     assert old.stopped
 

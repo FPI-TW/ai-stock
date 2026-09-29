@@ -9,10 +9,10 @@ import random
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
-from tests.unit.test_broker_session_pool import FakeProvider
+from tests.unit.test_broker_session_pool import FakeProvider, live_session, live_user_ids, token_free
 
 from app.core.config import get_settings
 from app.domain.broker_account import (
@@ -73,7 +73,7 @@ def test_concurrent_first_binds_never_exceed_capacity() -> None:
     assert outcomes.count("ok") == 3
     assert outcomes.count("limit") == 17
     assert len(built) == 3
-    assert len(pool.bound_user_ids()) == 3
+    assert len(live_user_ids(pool)) == 3
 
 
 def test_concurrent_prepare_for_same_user_admits_exactly_one() -> None:
@@ -104,7 +104,7 @@ def test_concurrent_prepare_for_same_user_admits_exactly_one() -> None:
     # released the token) are legitimate re-binds and replace the session.
     assert "ok" in results
     assert results.count("ok") + results.count("busy") == 8
-    assert len(pool.bound_user_ids()) == 1
+    assert len(live_user_ids(pool)) == 1
     assert len(built) == results.count("ok")
 
 
@@ -119,8 +119,8 @@ def test_slow_broker_login_does_not_block_other_users() -> None:
     slow.start()
     assert built[0].in_startup.wait(timeout=5)
 
-    assert pool.get(slow_user) is None  # not live yet, and this returned immediately
-    assert pool.is_binding(slow_user)
+    assert live_session(pool, slow_user) is None  # not live yet, and this returned immediately
+    assert not token_free(pool, slow_user)
     gate.set()  # the second provider must not block either
     done = threading.Event()
 
@@ -131,7 +131,7 @@ def test_slow_broker_login_does_not_block_other_users() -> None:
     threading.Thread(target=other).start()
     assert done.wait(timeout=5), "another user's bind was blocked by the slow login"
     slow.join(timeout=5)
-    assert pool.bound_user_ids() == {slow_user, other_user}
+    assert live_user_ids(pool) == {slow_user, other_user}
 
 
 def test_churn_never_leaks_a_session() -> None:
@@ -164,12 +164,12 @@ def test_churn_never_leaks_a_session() -> None:
     with ThreadPoolExecutor(max_workers=8) as executor:
         list(executor.map(worker, [rng.randrange(10_000) for _ in range(8)]))
 
-    live_before = pool.bound_user_ids()
+    live_before = live_user_ids(pool)
     assert len(live_before) <= 4
-    assert not any(pool.is_binding(u) for u in users)
+    assert not any((not token_free(pool, u)) for u in users)
     pool.stop_all()
     assert all(p.stopped for p in built)
-    assert pool.bound_user_ids() == set()
+    assert live_user_ids(pool) == set()
 
 
 # --- broker misbehaviour ----------------------------------------------------------
@@ -190,7 +190,7 @@ def test_factory_import_error_is_a_setup_error_and_releases_the_slot() -> None:
     with pytest.raises(BrokerSessionSetupError) as info:
         pool.prepare(user_id, _CREDS)
     assert info.value.exception_type == "ImportError"
-    assert not pool.is_binding(user_id)
+    assert token_free(pool, user_id)
     # The slot is free again: a working factory on a fresh pool with the same cap admits the user.
     ok_pool, _ = _pool(max_sessions=1)
     ok_pool.activate(ok_pool.prepare(user_id, _CREDS))
@@ -214,11 +214,11 @@ def test_logout_raising_is_swallowed_and_state_is_still_cleared(via: str) -> Non
         pool.stop(pool.claim(user_id)) if via == "stop" else pool.stop_all()
 
     assert built[0].stopped
-    assert pool.get(user_id) is None
-    assert not pool.is_binding(user_id)
+    assert live_session(pool, user_id) is None
+    assert token_free(pool, user_id)
     if via == "stop_all":
         assert all(p.stopped for p in built)
-        assert pool.bound_user_ids() == set()
+        assert live_user_ids(pool) == set()
     elif via == "stop":
         assert not built[1].stopped  # only the named user was logged out
 
@@ -235,28 +235,7 @@ def test_activate_with_a_stale_candidate_after_stop_is_refused() -> None:
     with pytest.raises(BrokerBindInProgressError):
         pool.activate(candidate)
     pool.activate(fresh)
-    assert pool.get(user_id) is fresh.provider
-
-
-def test_listener_that_raises_does_not_break_the_pool_or_other_frames() -> None:
-    """The owner-scoped forwarder runs on the SDK thread; an exception there is
-    the provider's problem (it logs), never the pool's — assert the wrapper is a
-    plain pass-through so the provider's protection applies."""
-    pool, built = _pool(max_sessions=1)
-    user_id = uuid4()
-    calls: list[UUID | None] = []
-
-    def listener(snapshot: object, *, owner_user_id: UUID | None) -> None:
-        calls.append(owner_user_id)
-        raise ValueError("evaluator blew up")
-
-    pool.set_quote_listener(listener)  # type: ignore[arg-type]
-    pool.activate(pool.prepare(user_id, _CREDS))
-
-    with pytest.raises(ValueError):
-        built[0].listeners[0](object())  # type: ignore[arg-type]
-    assert calls == [user_id]
-    assert pool.get(user_id) is built[0]
+    assert live_session(pool, user_id) is fresh.provider
 
 
 def test_failure_after_a_successful_login_inside_prepare_logs_out_and_releases() -> None:
@@ -281,8 +260,8 @@ def test_failure_after_a_successful_login_inside_prepare_logs_out_and_releases()
 
     assert info.value.exception_type == "RuntimeError"
     assert built[0].started and built[0].stopped
-    assert not pool.is_binding(user_id)
-    assert pool.get(user_id) is None
+    assert token_free(pool, user_id)
+    assert live_session(pool, user_id) is None
 
 
 def test_stop_all_logs_sessions_out_in_parallel() -> None:
@@ -302,4 +281,4 @@ def test_stop_all_logs_sessions_out_in_parallel() -> None:
     pool.stop_all()
 
     assert all(p.stopped for p in built)
-    assert pool.bound_user_ids() == set()
+    assert live_user_ids(pool) == set()

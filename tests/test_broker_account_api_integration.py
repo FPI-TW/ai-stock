@@ -33,7 +33,7 @@ from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.services.broker_session_pool import BrokerSessionPool, BrokerStopClaim
 from app.services.quote.base import QuoteProviderUnavailableError
 from tests.pfx_helpers import DEFAULT_NOT_AFTER, build_test_pfx
-from tests.unit.test_broker_session_pool import FakeProvider, _login_error
+from tests.unit.test_broker_session_pool import FakeProvider, _login_error, live_session, token_free
 
 CERT_PASSWORD = "cert-pw"
 # The bind path refuses the repo's dev fallback key even in LOCAL_MODE (a real
@@ -235,7 +235,7 @@ def test_bind_logs_in_subscribes_open_intents_and_persists_encrypted(engine: Eng
         assert secret not in response.text
 
     provider = harness.built[0]
-    assert harness.pool.get(user_id) is provider
+    assert live_session(harness.pool, user_id) is provider
     assert provider.subscribed == {"2330"}
 
     row = _row(engine, user_id)
@@ -275,7 +275,7 @@ def test_first_bind_login_failure_is_422_without_a_row_and_without_secrets(
     assert "code=login_rejected" in caplog.text  # the log line exists...
     assert SECRET_SENTINEL not in caplog.text  # ...and carries no login material
     assert _row(engine, user_id) is None
-    assert harness.pool.get(user_id) is None
+    assert live_session(harness.pool, user_id) is None
     assert _audit_types(engine, harness.admin_id) == []
 
 
@@ -301,8 +301,8 @@ def test_non_broker_failure_is_500_with_type_only_and_no_secrets(
     assert SECRET_SENTINEL not in caplog.text
     assert "exception=AttributeError" in caplog.text
     assert _row(engine, user_id) is None
-    assert harness.pool.get(user_id) is None
-    assert not harness.pool.is_binding(user_id)
+    assert live_session(harness.pool, user_id) is None
+    assert token_free(harness.pool, user_id)
 
 
 @pytest.mark.integration
@@ -334,7 +334,7 @@ def test_rebind_failure_keeps_the_old_session_and_row(engine: Engine) -> None:
     response = client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id="B222222222"))
 
     assert response.status_code == 422
-    assert harness.pool.get(user_id) is first
+    assert live_session(harness.pool, user_id) is first
     assert not first.stopped
     after = _row(engine, user_id)
     assert after is not None
@@ -354,7 +354,7 @@ def test_rebind_success_swaps_session_and_shuts_the_old_one_down(engine: Engine)
     assert response.status_code == 200, response.text
     first, second = harness.built
     assert first.stopped
-    assert harness.pool.get(user_id) is second
+    assert live_session(harness.pool, user_id) is second
     with Session(engine) as session:
         assert (
             session.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalars().all().__len__()
@@ -468,7 +468,7 @@ def test_unbind_cancels_intents_deletes_row_and_logs_out(engine: Engine) -> None
 
     assert response.status_code == 204
     assert provider.stopped
-    assert harness.pool.get(user_id) is None
+    assert live_session(harness.pool, user_id) is None
     assert _row(engine, user_id) is None
     with Session(engine) as session:
         intent = session.execute(select(TradeIntentCore).where(TradeIntentCore.id == intent_id)).scalar_one()
@@ -547,7 +547,7 @@ def test_rebind_whose_subscribe_fails_keeps_old_session_and_returns_503(engine: 
     assert response.json()["error"]["code"] == "QUOTE_PROVIDER_UNAVAILABLE"
     first, candidate = harness.built
     assert candidate.stopped and not first.stopped
-    assert harness.pool.get(user_id) is first
+    assert live_session(harness.pool, user_id) is first
     after = _row(engine, user_id)
     assert after is not None
     assert after.credentials_encrypted == before.credentials_encrypted
@@ -568,7 +568,7 @@ def test_old_session_logout_raising_does_not_undo_a_committed_rebind(engine: Eng
     assert response.status_code == 200, response.text
     first, second = harness.built
     assert first.stopped  # attempted, raised, swallowed
-    assert harness.pool.get(user_id) is second
+    assert live_session(harness.pool, user_id) is second
     with Session(engine) as session:
         repo = BrokerAccountRepository(session, encryption_key=TEST_CREDENTIAL_KEY)
         creds = repo.get_credentials(user_id)
@@ -612,7 +612,7 @@ def test_second_bind_and_unbind_are_refused_while_the_first_login_is_in_flight(e
     assert unbind.status_code == 409 and unbind.json()["error"]["code"] == "BROKER_BIND_IN_PROGRESS"
     assert first_result == [200]
     assert len(harness.built) == 1  # the refused bind never built (or logged in) a provider
-    assert harness.pool.get(user_id) is harness.built[0]
+    assert live_session(harness.pool, user_id) is harness.built[0]
     assert _row(engine, user_id) is not None
 
 
@@ -745,8 +745,8 @@ def test_bind_during_an_unbind_is_refused_and_the_unbind_completes(engine: Engin
     assert len(harness.built) == built_before  # the refused bind never logged in
     assert delete_result == [204]
     assert _row(engine, user_id) is None
-    assert gated.get(user_id) is None
-    assert not gated.is_binding(user_id)
+    assert live_session(gated, user_id) is None
+    assert token_free(gated, user_id)
     assert harness.built[1].stopped  # the session that was live in the gated pool when the unbind ran
 
 
@@ -813,6 +813,6 @@ def test_bind_refuses_the_dev_fallback_key_even_in_local_mode(engine: Engine, mo
     assert response.json()["error"]["details"] == {"reason": "missing"}
     assert _row(engine, user_id) is None
     assert harness.built[0].started and harness.built[0].stopped  # logged in, then discarded
-    assert harness.pool.get(user_id) is None and not harness.pool.is_binding(user_id)
+    assert live_session(harness.pool, user_id) is None and not (not token_free(harness.pool, user_id))
     # Non-secret reads still work without a key.
     assert harness.user_client(user_id).get("/me/broker-account").status_code == 404

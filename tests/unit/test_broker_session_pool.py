@@ -11,7 +11,6 @@ import pytest
 
 from app.core.config import Settings, get_settings
 from app.domain.broker_account import (
-    BrokerAccountNotBoundError,
     BrokerBindingNotEnabledError,
     BrokerBindInProgressError,
     BrokerLoginFailedError,
@@ -21,7 +20,13 @@ from app.domain.broker_account import (
     FubonCredentials,
 )
 from app.services.broker_session_pool import BrokerSessionPool
-from app.services.quote.base import BrokerLoginError, QuoteListener, QuoteProviderUnavailableError, QuoteSnapshot
+from app.services.quote.base import (
+    BrokerLoginError,
+    QuoteListener,
+    QuoteProvider,
+    QuoteProviderUnavailableError,
+    QuoteSnapshot,
+)
 
 _CREDS = FubonCredentials(personal_id="A123456789", password="pw", cert_pfx=b"pfx", cert_password="cpw")
 
@@ -86,6 +91,24 @@ def _login_error(code: BrokerLoginFailureCode) -> BrokerLoginError:
     return BrokerLoginError("fubon", code)
 
 
+# The pool exposes no readers yet (PR3 adds `get`/`require` with their real caller);
+# tests look at the live map directly and probe the token through claim/release.
+def live_session(pool: BrokerSessionPool, user_id: UUID) -> QuoteProvider | None:
+    return pool._sessions.get(user_id)
+
+
+def live_user_ids(pool: BrokerSessionPool) -> set[UUID]:
+    return set(pool._sessions)
+
+
+def token_free(pool: BrokerSessionPool, user_id: UUID) -> bool:
+    try:
+        pool.release(pool.claim(user_id))
+    except BrokerBindInProgressError:
+        return False
+    return True
+
+
 def _settings(max_sessions: int = 2) -> Settings:
     return get_settings().model_copy(update={"broker_max_sessions": max_sessions})
 
@@ -101,7 +124,7 @@ def _pool(max_sessions: int = 2, **provider_kwargs: object) -> tuple[BrokerSessi
     return BrokerSessionPool(_settings(max_sessions), shared=None, provider_factory=factory), built
 
 
-def _snapshot() -> QuoteSnapshot:
+def _snapshot() -> QuoteSnapshot:  # kept for FakeProvider-based tests that push frames
     now = datetime.now(tz=UTC)
     return QuoteSnapshot(
         symbol="2330",
@@ -119,62 +142,13 @@ def test_prepare_then_activate_makes_session_live_and_reads_account_no() -> None
     user_id = uuid4()
 
     candidate = pool.prepare(user_id, _CREDS)
-    assert pool.get(user_id) is None  # not live until activate
+    assert live_session(pool, user_id) is None  # not live until activate
     assert candidate.broker_account_no == "9876543"
 
     assert pool.activate(candidate) is None
-    assert pool.get(user_id) is built[0]
-    assert pool.require(user_id) is built[0]
-    assert pool.bound_user_ids() == {user_id}
+    assert live_session(pool, user_id) is built[0]
+    assert live_user_ids(pool) == {user_id}
     assert built[0].started
-
-
-def test_require_unbound_user_raises() -> None:
-    pool, _ = _pool()
-    with pytest.raises(BrokerAccountNotBoundError):
-        pool.require(uuid4())
-
-
-def test_activate_attaches_owner_scoped_listener() -> None:
-    pool, built = _pool()
-    user_id = uuid4()
-    seen: list[tuple[str, UUID | None]] = []
-
-    def listener(snapshot: QuoteSnapshot, *, owner_user_id: UUID | None) -> None:
-        seen.append((snapshot.symbol, owner_user_id))
-
-    pool.set_quote_listener(listener)
-    pool.activate(pool.prepare(user_id, _CREDS))
-
-    assert len(built[0].listeners) == 1
-    built[0].listeners[0](_snapshot())
-    assert seen == [("2330", user_id)]
-
-
-def test_activate_attaches_the_listener_outside_the_pool_lock() -> None:
-    """Review finding: `add_quote_listener` takes the provider RLock, which is held
-    across broker I/O elsewhere; calling it under the pool lock nested the two."""
-
-    class LockProbeProvider(FakeProvider):
-        def add_quote_listener(self, listener: QuoteListener) -> None:
-            self.pool_lock_held_during_attach = pool._lock.locked()
-            super().add_quote_listener(listener)
-
-    built: list[LockProbeProvider] = []
-
-    def factory(_creds: FubonCredentials) -> LockProbeProvider:
-        built.append(LockProbeProvider())
-        return built[-1]
-
-    pool = BrokerSessionPool(_settings(), shared=None, provider_factory=factory)
-    pool.set_quote_listener(lambda snapshot, *, owner_user_id: None)
-    user_id = uuid4()
-
-    pool.activate(pool.prepare(user_id, _CREDS))
-
-    assert built[0].pool_lock_held_during_attach is False
-    assert len(built[0].listeners) == 1
-    assert pool.get(user_id) is built[0]
 
 
 def test_rebind_replaces_session_and_returns_old_provider() -> None:
@@ -185,7 +159,7 @@ def test_rebind_replaces_session_and_returns_old_provider() -> None:
     old = pool.activate(pool.prepare(user_id, _CREDS))
 
     assert old is built[0]
-    assert pool.get(user_id) is built[1]
+    assert live_session(pool, user_id) is built[1]
     assert not built[0].stopped  # caller shuts the old one down outside the lock
 
 
@@ -205,7 +179,7 @@ def test_prepare_failure_maps_to_safe_code_and_releases_token(exc: Exception, ex
         pool.prepare(user_id, _CREDS)
 
     assert info.value.code == expected_code
-    assert not pool.is_binding(user_id)
+    assert token_free(pool, user_id)
     # Token and slot released: the same user may try again, and the slot is free.
     ok_pool, _ = _pool(max_sessions=1)
     ok_pool.activate(ok_pool.prepare(user_id, _CREDS))
@@ -241,7 +215,7 @@ def test_non_broker_exception_is_a_setup_error_with_type_only(caplog: pytest.Log
     [record] = [r for r in caplog.records if r.name == "app.services.broker_session_pool"]
     assert "exception=AttributeError" in record.getMessage()
     assert "A123456789" not in caplog.text
-    assert not pool.is_binding(user_id)
+    assert token_free(pool, user_id)
     ok_pool, _ = _pool(max_sessions=1)
     ok_pool.activate(ok_pool.prepare(user_id, _CREDS))
 
@@ -275,14 +249,14 @@ def test_same_user_second_prepare_and_stop_are_refused_while_pending() -> None:
     user_id = uuid4()
     candidate = pool.prepare(user_id, _CREDS)
 
-    assert pool.is_binding(user_id)
+    assert not token_free(pool, user_id)
     with pytest.raises(BrokerBindInProgressError):
         pool.prepare(user_id, _CREDS)
     with pytest.raises(BrokerBindInProgressError):
         pool.claim(user_id)
 
     pool.activate(candidate)
-    assert not pool.is_binding(user_id)
+    assert token_free(pool, user_id)
 
 
 def test_discard_releases_token_and_shuts_candidate_down() -> None:
@@ -293,7 +267,7 @@ def test_discard_releases_token_and_shuts_candidate_down() -> None:
     pool.discard(candidate)
 
     assert built[0].stopped
-    assert pool.get(user_id) is None
+    assert live_session(pool, user_id) is None
     with pytest.raises(BrokerBindInProgressError):
         pool.activate(candidate)  # a discarded candidate can never go live
 
@@ -307,8 +281,8 @@ def test_stop_logs_out_and_is_idempotent() -> None:
     pool.stop(pool.claim(user_id))
 
     assert built[0].stopped
-    assert pool.get(user_id) is None
-    assert not pool.is_binding(user_id)
+    assert live_session(pool, user_id) is None
+    assert token_free(pool, user_id)
 
 
 def test_claim_holds_the_token_until_stop_or_release() -> None:
@@ -323,11 +297,11 @@ def test_claim_holds_the_token_until_stop_or_release() -> None:
         pool.prepare(user_id, _CREDS)
     with pytest.raises(BrokerBindInProgressError):
         pool.claim(user_id)
-    assert pool.is_binding(user_id)
+    assert not token_free(pool, user_id)
 
     pool.release(claim)
-    assert not pool.is_binding(user_id)
-    assert pool.get(user_id) is built[0]
+    assert token_free(pool, user_id)
+    assert live_session(pool, user_id) is built[0]
     assert not built[0].stopped
     with pytest.raises(BrokerBindInProgressError):
         pool.stop(claim)  # a released claim is stale; the session stays
@@ -348,16 +322,13 @@ def test_stop_all_shuts_every_live_session_down() -> None:
     pool.stop_all()
 
     assert all(p.stopped for p in built)
-    assert pool.bound_user_ids() == set()
+    assert live_user_ids(pool) == set()
 
 
 def test_shared_mode_serves_everyone_and_refuses_prepare() -> None:
     shared = FakeProvider()
     pool = BrokerSessionPool(_settings(), shared=shared)
 
-    assert not pool.per_user
-    assert pool.get(uuid4()) is shared
-    assert pool.require(uuid4()) is shared
     with pytest.raises(BrokerBindingNotEnabledError) as info:
         pool.prepare(uuid4(), _CREDS)
     assert info.value.quote_provider == "in_memory"  # conftest pins QUOTE_PROVIDER
@@ -377,7 +348,7 @@ def test_unbind_claim_does_not_reserve_a_slot() -> None:
     pool.activate(y_candidate)
     pool.stop(x_claim)
 
-    assert pool.bound_user_ids() == {y_user}
+    assert live_user_ids(pool) == {y_user}
     assert built[0].started and not built[0].stopped
 
     # With X live, its unbind claim still counts X's *live* slot exactly once:

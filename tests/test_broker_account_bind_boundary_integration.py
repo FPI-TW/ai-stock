@@ -1,9 +1,8 @@
 """Transaction boundary of PUT /admin/users/{user_id}/broker-account.
 
 Three destructive cases against real PostgreSQL and a recording fake broker
-session. "Old session keeps watching" is asserted for real: a frame pushed
-through the old provider still reaches the pool's owner-scoped listener after
-the failed re-bind. Async cases use the anyio pytest plugin (already installed
+session. "Old session keeps watching" = still the live entry, still logged in,
+subscriptions intact, never stopped. Async cases use the anyio pytest plugin (already installed
 via httpx / starlette); the sync routes run in the threadpool, so two requests
 issued with `asyncio.gather` really do execute in parallel.
 """
@@ -11,8 +10,6 @@ issued with `asyncio.gather` really do execute in parallel.
 # ruff: noqa: F811 - `engine` is the module-scoped fixture imported below; pytest injects it by parameter name.
 import asyncio
 import threading
-from datetime import UTC, datetime
-from decimal import Decimal
 from uuid import UUID
 
 import pytest
@@ -22,7 +19,6 @@ from sqlalchemy.orm import Session
 
 from app.db.models.auth import AuditEvent
 from app.db.models.broker_account import BrokerAccount
-from app.services.quote.base import QuoteSnapshot
 from tests.test_broker_account_api_integration import (
     _bind_body,
     _Harness,
@@ -31,22 +27,9 @@ from tests.test_broker_account_api_integration import (
     credential_key,  # noqa: F401 - autouse fixture: the bind path refuses the dev fallback key
     engine,  # noqa: F401 - module-scoped fixture re-exported for this file
 )
-from tests.unit.test_broker_session_pool import FakeProvider, _login_error
+from tests.unit.test_broker_session_pool import FakeProvider, _login_error, live_session, token_free
 
 pytestmark = pytest.mark.integration
-
-
-def _frame(symbol: str = "2330", last: str = "568") -> QuoteSnapshot:
-    now = datetime.now(tz=UTC)
-    return QuoteSnapshot(
-        symbol=symbol,
-        bid_price=Decimal("567"),
-        ask_price=Decimal("568"),
-        last_price=Decimal(last),
-        quote_time=now,
-        last_trade_time=now,
-        received_at=now,
-    )
 
 
 @pytest.fixture
@@ -74,26 +57,13 @@ def _audit_count(engine: Engine) -> int:
         return int(session.execute(select(func.count()).select_from(AuditEvent)).scalar_one())
 
 
-class _Watch:
-    """Bound before the first activate: records (symbol, owner) per delivered frame."""
-
-    def __init__(self) -> None:
-        self.frames: list[tuple[str, UUID | None]] = []
-
-    def __call__(self, snapshot: QuoteSnapshot, *, owner_user_id: UUID | None) -> None:
-        self.frames.append((snapshot.symbol, owner_user_id))
-
-
-def _bound_with_watch(engine: Engine, harness: _Harness) -> tuple[UUID, FakeProvider, _Watch]:
+def _bound(engine: Engine, harness: _Harness) -> tuple[UUID, FakeProvider]:
     user_id = _seed_user(engine)
     _seed_core_intent(engine, user_id)
-    watch = _Watch()
-    harness.pool.set_quote_listener(watch)
     assert harness.admin_client().put(f"/admin/users/{user_id}/broker-account", json=_bind_body()).status_code == 200
     old = harness.built[0]
-    old.listeners[0](_frame("2330"))  # prove the wiring before we try to break it
-    assert watch.frames == [("2330", user_id)]
-    return user_id, old, watch
+    assert old.started and old.subscribed == {"2330"}
+    return user_id, old
 
 
 # --- Case A: broker-side hard limit -------------------------------------------------
@@ -105,7 +75,7 @@ def test_case_a_broker_hard_limit_leaves_db_and_old_session_untouched(engine: En
     422 must carry only the safe code; the row must be byte-identical; the old
     session must still be live, still subscribed, and still delivering frames."""
     harness = _Harness(engine, max_sessions=2)
-    user_id, old, watch = _bound_with_watch(engine, harness)
+    user_id, old = _bound(engine, harness)
     row_before = _row_state(engine, user_id)
     audits_before = _audit_count(engine)
 
@@ -126,15 +96,14 @@ def test_case_a_broker_hard_limit_leaves_db_and_old_session_untouched(engine: En
     assert _row_state(engine, user_id) == row_before
     assert _audit_count(engine) == audits_before
     # Pool: the old session is the live one, never stopped, subscriptions intact.
-    assert harness.pool.get(user_id) is old
+    assert live_session(harness.pool, user_id) is old
     assert not old.stopped
     assert old.subscribed == {"2330"}
-    assert not harness.pool.is_binding(user_id)
+    assert token_free(harness.pool, user_id)
     # The candidate never got past login, so there is nothing to have leaked.
     assert len(harness.built) == 2 and not harness.built[1].started
-    # ...and the old session still watches the market for this owner.
-    old.listeners[0](_frame("2330", last="570"))
-    assert watch.frames == [("2330", user_id), ("2330", user_id)]
+    # ...and it is still the one watching the market: logged in, subscribed, never stopped.
+    assert old.started and not old.stopped and old.subscribed == {"2330"}
 
 
 # --- Case B: candidate cannot subscribe the owner's symbols -----------------------------
@@ -146,7 +115,7 @@ def test_case_b_candidate_subscribe_failure_rolls_back_and_discards(engine: Engi
     cap). Contract: rollback (row byte-identical, no audit), candidate logged
     out, old session untouched and still delivering, and the next bind still works."""
     harness = _Harness(engine)
-    user_id, old, watch = _bound_with_watch(engine, harness)
+    user_id, old = _bound(engine, harness)
     row_before = _row_state(engine, user_id)
     audits_before = _audit_count(engine)
 
@@ -164,16 +133,14 @@ def test_case_b_candidate_subscribe_failure_rolls_back_and_discards(engine: Engi
     candidate = harness.built[1]
     assert candidate.started and candidate.stopped  # logged in, then logged out by discard
     assert candidate.subscribed == set()
-    assert harness.pool.get(user_id) is old
-    assert not old.stopped and old.subscribed == {"2330"}
-    old.listeners[0](_frame("2330"))
-    assert watch.frames[-1] == ("2330", user_id)
+    assert live_session(harness.pool, user_id) is old
+    assert old.started and not old.stopped and old.subscribed == {"2330"}
 
     # The request-scoped transaction was rolled back cleanly: a healthy re-bind succeeds.
     harness.subscribe_fail_with = None
     ok = harness.admin_client().put(f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id="C333"))
     assert ok.status_code == 200, ok.text
-    assert harness.pool.get(user_id) is harness.built[2]
+    assert live_session(harness.pool, user_id) is harness.built[2]
     assert old.stopped
     assert _audit_count(engine) == audits_before + 1
 
@@ -212,14 +179,14 @@ async def test_case_c_concurrent_prepare_for_one_user_second_gets_409(engine: En
             assert loser.result().status_code == 409
             assert loser.result().json()["error"]["code"] == "BROKER_BIND_IN_PROGRESS"
             assert len(harness.built) == 1  # the loser never built a provider
-            assert harness.pool.is_binding(user_id)
+            assert not token_free(harness.pool, user_id)
         finally:
             gate.set()
         winner = first if loser is second else second
         assert (await winner).status_code == 200
 
-    assert harness.pool.get(user_id) is harness.built[0]
-    assert not harness.pool.is_binding(user_id)
+    assert live_session(harness.pool, user_id) is harness.built[0]
+    assert token_free(harness.pool, user_id)
     with Session(engine) as session:
         assert (
             session.execute(

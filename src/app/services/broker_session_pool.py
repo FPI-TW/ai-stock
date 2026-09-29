@@ -5,9 +5,14 @@ construction:
 
 - **per-user** (`QUOTE_PROVIDER=fubon`, `shared=None`): `dict[user_id, provider]`,
   one `FubonQuoteProvider` per bound user, capped by `BROKER_MAX_SESSIONS`.
-- **shared** (`in_memory` or the demo provider): every user resolves to the one shared
-  provider; `prepare` is refused with `BrokerBindingNotEnabledError` (409, not
-  retryable) because there is no per-user login to verify.
+- **shared** (`in_memory` or the demo provider): `prepare` is refused with
+  `BrokerBindingNotEnabledError` (409, not retryable) because there is no
+  per-user login to verify.
+
+This PR ships only the members the bind / unbind commands and the lifespan call.
+Readers (`get` / `require` for the create-intent path) and the owner-scoped quote
+listener arrive with the wiring that uses them (PR3), so their shape is decided
+by a real caller rather than guessed here.
 
 Replacing a user's session is a two-phase swap so a failed re-bind never takes
 the working session down:
@@ -29,9 +34,8 @@ moment they return until activate / discard / stop / release; whoever asks
 second gets `BrokerBindInProgressError`.
 
 Thread model: `threading.Lock` guards the dict / pending set only; every broker
-call (login, logout, subscribe, and attaching a listener — which takes the
-provider's own RLock) happens outside it, so the pool lock never waits on a
-provider lock. Callbacks from the SDK thread never enter this module.
+call (login, logout, subscribe) happens outside it, so the pool lock never waits
+on a provider lock. Callbacks from the SDK thread never enter this module.
 """
 
 import logging
@@ -40,12 +44,10 @@ import traceback
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Protocol
 from uuid import UUID
 
 from app.core.config import Settings
 from app.domain.broker_account import (
-    BrokerAccountNotBoundError,
     BrokerBindingNotEnabledError,
     BrokerBindInProgressError,
     BrokerLoginFailedError,
@@ -54,16 +56,10 @@ from app.domain.broker_account import (
     BrokerSessionSetupError,
     FubonCredentials,
 )
-from app.services.quote.base import BrokerLoginError, QuoteProvider, QuoteProviderError, QuoteSnapshot
+from app.services.quote.base import BrokerLoginError, QuoteProvider, QuoteProviderError
 from app.services.quote.factory import build_quote_provider
 
 logger = logging.getLogger(__name__)
-
-
-class OwnerScopedQuoteListener(Protocol):
-    """What PR3's dispatcher looks like: `dispatch(snapshot, *, owner_user_id=...)`."""
-
-    def __call__(self, snapshot: QuoteSnapshot, *, owner_user_id: UUID | None) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,40 +116,6 @@ class BrokerSessionPool:
         # user_id -> whoever holds this user's single in-flight operation token: a
         # placeholder while logging in, then the candidate; or an unbind's claim.
         self._pending: dict[UUID, object] = {}
-        self._listener: OwnerScopedQuoteListener | None = None
-
-    @property
-    def per_user(self) -> bool:
-        return self._shared is None
-
-    def set_quote_listener(self, listener: OwnerScopedQuoteListener) -> None:
-        """Every session activated from now on forwards its frames as
-        `listener(snapshot, owner_user_id=<that user>)`. Shared mode: the caller
-        wires the shared provider itself (owner `None`), as today."""
-        with self._lock:
-            self._listener = listener
-
-    # --- reads ------------------------------------------------------------------
-
-    def get(self, user_id: UUID) -> QuoteProvider | None:
-        if self._shared is not None:
-            return self._shared
-        with self._lock:
-            return self._sessions.get(user_id)
-
-    def require(self, user_id: UUID) -> QuoteProvider:
-        provider = self.get(user_id)
-        if provider is None:
-            raise BrokerAccountNotBoundError()
-        return provider
-
-    def bound_user_ids(self) -> set[UUID]:
-        with self._lock:
-            return set(self._sessions)
-
-    def is_binding(self, user_id: UUID) -> bool:
-        with self._lock:
-            return user_id in self._pending
 
     # --- two-phase replace ----------------------------------------------------
 
@@ -219,26 +181,9 @@ class BrokerSessionPool:
 
     def activate(self, candidate: PreparedBrokerSession) -> QuoteProvider | None:
         """Atomically make `candidate` the user's live session. No network, no DB.
-        Returns the replaced provider (shut it down outside the lock) or None.
-
-        The owner listener is attached *before* taking the pool lock: the
-        provider's own RLock is held across broker I/O in subscribe / shutdown /
-        reconnect, so acquiring it while holding the pool lock would nest the two
-        and let a slow broker call stall every other user's `get`. Attaching
-        early is harmless — the row is already committed, and a frame arriving in
-        the gap is a frame for this owner from their own session.
-        """
+        Returns the replaced provider (retire it outside the lock) or None."""
         with self._lock:
             if self._pending.get(candidate.user_id) is not candidate:
-                raise BrokerBindInProgressError()
-            listener = self._listener
-        forward = self._owner_listener(candidate.user_id, listener) if listener is not None else None
-        if forward is not None:
-            candidate.provider.add_quote_listener(forward)
-        with self._lock:
-            if self._pending.get(candidate.user_id) is not candidate:  # cannot change under us, but be exact
-                if forward is not None:
-                    candidate.provider.remove_quote_listener(forward)
                 raise BrokerBindInProgressError()
             old = self._sessions.get(candidate.user_id)
             self._sessions[candidate.user_id] = candidate.provider
@@ -297,14 +242,6 @@ class BrokerSessionPool:
         with ThreadPoolExecutor(max_workers=len(sessions), thread_name_prefix="broker-logout") as pool:
             for user_id, provider in sessions:
                 pool.submit(retire_broker_session, provider, user_id)
-
-    # --- internals ----------------------------------------------------------------
-
-    def _owner_listener(self, user_id: UUID, listener: OwnerScopedQuoteListener) -> Callable[[QuoteSnapshot], None]:
-        def forward(snapshot: QuoteSnapshot) -> None:
-            listener(snapshot, owner_user_id=user_id)
-
-        return forward
 
 
 def retire_broker_session(provider: QuoteProvider, user_id: UUID) -> None:
