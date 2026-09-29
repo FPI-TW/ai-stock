@@ -5,7 +5,7 @@ verified 2FA. Account disable + cascade and the user list arrive in a later sub-
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, BackgroundTasks, Request, status
 
 from app.api.deps import (
     AdminRoleDep,
@@ -45,7 +45,7 @@ from app.commands.account import (
     ReactivateUserInput,
     ResendInvitationInput,
 )
-from app.commands.broker_account import BindBrokerAccountInput, UnbindBrokerAccountInput
+from app.commands.broker_account import BindBrokerAccountInput, UnbindBrokerAccountInput, retire_broker_session
 from app.commands.kill_switch import SetKillSwitchInput
 from app.commands.two_factor import SetupTwoFactorInput, VerifyTwoFactorInput
 from app.domain.broker_account import FubonCredentials
@@ -220,9 +220,11 @@ def bind_broker_account(
     body: BindBrokerAccountRequest,
     admin: AdminUserDep,
     command: BindBrokerAccountCommandDep,
+    background_tasks: BackgroundTasks,
 ) -> BrokerAccountResponse:
     """憑證由我們代申請，四件套（身分證字號、密碼、pfx、憑證密碼）在管理端一次送出；系統當場
-    以候選 session 試登入，成功才加密落庫並切換為該使用者的行情來源。回應與 log 不含任何機密。"""
+    以候選 session 試登入，成功才加密落庫並切換為該使用者的行情來源。回應與 log 不含任何機密。
+    重綁時舊 session 的登出在回應送出後才做，請求不等它。"""
     bound = command.execute(
         BindBrokerAccountInput(
             target_user_id=user_id,
@@ -238,7 +240,9 @@ def bind_broker_account(
             request_id=get_request_id(request),
         )
     )
-    return broker_account_response(bound)
+    if bound.replaced_session is not None:
+        background_tasks.add_task(retire_broker_session, bound.replaced_session, user_id)
+    return broker_account_response(bound.account)
 
 
 @router.delete(

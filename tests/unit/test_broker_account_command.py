@@ -20,6 +20,7 @@ from app.commands.broker_account import (
     UnbindBrokerAccountCommand,
     UnbindBrokerAccountInput,
     _cert_expires_at,
+    retire_broker_session,
 )
 from app.core.config import get_settings
 from app.domain.auth import UserData
@@ -170,13 +171,14 @@ class _Users:
 @dataclass
 class _Accounts:
     upserts: int = 0
-    bound: object | None = None  # truthy = "a row exists" for the unbind path
+    bound: object | None = None  # for the unbind path; the bind path sets it on upsert
 
     def get_by_user_id(self, user_id: UUID) -> object | None:
         return self.bound
 
     def upsert(self, user_id: UUID, **_: object) -> None:
         self.upserts += 1
+        self.bound = object()
 
     def delete(self, user_id: UUID) -> bool:
         return True
@@ -335,3 +337,29 @@ def test_unbind_rollback_raising_on_a_dead_connection_still_releases_the_claim()
     pool.discard(pool.prepare(user_id, _CREDS))
     pool.stop(pool.claim(user_id))
     assert live.stopped
+
+
+def test_rebind_hands_the_replaced_session_back_instead_of_stopping_it_inline() -> None:
+    """Review finding: unsubscribe + logout of the old session ran inside the
+    request after the token was already released; a slow logout could push a
+    *successful* bind past the proxy timeout. The command now returns it and
+    the route retires it after the response."""
+    db = _Db()
+    command, pool, built, user_id = _command(db)
+    pool.activate(pool.prepare(user_id, _CREDS))
+    old = built[0]
+
+    result = command.execute(_input(user_id))
+
+    assert result.replaced_session is old
+    assert not old.stopped  # nothing blocking happened after activate
+    assert pool.get(user_id) is built[1]
+    assert not pool.is_binding(user_id)
+    retire_broker_session(old, user_id)
+    assert old.stopped
+
+
+def test_retire_broker_session_never_raises() -> None:
+    provider = FakeProvider(shutdown_fail_with=RuntimeError("socket already closed"))
+    retire_broker_session(provider, uuid4())  # must not propagate
+    assert provider.stopped

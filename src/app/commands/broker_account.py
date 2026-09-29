@@ -32,6 +32,7 @@ from app.repositories.trade_intent_core_repository import TradeIntentCoreReposit
 from app.repositories.user_repository import UserRepository
 from app.services.audit import AuditEventWriter
 from app.services.broker_session_pool import BrokerSessionPool
+from app.services.quote.base import QuoteProvider
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,24 @@ class BindBrokerAccountInput:
     actor_admin_id: UUID
     now: datetime
     request_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BoundBrokerAccount:
+    account: BrokerAccountData
+    # The session this bind replaced, still logged in. The caller retires it
+    # *after* responding (unsubscribe + logout can take seconds; the bind is
+    # already committed and live, so the admin should not wait on the old one).
+    replaced_session: QuoteProvider | None
+
+
+def retire_broker_session(provider: QuoteProvider, user_id: UUID) -> None:
+    """Best-effort logout of a session that is no longer live. Never raises: the
+    new binding is committed and serving; a stale logout is not a rollback reason."""
+    try:
+        provider.shutdown()
+    except Exception as exc:
+        logger.warning("previous broker session shutdown raised %s user_id=%s", type(exc).__name__, user_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +105,7 @@ class BindBrokerAccountCommand:
         self._audit = audit
         self._pool = pool
 
-    def execute(self, inp: BindBrokerAccountInput) -> BrokerAccountData:
+    def execute(self, inp: BindBrokerAccountInput) -> BoundBrokerAccount:
         user = self._users.get_by_id(inp.target_user_id)
         if user is None:
             raise UserNotFoundError()
@@ -147,15 +166,9 @@ class BindBrokerAccountCommand:
             # the state degrades to "bound, no session" (a restart re-logs in).
             self._pool.discard(candidate)
             raise
-        if old is not None:
-            try:
-                old.shutdown()
-            except Exception as exc:
-                # The new binding is already committed and live; a stale logout is not a rollback reason.
-                logger.warning("previous broker session shutdown raised %s user_id=%s", type(exc).__name__, user.id)
         bound = self._accounts.get_by_user_id(user.id)
         assert bound is not None  # just committed
-        return bound
+        return BoundBrokerAccount(account=bound, replaced_session=old)
 
 
 class UnbindBrokerAccountCommand:
