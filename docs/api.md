@@ -9,6 +9,7 @@ API 預設 base URL 為 `http://127.0.0.1:8100`。完整 request／response sche
 - response 使用 camelCase；列表採 cursor pagination，常用欄位為 `cursor`、`pageSize` 與 `nextCursor`。
 - 每個 response 都會回傳設定指定的 request ID header，預設 `X-Request-Id`。
 - 錯誤 envelope 為 `{ "error": { "code", "message", "details", "requestId" } }`；前端邏輯應依 `code`，不要解析 message。
+- `VALIDATION_ERROR` 的 `details.errors[]` 只含 `type`、`loc`、`msg`、`ctx`，不回傳送進來的原始值（`input`），避免密碼、身分證字號或憑證在 422 回應中原樣回流。
 - owner 由 access token 決定；跨使用者資源以 not found 語意處理，不允許 client 指定 owner。
 
 ## Session 與 CSRF

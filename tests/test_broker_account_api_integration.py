@@ -662,3 +662,26 @@ def test_bind_during_an_unbind_is_refused_and_the_unbind_completes(engine: Engin
     assert gated.get(user_id) is None
     assert not gated.is_binding(user_id)
     assert harness.built[1].stopped  # the session that was live in the gated pool when the unbind ran
+
+
+@pytest.mark.integration
+def test_validation_failures_never_echo_the_submitted_secrets(engine: Engine) -> None:
+    """pydantic puts the offending value in every error's `input`; the envelope
+    must drop it or an oversized pfx / password comes straight back in the 422."""
+    harness = _Harness(engine)
+    client = harness.admin_client()
+    user_id = _seed_user(engine)
+    long_password = "P" * 300
+    huge_pfx = base64.b64encode(b"\x01" * (64 * 1024 + 1)).decode("ascii")
+    long_personal_id = "Q" * 40
+
+    for field, value in (("password", long_password), ("certPfxBase64", huge_pfx), ("personalId", long_personal_id)):
+        response = client.put(f"/admin/users/{user_id}/broker-account", json={**_bind_body(), field: value})
+        assert response.status_code == 422, field
+        body = response.json()
+        assert body["error"]["code"] == "VALIDATION_ERROR"
+        assert value not in response.text, field
+        [error] = body["error"]["details"]["errors"]
+        assert error["loc"] == ["body", field]
+        assert "input" not in error and "url" not in error
+    assert harness.built == []

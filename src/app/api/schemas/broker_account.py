@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import Base64Bytes, BaseModel, ConfigDict, Field
+from pydantic import Base64Bytes, BaseModel, ConfigDict, Field, SecretStr
 
 from app.core.config import BrokerName
 
@@ -11,14 +11,17 @@ MAX_CERT_PFX_BYTES = 64 * 1024
 
 
 class BindBrokerAccountRequest(BaseModel):
+    """Login material. Every secret is `SecretStr` / `repr=False` so the model's
+    repr never carries plaintext into a traceback, a log line or a locals dump."""
+
     model_config = ConfigDict(extra="forbid")
 
     broker: BrokerName
-    personal_id: str = Field(alias="personalId", min_length=1, max_length=32)
-    password: str = Field(min_length=1, max_length=256)
+    personal_id: SecretStr = Field(alias="personalId", min_length=1, max_length=32)
+    password: SecretStr = Field(min_length=1, max_length=256)
     # Decoded by pydantic; `max_length` applies to the decoded bytes.
-    cert_pfx: Base64Bytes = Field(alias="certPfxBase64", min_length=1, max_length=MAX_CERT_PFX_BYTES)
-    cert_password: str = Field(alias="certPassword", min_length=1, max_length=256)
+    cert_pfx: Base64Bytes = Field(alias="certPfxBase64", min_length=1, max_length=MAX_CERT_PFX_BYTES, repr=False)
+    cert_password: SecretStr = Field(alias="certPassword", min_length=1, max_length=256)
 
 
 class BrokerAccountResponse(BaseModel):

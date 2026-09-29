@@ -57,6 +57,8 @@ from app.services.quote.base import QuoteProviderError
 
 logger = logging.getLogger(__name__)
 
+_VALIDATION_ERROR_PRIVATE_KEYS = frozenset({"input", "url"})
+
 
 class ErrorCode(StrEnum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
@@ -546,11 +548,16 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # pydantic attaches the offending value as `input` on every error. That
+        # echoes passwords, identity numbers and whole certificate bundles back
+        # into the 422 body (and into any proxy / APM that logs bodies), so the
+        # envelope keeps only what a client needs to point at the field.
+        errors = [{k: v for k, v in error.items() if k not in _VALIDATION_ERROR_PRIVATE_KEYS} for error in exc.errors()]
         return build_error_response(
             request=request,
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.VALIDATION_ERROR,
-            details={"errors": exc.errors()},
+            details={"errors": errors},
         )
 
     @app.exception_handler(StarletteHTTPException)

@@ -22,6 +22,26 @@ from app.services.broker_session_pool import BrokerSessionPool
 from app.services.quote.base import QuoteProviderUnavailableError
 
 
+def test_bind_request_repr_masks_every_secret() -> None:
+    from app.api.schemas.broker_account import BindBrokerAccountRequest
+
+    body = BindBrokerAccountRequest.model_validate(
+        {
+            "broker": "fubon",
+            "personalId": "A123456789",
+            "password": "login-pw",
+            "certPfxBase64": "QUJD",
+            "certPassword": "cert-pw",
+        }
+    )
+
+    text = f"{body!r} {body}"
+    for secret in ("A123456789", "login-pw", "cert-pw", "ABC", "QUJD"):
+        assert secret not in text
+    assert body.personal_id.get_secret_value() == "A123456789"
+    assert bytes(body.cert_pfx) == b"ABC"
+
+
 def test_cert_expiry_is_read_from_the_pfx() -> None:
     expires = datetime(2027, 6, 30, 12, 0, tzinfo=UTC)
     pfx = build_test_pfx(password="secret", not_valid_after=expires)

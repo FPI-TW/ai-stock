@@ -228,10 +228,10 @@ def bind_broker_account(
             target_user_id=user_id,
             broker=body.broker,
             credentials=FubonCredentials(
-                personal_id=body.personal_id,
-                password=body.password,
+                personal_id=body.personal_id.get_secret_value(),
+                password=body.password.get_secret_value(),
                 cert_pfx=bytes(body.cert_pfx),
-                cert_password=body.cert_password,
+                cert_password=body.cert_password.get_secret_value(),
             ),
             actor_admin_id=admin.user_id,
             now=datetime.now(UTC),
