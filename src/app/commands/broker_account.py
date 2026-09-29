@@ -103,7 +103,6 @@ class BindBrokerAccountCommand:
         if user.status != "active":
             raise AccountNotActiveError()
         cert_expires_at = _cert_expires_at(inp.credentials.cert_pfx, inp.credentials.cert_password)
-        rebinding = self._accounts.get_by_user_id(user.id) is not None
 
         # Login happens here; failure leaves the live session and the DB untouched.
         candidate = self._pool.prepare(user.id, inp.credentials)
@@ -111,7 +110,7 @@ class BindBrokerAccountCommand:
         try:
             for symbol in sorted(self._core_intents.active_or_scheduled_symbols_by_owner(user.id)):
                 candidate.provider.subscribe(symbol)
-            self._accounts.upsert(
+            bound, rebinding = self._accounts.upsert(
                 user.id,
                 broker=inp.broker,
                 credentials=inp.credentials,
@@ -157,8 +156,6 @@ class BindBrokerAccountCommand:
             # the state degrades to "bound, no session" (a restart re-logs in).
             self._pool.discard(candidate)
             raise
-        bound = self._accounts.get_by_user_id(user.id)
-        assert bound is not None  # just committed
         return BoundBrokerAccount(account=bound, replaced_session=old)
 
 

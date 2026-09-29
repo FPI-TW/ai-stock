@@ -23,7 +23,7 @@ from app.commands.broker_account import (
 )
 from app.core.config import get_settings
 from app.domain.auth import UserData
-from app.domain.broker_account import BrokerLoginFailedError, FubonCredentials
+from app.domain.broker_account import BrokerAccountData, BrokerLoginFailedError, FubonCredentials
 from app.services.broker_session_pool import BrokerSessionPool, retire_broker_session
 from app.services.quote.base import QuoteProviderUnavailableError
 
@@ -170,14 +170,27 @@ class _Users:
 @dataclass
 class _Accounts:
     upserts: int = 0
-    bound: object | None = None  # for the unbind path; the bind path sets it on upsert
+    bound: object | None = None  # unbind path: truthy = "a row exists"
 
     def get_by_user_id(self, user_id: UUID) -> object | None:
         return self.bound
 
-    def upsert(self, user_id: UUID, **_: object) -> None:
+    def upsert(self, user_id: UUID, **_: object) -> tuple[BrokerAccountData, bool]:
         self.upserts += 1
-        self.bound = object()
+        now = datetime.now(UTC)
+        data = BrokerAccountData(
+            id=uuid4(),
+            user_id=user_id,
+            broker="fubon",
+            broker_account_no="9876543",
+            cert_expires_at=now,
+            status="active",
+            last_login_at=now,
+            last_error=None,
+            created_at=now,
+            updated_at=now,
+        )
+        return data, self.upserts > 1
 
     def delete(self, user_id: UUID) -> bool:
         return True

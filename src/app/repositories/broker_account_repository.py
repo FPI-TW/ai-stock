@@ -90,9 +90,14 @@ class BrokerAccountRepository:
         broker_account_no: str,
         cert_expires_at: datetime,
         now: datetime,
-    ) -> None:
+    ) -> tuple[BrokerAccountData, bool]:
         """Replace the whole binding (re-binding is how a yearly cert renewal lands).
-        Only called after a successful login, so the row starts / returns to `active`."""
+        Only called after a successful login, so the row starts / returns to `active`.
+
+        Returns the projection and whether a row already existed. Every column the
+        projection reads is set here on the client side (`TimestampMixin` has
+        server defaults but no `onupdate`), so the caller needs no post-commit
+        re-read to work around `expire_on_commit`."""
         blob = encrypt_secret(
             self._require_key(),
             json.dumps(
@@ -106,31 +111,32 @@ class BrokerAccountRepository:
         )
         existing = self._db.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalar_one_or_none()
         if existing is None:
-            self._db.add(
-                BrokerAccount(
-                    id=uuid4(),
-                    user_id=user_id,
-                    broker=broker,
-                    credentials_encrypted=blob,
-                    broker_account_no=broker_account_no,
-                    cert_expires_at=cert_expires_at,
-                    status="active",
-                    last_login_at=now,
-                    last_error=None,
-                    created_at=now,
-                    updated_at=now,
-                )
+            row = BrokerAccount(
+                id=uuid4(),
+                user_id=user_id,
+                broker=broker,
+                credentials_encrypted=blob,
+                broker_account_no=broker_account_no,
+                cert_expires_at=cert_expires_at,
+                status="active",
+                last_login_at=now,
+                last_error=None,
+                created_at=now,
+                updated_at=now,
             )
+            self._db.add(row)
         else:
-            existing.broker = broker
-            existing.credentials_encrypted = blob
-            existing.broker_account_no = broker_account_no
-            existing.cert_expires_at = cert_expires_at
-            existing.status = "active"
-            existing.last_login_at = now
-            existing.last_error = None
-            existing.updated_at = now
+            row = existing
+            row.broker = broker
+            row.credentials_encrypted = blob
+            row.broker_account_no = broker_account_no
+            row.cert_expires_at = cert_expires_at
+            row.status = "active"
+            row.last_login_at = now
+            row.last_error = None
+            row.updated_at = now
         self._db.flush()
+        return _to_domain(row), existing is not None
 
     def delete(self, user_id: UUID) -> bool:
         result = cast(
