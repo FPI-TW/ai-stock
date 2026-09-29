@@ -6,7 +6,8 @@ construction:
 - **per-user** (`QUOTE_PROVIDER=fubon`, `shared=None`): `dict[user_id, provider]`,
   one `FubonQuoteProvider` per bound user, capped by `BROKER_MAX_SESSIONS`.
 - **shared** (`in_memory` or the demo provider): every user resolves to the one shared
-  provider; `prepare` is refused because there is no per-user login to verify.
+  provider; `prepare` is refused with `BrokerBindingNotEnabledError` (409, not
+  retryable) because there is no per-user login to verify.
 
 Replacing a user's session is a two-phase swap so a failed re-bind never takes
 the working session down:
@@ -42,6 +43,7 @@ from uuid import UUID
 from app.core.config import Settings
 from app.domain.broker_account import (
     BrokerAccountNotBoundError,
+    BrokerBindingNotEnabledError,
     BrokerBindInProgressError,
     BrokerLoginFailedError,
     BrokerLoginFailureCode,
@@ -98,6 +100,7 @@ class BrokerSessionPool:
         provider_factory: Callable[[FubonCredentials], QuoteProvider] | None = None,
     ) -> None:
         self._max = settings.broker_max_sessions
+        self._quote_provider_name = settings.quote_provider
         self._shared = shared
         self._build = provider_factory or (lambda creds: build_quote_provider(settings, credentials=creds))
         self._lock = threading.Lock()
@@ -152,7 +155,8 @@ class BrokerSessionPool:
         """
         if self._shared is not None:
             # Nothing per-user to log into; refusing keeps `prepare -> DB row` honest.
-            raise BrokerLoginFailedError("provider_unavailable")
+            # A dedicated, non-retryable error: this is configuration, not a broker outage.
+            raise BrokerBindingNotEnabledError(self._quote_provider_name)
         with self._lock:
             if user_id in self._pending:
                 raise BrokerBindInProgressError()

@@ -11,6 +11,7 @@ import pytest
 from app.core.config import Settings, get_settings
 from app.domain.broker_account import (
     BrokerAccountNotBoundError,
+    BrokerBindingNotEnabledError,
     BrokerBindInProgressError,
     BrokerLoginFailedError,
     BrokerSessionLimitReachedError,
@@ -298,9 +299,9 @@ def test_shared_mode_serves_everyone_and_refuses_prepare() -> None:
     assert not pool.per_user
     assert pool.get(uuid4()) is shared
     assert pool.require(uuid4()) is shared
-    with pytest.raises(BrokerLoginFailedError) as info:
+    with pytest.raises(BrokerBindingNotEnabledError) as info:
         pool.prepare(uuid4(), _CREDS)
-    assert info.value.code == "provider_unavailable"
+    assert info.value.quote_provider == "in_memory"  # conftest pins QUOTE_PROVIDER
     pool.stop_all()
     assert not shared.stopped  # lifespan owns the shared provider's shutdown
 

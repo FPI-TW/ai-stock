@@ -36,6 +36,7 @@ from app.domain.auth import (
 from app.domain.broker_account import (
     BrokerAccountError,
     BrokerAccountNotBoundError,
+    BrokerBindingNotEnabledError,
     BrokerBindInProgressError,
     BrokerLoginFailedError,
     BrokerSessionLimitReachedError,
@@ -117,6 +118,7 @@ class ErrorCode(StrEnum):
     BROKER_LOGIN_FAILED = "BROKER_LOGIN_FAILED"
     BROKER_SESSION_LIMIT_REACHED = "BROKER_SESSION_LIMIT_REACHED"
     BROKER_BIND_IN_PROGRESS = "BROKER_BIND_IN_PROGRESS"
+    BROKER_BINDING_NOT_ENABLED = "BROKER_BINDING_NOT_ENABLED"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -173,6 +175,9 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.BROKER_LOGIN_FAILED: "券商登入失敗",
     ErrorCode.BROKER_SESSION_LIMIT_REACHED: "券商連線數已達本系統上限",
     ErrorCode.BROKER_BIND_IN_PROGRESS: "此使用者的券商綁定正在處理中，請稍後再試",
+    ErrorCode.BROKER_BINDING_NOT_ENABLED: (
+        "目前為共用帳號行情模式，未啟用 per-user 券商綁定（QUOTE_PROVIDER 需為 fubon）"
+    ),
 }
 
 
@@ -340,6 +345,13 @@ def register_exception_handlers(app: FastAPI) -> None:
             )
         if isinstance(exc, BrokerBindInProgressError):
             return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.BROKER_BIND_IN_PROGRESS)
+        if isinstance(exc, BrokerBindingNotEnabledError):
+            return build_error_response(
+                request,
+                status.HTTP_409_CONFLICT,
+                ErrorCode.BROKER_BINDING_NOT_ENABLED,
+                details={"quoteProvider": exc.quote_provider},
+            )
         if isinstance(exc, BrokerAccountNotBoundError):
             return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.BROKER_ACCOUNT_NOT_BOUND)
         return build_error_response(request, status.HTTP_500_INTERNAL_SERVER_ERROR, ErrorCode.INTERNAL_ERROR)

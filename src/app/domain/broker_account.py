@@ -82,3 +82,12 @@ class BrokerSessionLimitReachedError(BrokerAccountError):
 
 class BrokerBindInProgressError(BrokerAccountError):
     """Another bind / unbind for the same user is mid-flight; retry after it settles."""
+
+
+class BrokerBindingNotEnabledError(BrokerAccountError):
+    """The runtime is in shared-provider mode (`in_memory` / demo): there is no
+    per-user broker login to perform, so binding is refused outright. Not retryable."""
+
+    def __init__(self, quote_provider: str) -> None:
+        super().__init__(quote_provider)
+        self.quote_provider = quote_provider

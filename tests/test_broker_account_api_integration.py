@@ -721,3 +721,22 @@ def test_validation_failures_never_echo_the_submitted_secrets(engine: Engine) ->
         assert error["loc"] == ["body", field]
         assert "input" not in error and "url" not in error
     assert harness.built == []
+
+
+@pytest.mark.integration
+def test_shared_mode_refuses_binding_with_a_non_retryable_409(engine: Engine) -> None:
+    """Every configuration this PR can boot with is shared-mode (in_memory / demo).
+    Binding there must not look like a transient broker outage: 409 with a code
+    that names the configuration, no row, no audit."""
+    harness = _Harness(engine)
+    harness.app.state.broker_sessions = create_app().state.broker_sessions  # the real, shared-mode pool
+    user_id = _seed_user(engine)
+
+    response = harness.admin_client().put(f"/admin/users/{user_id}/broker-account", json=_bind_body())
+
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "BROKER_BINDING_NOT_ENABLED"
+    assert response.json()["error"]["details"] == {"quoteProvider": "in_memory"}
+    assert _row(engine, user_id) is None
+    assert _audit_types(engine, harness.admin_id) == []
+    assert harness.admin_client().get("/me/broker-account").status_code == 404
