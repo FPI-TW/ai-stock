@@ -33,7 +33,7 @@ from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.services.broker_session_pool import BrokerSessionPool, BrokerStopClaim
 from app.services.quote.base import QuoteProviderUnavailableError
 from tests.pfx_helpers import DEFAULT_NOT_AFTER, build_test_pfx
-from tests.unit.test_broker_session_pool import FakeProvider, _SdkLoginError
+from tests.unit.test_broker_session_pool import FakeProvider, _login_error
 
 CERT_PASSWORD = "cert-pw"
 # The bind path refuses the repo's dev fallback key even in LOCAL_MODE (a real
@@ -259,7 +259,7 @@ def test_first_bind_login_failure_is_422_without_a_row_and_without_secrets(
     engine: Engine, caplog: pytest.LogCaptureFixture
 ) -> None:
     harness = _Harness(engine)
-    harness.fail_with = _SdkLoginError("login_rejected")
+    harness.fail_with = _login_error("login_rejected")
     harness.fail_with.args = (f"broker said no for {SECRET_SENTINEL}",)
     user_id = _seed_user(engine)
     _capture_app_logs(caplog)
@@ -330,7 +330,7 @@ def test_rebind_failure_keeps_the_old_session_and_row(engine: Engine) -> None:
     before = _row(engine, user_id)
     assert before is not None
 
-    harness.fail_with = _SdkLoginError("login_rejected")
+    harness.fail_with = _login_error("login_rejected")
     response = client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id="B222222222"))
 
     assert response.status_code == 422

@@ -4,6 +4,7 @@ per-user operation token, failure-code mapping, shared mode."""
 import threading
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import get_args
 from uuid import UUID, uuid4
 
 import pytest
@@ -14,12 +15,13 @@ from app.domain.broker_account import (
     BrokerBindingNotEnabledError,
     BrokerBindInProgressError,
     BrokerLoginFailedError,
+    BrokerLoginFailureCode,
     BrokerSessionLimitReachedError,
     BrokerSessionSetupError,
     FubonCredentials,
 )
 from app.services.broker_session_pool import BrokerSessionPool
-from app.services.quote.base import QuoteListener, QuoteProviderUnavailableError, QuoteSnapshot
+from app.services.quote.base import BrokerLoginError, QuoteListener, QuoteProviderUnavailableError, QuoteSnapshot
 
 _CREDS = FubonCredentials(personal_id="A123456789", password="pw", cert_pfx=b"pfx", cert_password="cpw")
 
@@ -79,12 +81,9 @@ class FakeProvider:
         self.listeners.remove(listener)
 
 
-class _SdkLoginError(Exception):
-    """Shape of FubonLoginError without importing the Fubon package."""
-
-    def __init__(self, failure_code: str) -> None:
-        super().__init__("SDK text that must never surface")
-        self.failure_code = failure_code
+def _login_error(code: BrokerLoginFailureCode) -> BrokerLoginError:
+    """What any provider's client raises; the pool reads `failure_code` off the base class."""
+    return BrokerLoginError("fubon", code)
 
 
 def _settings(max_sessions: int = 2) -> Settings:
@@ -167,8 +166,8 @@ def test_rebind_replaces_session_and_returns_old_provider() -> None:
 @pytest.mark.parametrize(
     ("exc", "expected_code"),
     [
-        (_SdkLoginError("login_rejected"), "login_rejected"),
-        (_SdkLoginError("session_limit"), "session_limit"),
+        (_login_error("login_rejected"), "login_rejected"),
+        (_login_error("session_limit"), "session_limit"),
         (QuoteProviderUnavailableError("fubon", "realtime_connect_failed"), "provider_unavailable"),
     ],
 )
@@ -184,6 +183,19 @@ def test_prepare_failure_maps_to_safe_code_and_releases_token(exc: Exception, ex
     # Token and slot released: the same user may try again, and the slot is free.
     ok_pool, _ = _pool(max_sessions=1)
     ok_pool.activate(ok_pool.prepare(user_id, _CREDS))
+
+
+@pytest.mark.parametrize("code", get_args(BrokerLoginFailureCode))
+def test_every_domain_failure_code_survives_the_pool_unchanged(code: BrokerLoginFailureCode) -> None:
+    """Review finding: the code vocabulary used to be copied three times (client
+    Literal, domain Literal, pool frozenset), so a new code missed in one place
+    silently degraded to `unknown`. One Literal now; nothing can be dropped."""
+    pool, _ = _pool(max_sessions=1, fail_with=_login_error(code))
+
+    with pytest.raises(BrokerLoginFailedError) as info:
+        pool.prepare(uuid4(), _CREDS)
+
+    assert info.value.code == code
 
 
 def test_non_broker_exception_is_a_setup_error_with_type_only(caplog: pytest.LogCaptureFixture) -> None:

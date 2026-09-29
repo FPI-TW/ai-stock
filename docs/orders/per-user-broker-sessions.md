@@ -119,7 +119,7 @@
 > 2026-09-29 已實作（分支 `feat/broker-account-binding`，接在 PR1 之後）。與原設計的差異：
 > - `BrokerLoginFailureCode` 多一個 `cert_invalid`：command 先用憑證密碼解 pfx 取到期日，解不開就在呼叫券商前以 422 拒絕，管理員能分辨是憑證還是帳密錯。
 > - 多兩個錯誤碼：`BROKER_BIND_IN_PROGRESS`(409)＝同一使用者的 prepare／activate 尚未結束時第二個綁定或解綁被拒；`ACCOUNT_NOT_ACTIVE`(409)＝目標使用者非 active。
-> - 失敗碼對映放在 pool 的 `prepare`（duck-type 讀 `failure_code`，不 import fubon 套件），command 不再自己對映；非券商回應的例外（ImportError、AttributeError 等）不壓成 `unknown`，改拋 `BrokerSessionSetupError` → 500 `BROKER_SESSION_SETUP_FAILED`，log 記例外類別與 frames（不記訊息）；`unknown` 碼保留給 PR3 重連迴圈的 `mark_login_failed`；shared 模式下 `prepare` 回專屬的 `BrokerBindingNotEnabledError` → 409 `BROKER_BINDING_NOT_ENABLED`（不可重試，避免被當成暫時性券商故障無限重試）。
+> - 失敗碼只有 domain 一份 `BrokerLoginFailureCode`：`services/quote/base.py` 的 `BrokerLoginError` 帶它，`FubonLoginError` 為其子類，pool 以 `isinstance` 讀 `failure_code`（不 import fubon 套件）；非券商回應的例外（ImportError、AttributeError 等）不壓成 `unknown`，改拋 `BrokerSessionSetupError` → 500 `BROKER_SESSION_SETUP_FAILED`，log 記例外類別與 frames（不記訊息）；`unknown` 碼保留給 PR3 重連迴圈的 `mark_login_failed`；shared 模式下 `prepare` 回專屬的 `BrokerBindingNotEnabledError` → 409 `BROKER_BINDING_NOT_ENABLED`（不可重試，避免被當成暫時性券商故障無限重試）。
 > - 解綁取消委託的狀態用既有的 `cancelled`（`trade_intent_core.status` CHECK 沒有新值，不加 migration）。
 > - `FubonCredentials` 搬到 `domain/broker_account.py`，`fubon/client.py` 不再定義。
 > - `TradeIntentCoreRepository.active_or_scheduled_symbols_by_owner` 提前在本 PR 加入（綁定時訂閱該使用者的有效標的）。

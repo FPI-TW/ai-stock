@@ -38,7 +38,7 @@ import threading
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import Protocol
 from uuid import UUID
 
 from app.core.config import Settings
@@ -52,12 +52,10 @@ from app.domain.broker_account import (
     BrokerSessionSetupError,
     FubonCredentials,
 )
-from app.services.quote.base import QuoteProvider, QuoteProviderError, QuoteSnapshot
+from app.services.quote.base import BrokerLoginError, QuoteProvider, QuoteProviderError, QuoteSnapshot
 from app.services.quote.factory import build_quote_provider
 
 logger = logging.getLogger(__name__)
-
-_LOGIN_CODES: frozenset[str] = frozenset({"login_rejected", "session_limit", "provider_unavailable"})
 
 
 class OwnerScopedQuoteListener(Protocol):
@@ -85,15 +83,14 @@ class BrokerStopClaim:
 def _failure_code(exc: Exception) -> BrokerLoginFailureCode | None:
     """The safe code for a *broker answer*; None when the exception is not one.
 
-    FubonLoginError carries `failure_code`; duck-typed so this module never
-    imports the Fubon package (the in_memory runtime must not load it). Any other
-    QuoteProviderError is the provider saying "not available". Everything else
-    (ImportError for the missing wheel, AttributeError from SDK drift, ...) is
-    ours to fix, not the admin's to retry, and is reported separately.
+    `BrokerLoginError` (raised by any provider's client) already carries a domain
+    code, so there is nothing to translate. Any other QuoteProviderError is the
+    provider saying "not available". Everything else (ImportError for the missing
+    wheel, AttributeError from SDK drift, ...) is ours to fix, not the admin's to
+    retry, and is reported separately.
     """
-    code = getattr(exc, "failure_code", None)
-    if code in _LOGIN_CODES:
-        return cast(BrokerLoginFailureCode, code)
+    if isinstance(exc, BrokerLoginError):
+        return exc.failure_code
     if isinstance(exc, QuoteProviderError):
         return "provider_unavailable"
     return None

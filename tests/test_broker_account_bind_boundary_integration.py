@@ -31,7 +31,7 @@ from tests.test_broker_account_api_integration import (
     credential_key,  # noqa: F401 - autouse fixture: the bind path refuses the dev fallback key
     engine,  # noqa: F401 - module-scoped fixture re-exported for this file
 )
-from tests.unit.test_broker_session_pool import FakeProvider, _SdkLoginError
+from tests.unit.test_broker_session_pool import FakeProvider, _login_error
 
 pytestmark = pytest.mark.integration
 
@@ -109,7 +109,7 @@ def test_case_a_broker_hard_limit_leaves_db_and_old_session_untouched(engine: En
     row_before = _row_state(engine, user_id)
     audits_before = _audit_count(engine)
 
-    harness.fail_with = _SdkLoginError("session_limit")
+    harness.fail_with = _login_error("session_limit")
     response = harness.admin_client().put(
         f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id="B222222222")
     )

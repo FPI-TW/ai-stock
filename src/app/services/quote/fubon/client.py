@@ -26,27 +26,26 @@ import logging
 import os
 import tempfile
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any
 
-from app.services.quote.base import QuoteProviderError, QuoteProviderUnavailableError, QuoteSnapshot
+from app.domain.broker_account import BrokerLoginFailureCode
+from app.services.quote.base import BrokerLoginError, QuoteProviderError, QuoteProviderUnavailableError, QuoteSnapshot
 from app.services.quote.fubon.normalize import aggregates_to_snapshot
 
 logger = logging.getLogger(__name__)
 
 QuoteHandler = Callable[[QuoteSnapshot], None]
-FubonLoginFailureCode = Literal["login_rejected", "session_limit", "provider_unavailable"]
 
 _LOGIN_LOST_EVENT_CODES = frozenset({"300", "301", "304"})
 _SESSION_LIMIT_MARKER = "連線限制"
 _CHANNEL = "aggregates"
 
 
-class FubonLoginError(QuoteProviderUnavailableError):
-    """Login / session failure with a safe, enumerable code and no SDK text."""
+class FubonLoginError(BrokerLoginError):
+    """Fubon's login / session failure; the code vocabulary lives in the domain."""
 
-    def __init__(self, failure_code: FubonLoginFailureCode) -> None:
+    def __init__(self, failure_code: BrokerLoginFailureCode) -> None:
         super().__init__("fubon", failure_code)
-        self.failure_code: FubonLoginFailureCode = failure_code
 
 
 def _default_sdk_factory(ws_url: str) -> Callable[[], Any]:
@@ -105,7 +104,7 @@ class FubonClient:
             raise FubonLoginError("provider_unavailable") from exc
         if not getattr(result, "is_success", False):
             message = str(getattr(result, "message", "") or "")
-            code: FubonLoginFailureCode = "session_limit" if _SESSION_LIMIT_MARKER in message else "login_rejected"
+            code: BrokerLoginFailureCode = "session_limit" if _SESSION_LIMIT_MARKER in message else "login_rejected"
             logger.warning("fubon login rejected code=%s", code)
             raise FubonLoginError(code)
         stock_accounts = [a for a in (result.data or []) if getattr(a, "account_type", None) == "stock"]
