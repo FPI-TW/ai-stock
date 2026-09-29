@@ -1,16 +1,25 @@
-"""Pure parts of the bind command: pfx parsing and the runtime import boundary."""
+"""Bind command without Postgres: pfx parsing, the runtime import boundary, and
+the cleanup contract when something fails between broker login and commit."""
 
 import os
 import subprocess
 import sys
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.exc import OperationalError
 from tests.pfx_helpers import build_test_pfx
+from tests.unit.test_broker_session_pool import FakeProvider
 
-from app.commands.broker_account import _cert_expires_at
-from app.domain.broker_account import BrokerLoginFailedError
+from app.commands.broker_account import BindBrokerAccountCommand, BindBrokerAccountInput, _cert_expires_at
+from app.core.config import get_settings
+from app.domain.auth import UserData
+from app.domain.broker_account import BrokerLoginFailedError, FubonCredentials
+from app.services.broker_session_pool import BrokerSessionPool
+from app.services.quote.base import QuoteProviderUnavailableError
 
 
 def test_cert_expiry_is_read_from_the_pfx() -> None:
@@ -49,3 +58,137 @@ def test_in_memory_runtime_never_imports_the_fubon_package() -> None:
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env, check=True)
 
     assert result.stdout.strip() == "[]"
+
+
+# --- failures between login and commit ------------------------------------------
+# Real Postgres is not needed to prove the cleanup contract: whatever fails after
+# the candidate logged in, the candidate must be shut down and the live session
+# (if any) left alone. Stubs stand in for the repositories.
+
+_PFX = build_test_pfx(password="secret")
+_CREDS = FubonCredentials(personal_id="A123456789", password="pw", cert_pfx=_PFX, cert_password="secret")
+
+
+@dataclass
+class _Db:
+    commit_fail_with: Exception | None = None
+    commits: int = 0
+    rollbacks: int = 0
+
+    def commit(self) -> None:
+        if self.commit_fail_with is not None:
+            raise self.commit_fail_with
+        self.commits += 1
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+
+class _Users:
+    def __init__(self, user_id: UUID) -> None:
+        now = datetime.now(UTC)
+        self._user = UserData(
+            id=user_id,
+            email="u@example.com",
+            role="user",
+            status="active",
+            mfa_enabled=False,
+            password_hash=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+    def get_by_id(self, user_id: UUID) -> UserData | None:
+        return self._user if user_id == self._user.id else None
+
+
+@dataclass
+class _Accounts:
+    upserts: int = 0
+
+    def get_by_user_id(self, user_id: UUID) -> None:
+        return None
+
+    def upsert(self, user_id: UUID, **_: object) -> None:
+        self.upserts += 1
+
+
+@dataclass
+class _CoreIntents:
+    symbols: set[str] = field(default_factory=lambda: {"2330", "2317"})
+
+    def active_or_scheduled_symbols_by_owner(self, owner_user_id: UUID) -> set[str]:
+        return set(self.symbols)
+
+
+class _Audit:
+    def write(self, **_: object) -> None:
+        return None
+
+
+def _command(
+    db: _Db, *, provider_kwargs: dict[str, object] | None = None
+) -> tuple[BindBrokerAccountCommand, BrokerSessionPool, list[FakeProvider], UUID]:
+    built: list[FakeProvider] = []
+
+    def factory(_creds: FubonCredentials) -> FakeProvider:
+        provider = FakeProvider(**(provider_kwargs or {}))  # type: ignore[arg-type]
+        built.append(provider)
+        return provider
+
+    pool = BrokerSessionPool(get_settings(), shared=None, provider_factory=factory)
+    user_id = uuid4()
+    command = BindBrokerAccountCommand(db, _Users(user_id), _Accounts(), _CoreIntents(), _Audit(), pool)  # type: ignore[arg-type]
+    return command, pool, built, user_id
+
+
+def _input(user_id: UUID) -> BindBrokerAccountInput:
+    return BindBrokerAccountInput(
+        target_user_id=user_id, broker="fubon", credentials=_CREDS, actor_admin_id=uuid4(), now=datetime.now(UTC)
+    )
+
+
+def test_commit_failure_rolls_back_and_logs_the_candidate_out() -> None:
+    """DB connection dropped at commit (OperationalError): the candidate already
+    holds a broker login, so it must be shut down, and the pool must hold nothing."""
+    db = _Db(commit_fail_with=OperationalError("COMMIT", {}, Exception("server closed the connection")))
+    command, pool, built, user_id = _command(db)
+
+    with pytest.raises(OperationalError):
+        command.execute(_input(user_id))
+
+    assert db.rollbacks == 1
+    assert built[0].started and built[0].stopped
+    assert pool.get(user_id) is None
+    assert not pool.is_binding(user_id)
+
+
+def test_subscribe_failure_after_login_is_cleaned_up_and_surfaces_as_provider_error() -> None:
+    """Socket dropped between login and subscribe (the broker closes it ~14:05):
+    nothing is written, the candidate logs out, the error keeps its 503 mapping."""
+    db = _Db()
+    command, pool, built, user_id = _command(
+        db, provider_kwargs={"subscribe_fail_with": QuoteProviderUnavailableError("fubon", "subscribe_failed")}
+    )
+
+    with pytest.raises(QuoteProviderUnavailableError):
+        command.execute(_input(user_id))
+
+    assert db.commits == 0 and db.rollbacks == 1
+    assert built[0].stopped
+    assert pool.get(user_id) is None
+
+
+def test_rebind_failure_before_commit_leaves_the_live_session_untouched() -> None:
+    db = _Db()
+    command, pool, built, user_id = _command(db)
+    pool.activate(pool.prepare(user_id, _CREDS))  # existing live session
+    live = built[0]
+
+    db.commit_fail_with = OperationalError("COMMIT", {}, Exception("deadlock detected"))
+    with pytest.raises(OperationalError):
+        command.execute(_input(user_id))
+
+    assert pool.get(user_id) is live
+    assert not live.stopped
+    assert built[1].stopped

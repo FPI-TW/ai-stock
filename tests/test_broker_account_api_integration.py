@@ -5,6 +5,7 @@ session is a recording fake injected through a per-user `BrokerSessionPool`.
 
 import base64
 import logging
+import threading
 from collections.abc import Generator
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -29,6 +30,7 @@ from app.domain.broker_account import FubonCredentials
 from app.main import create_app
 from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.services.broker_session_pool import BrokerSessionPool
+from app.services.quote.base import QuoteProviderUnavailableError
 from tests.pfx_helpers import DEFAULT_NOT_AFTER, build_test_pfx
 from tests.unit.test_broker_session_pool import FakeProvider
 
@@ -114,6 +116,9 @@ class _Harness:
     def __init__(self, engine: Engine, *, max_sessions: int = 2) -> None:
         self.built: list[FakeProvider] = []
         self.fail_with: Exception | None = None
+        self.subscribe_fail_with: Exception | None = None
+        self.shutdown_fail_with: Exception | None = None
+        self.startup_gate: threading.Event | None = None
         settings = get_settings().model_copy(update={"broker_max_sessions": max_sessions})
         self.pool = BrokerSessionPool(settings, shared=None, provider_factory=self._factory)
         self.app = create_app()
@@ -121,7 +126,12 @@ class _Harness:
         self.admin_id = _seed_user(engine, role="admin", mfa=True)
 
     def _factory(self, credentials: FubonCredentials) -> FakeProvider:
-        provider = FakeProvider(fail_with=self.fail_with)
+        provider = FakeProvider(
+            fail_with=self.fail_with,
+            subscribe_fail_with=self.subscribe_fail_with,
+            shutdown_fail_with=self.shutdown_fail_with,
+            startup_gate=self.startup_gate,
+        )
         self.built.append(provider)
         return provider
 
@@ -428,3 +438,170 @@ def test_mark_login_failed_stores_only_the_whitelisted_message(engine: Engine) -
     assert row is not None
     assert row.status == "active"
     assert row.last_error is None
+
+
+# --- extreme paths --------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_rebind_whose_subscribe_fails_keeps_old_session_and_returns_503(engine: Engine) -> None:
+    """Login succeeded but the market-data socket is gone (broker closes it after
+    hours): the candidate is logged out, nothing is written, the old session stays."""
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+    _seed_core_intent(engine, user_id)
+    client = harness.admin_client()
+    assert client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body()).status_code == 200
+    before = _row(engine, user_id)
+    assert before is not None
+
+    harness.subscribe_fail_with = QuoteProviderUnavailableError("fubon", "subscribe_failed")
+    response = client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id="B222222222"))
+
+    assert response.status_code == 503, response.text
+    assert response.json()["error"]["code"] == "QUOTE_PROVIDER_UNAVAILABLE"
+    first, candidate = harness.built
+    assert candidate.stopped and not first.stopped
+    assert harness.pool.get(user_id) is first
+    after = _row(engine, user_id)
+    assert after is not None
+    assert after.credentials_encrypted == before.credentials_encrypted
+    assert _audit_types(engine, harness.admin_id) == ["broker_account_bound"]
+
+
+@pytest.mark.integration
+def test_old_session_logout_raising_does_not_undo_a_committed_rebind(engine: Engine) -> None:
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+    client = harness.admin_client()
+    harness.shutdown_fail_with = RuntimeError("socket already closed by broker")
+    assert client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body()).status_code == 200
+    harness.shutdown_fail_with = None
+
+    response = client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id="B222222222"))
+
+    assert response.status_code == 200, response.text
+    first, second = harness.built
+    assert first.stopped  # attempted, raised, swallowed
+    assert harness.pool.get(user_id) is second
+    with Session(engine) as session:
+        repo = BrokerAccountRepository(session, encryption_key=get_settings().resolved_mfa_encryption_key)
+        creds = repo.get_credentials(user_id)
+    assert creds is not None and creds.personal_id == "B222222222"
+
+
+@pytest.mark.integration
+def test_second_bind_and_unbind_are_refused_while_the_first_login_is_in_flight(engine: Engine) -> None:
+    """Two admins act on the same user while its broker login is still busy-spinning:
+    the later bind and an unbind both get 409, and the first bind completes normally."""
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+    gate = threading.Event()
+    harness.startup_gate = gate
+    first_result: list[int] = []
+
+    def first_bind() -> None:
+        first_result.append(
+            harness.admin_client().put(f"/admin/users/{user_id}/broker-account", json=_bind_body()).status_code
+        )
+
+    worker = threading.Thread(target=first_bind)
+    worker.start()
+    try:
+        deadline = threading.Event()
+        for _ in range(50):
+            if harness.built and harness.built[0].in_startup.is_set():
+                break
+            deadline.wait(0.1)
+        assert harness.built and harness.built[0].in_startup.is_set()
+        harness.startup_gate = None
+        client = harness.admin_client()
+
+        second = client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id="B222222222"))
+        unbind = client.delete(f"/admin/users/{user_id}/broker-account")
+    finally:
+        gate.set()
+        worker.join(timeout=10)
+
+    assert second.status_code == 409 and second.json()["error"]["code"] == "BROKER_BIND_IN_PROGRESS"
+    assert unbind.status_code == 409 and unbind.json()["error"]["code"] == "BROKER_BIND_IN_PROGRESS"
+    assert first_result == [200]
+    assert len(harness.built) == 1  # the refused bind never built (or logged in) a provider
+    assert harness.pool.get(user_id) is harness.built[0]
+    assert _row(engine, user_id) is not None
+
+
+@pytest.mark.integration
+def test_credentials_encrypted_under_a_rotated_key_raise_invalid_token(engine: Engine) -> None:
+    """If MFA_ENCRYPTION_KEY is rotated without re-encrypting broker_accounts, the
+    repository cannot decrypt: it raises rather than returning garbage. PR3's
+    startup loop must treat this per user, not abort the whole lifespan."""
+    from cryptography.fernet import Fernet, InvalidToken
+
+    user_id = _seed_user(engine)
+    now = datetime.now(UTC)
+    with Session(engine) as session:
+        BrokerAccountRepository(session, encryption_key=get_settings().resolved_mfa_encryption_key).upsert(
+            user_id,
+            broker="fubon",
+            credentials=FubonCredentials(personal_id="A1", password="p", cert_pfx=PFX, cert_password="c"),
+            broker_account_no="1",
+            cert_expires_at=DEFAULT_NOT_AFTER,
+            now=now,
+        )
+        session.commit()
+
+    with Session(engine) as session, pytest.raises(InvalidToken):
+        BrokerAccountRepository(session, encryption_key=Fernet.generate_key().decode()).get_credentials(user_id)
+
+
+@pytest.mark.integration
+def test_two_transactions_inserting_the_same_user_hit_the_unique_index(engine: Engine) -> None:
+    """The pool token serialises binds inside one process; across processes (or a
+    future multi-worker mistake) the DB unique index is the last guard. The second
+    insert blocks on the first's row lock and fails once it commits."""
+    from sqlalchemy.exc import IntegrityError
+
+    user_id = _seed_user(engine)
+    key = get_settings().resolved_mfa_encryption_key
+    now = datetime.now(UTC)
+    creds = FubonCredentials(personal_id="A1", password="p", cert_pfx=PFX, cert_password="c")
+    errors: list[Exception] = []
+    second_flushed = threading.Event()
+
+    def second_writer() -> None:
+        with Session(engine) as session:
+            try:
+                BrokerAccountRepository(session, encryption_key=key).upsert(
+                    user_id,
+                    broker="fubon",
+                    credentials=creds,
+                    broker_account_no="2",
+                    cert_expires_at=DEFAULT_NOT_AFTER,
+                    now=now,
+                )
+                session.commit()
+            except IntegrityError as exc:
+                errors.append(exc)
+                session.rollback()
+            finally:
+                second_flushed.set()
+
+    with Session(engine) as first:
+        BrokerAccountRepository(first, encryption_key=key).upsert(
+            user_id,
+            broker="fubon",
+            credentials=creds,
+            broker_account_no="1",
+            cert_expires_at=DEFAULT_NOT_AFTER,
+            now=now,
+        )
+        thread = threading.Thread(target=second_writer)
+        thread.start()
+        assert not second_flushed.wait(timeout=1.0)  # blocked on the uncommitted insert
+        first.commit()
+        thread.join(timeout=10)
+
+    assert len(errors) == 1
+    row = _row(engine, user_id)
+    assert row is not None and row.broker_account_no == "1"

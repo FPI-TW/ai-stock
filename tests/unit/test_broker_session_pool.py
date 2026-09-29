@@ -1,6 +1,7 @@
 """BrokerSessionPool over a recording fake provider: two-phase replace, capacity,
 per-user operation token, failure-code mapping, shared mode."""
 
+import threading
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -22,23 +23,42 @@ _CREDS = FubonCredentials(personal_id="A123456789", password="pw", cert_pfx=b"pf
 
 
 class FakeProvider:
-    def __init__(self, *, fail_with: Exception | None = None, account_no: str = "9876543") -> None:
+    def __init__(
+        self,
+        *,
+        fail_with: Exception | None = None,
+        account_no: str = "9876543",
+        startup_gate: threading.Event | None = None,
+        subscribe_fail_with: Exception | None = None,
+        shutdown_fail_with: Exception | None = None,
+    ) -> None:
         self.fail_with = fail_with
         self.broker_account_no = account_no
+        self.startup_gate = startup_gate  # when set, startup() blocks until the gate opens (slow SDK login)
+        self.subscribe_fail_with = subscribe_fail_with
+        self.shutdown_fail_with = shutdown_fail_with
+        self.in_startup = threading.Event()
         self.started = False
         self.stopped = False
         self.subscribed: set[str] = set()
         self.listeners: list[QuoteListener] = []
 
     def startup(self) -> None:
+        self.in_startup.set()
+        if self.startup_gate is not None:
+            assert self.startup_gate.wait(timeout=10), "startup gate never opened"
         if self.fail_with is not None:
             raise self.fail_with
         self.started = True
 
     def shutdown(self) -> None:
         self.stopped = True
+        if self.shutdown_fail_with is not None:
+            raise self.shutdown_fail_with
 
     def subscribe(self, symbol: str) -> None:
+        if self.subscribe_fail_with is not None:
+            raise self.subscribe_fail_with
         self.subscribed.add(symbol)
 
     def unsubscribe(self, symbol: str) -> None:
