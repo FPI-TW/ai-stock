@@ -95,13 +95,13 @@ class BrokerSessionSetupError(BrokerAccountError):
 
 
 class BrokerCredentialKeyError(BrokerAccountError):
-    """The at-rest encryption key is unusable: not configured (`missing`, dev
-    fallback refused) or no longer the one the row was written with
-    (`undecryptable`, after a rotation without re-binding). Operations, not admins."""
+    """The at-rest encryption key is not configured (`missing`: the dev fallback is
+    refused for broker credentials). Operations, not admins. The decrypt-side reason
+    is added together with `get_credentials` in PR3."""
 
-    def __init__(self, reason: Literal["missing", "undecryptable"]) -> None:
+    def __init__(self, reason: Literal["missing"]) -> None:
         super().__init__(reason)
-        self.reason: Literal["missing", "undecryptable"] = reason
+        self.reason: Literal["missing"] = reason
 
 
 class BrokerBindingNotEnabledError(BrokerAccountError):

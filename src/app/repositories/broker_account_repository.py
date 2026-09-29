@@ -1,8 +1,10 @@
 """Reads / writes on `broker_accounts`. No method commits — the caller owns the tx.
 
-This is the only module that touches `credentials_encrypted`: it encrypts on
-`upsert` and decrypts in `get_credentials`, so the Fernet key and the JSON layout
-of the blob never leak into commands or the pool.
+This is the only module that touches `credentials_encrypted`: `upsert` encrypts
+it, so the Fernet key and the JSON layout of the blob never leak into commands or
+the pool. Decryption (`get_credentials`) and the login-status writers
+(`mark_login_ok` / `mark_login_failed`) arrive with their callers — the PR3
+lifespan login loop — rather than as unused surface here.
 """
 
 import base64
@@ -11,19 +13,12 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from cryptography.fernet import InvalidToken
-from sqlalchemy import CursorResult, delete, select, update
+from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.orm import Session
 
-from app.core.mfa_crypto import decrypt_secret, encrypt_secret
+from app.core.mfa_crypto import encrypt_secret
 from app.db.models.broker_account import BrokerAccount
-from app.domain.broker_account import (
-    LOGIN_FAILURE_MESSAGES,
-    BrokerAccountData,
-    BrokerCredentialKeyError,
-    BrokerLoginFailureCode,
-    FubonCredentials,
-)
+from app.domain.broker_account import BrokerAccountData, BrokerCredentialKeyError, FubonCredentials
 
 
 def _to_domain(row: BrokerAccount) -> BrokerAccountData:
@@ -56,30 +51,6 @@ class BrokerAccountRepository:
     def get_by_user_id(self, user_id: UUID) -> BrokerAccountData | None:
         row = self._db.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalar_one_or_none()
         return _to_domain(row) if row is not None else None
-
-    def list_all(self) -> list[BrokerAccountData]:
-        rows = self._db.execute(select(BrokerAccount).order_by(BrokerAccount.created_at)).scalars().all()
-        return [_to_domain(row) for row in rows]
-
-    def get_credentials(self, user_id: UUID) -> FubonCredentials | None:
-        blob = self._db.execute(
-            select(BrokerAccount.credentials_encrypted).where(BrokerAccount.user_id == user_id)
-        ).scalar_one_or_none()
-        if blob is None:
-            return None
-        key = self._require_key()
-        try:
-            payload = json.loads(decrypt_secret(key, blob))
-            return FubonCredentials(
-                personal_id=payload["personal_id"],
-                password=payload["password"],
-                cert_pfx=base64.b64decode(payload["cert_pfx_base64"]),
-                cert_password=payload["cert_password"],
-            )
-        except (InvalidToken, ValueError, KeyError, TypeError) as exc:
-            # Rotated key, or a blob this code never wrote. Never let the raw
-            # crypto error escape: callers (PR3 startup loop) handle it per user.
-            raise BrokerCredentialKeyError("undecryptable") from exc
 
     def upsert(
         self,
@@ -147,20 +118,3 @@ class BrokerAccountRepository:
             ),
         )
         return bool(result.rowcount)
-
-    def mark_login_ok(self, user_id: UUID, *, now: datetime) -> None:
-        self._db.execute(
-            update(BrokerAccount)
-            .where(BrokerAccount.user_id == user_id)
-            .values(status="active", last_login_at=now, last_error=None, updated_at=now),
-            execution_options={"synchronize_session": False},
-        )
-
-    def mark_login_failed(self, user_id: UUID, *, code: BrokerLoginFailureCode, now: datetime) -> None:
-        """Only the whitelisted message for `code` is stored — never exception text."""
-        self._db.execute(
-            update(BrokerAccount)
-            .where(BrokerAccount.user_id == user_id)
-            .values(status="login_failed", last_error=LOGIN_FAILURE_MESSAGES[code], updated_at=now),
-            execution_options={"synchronize_session": False},
-        )

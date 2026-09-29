@@ -4,6 +4,7 @@ session is a recording fake injected through a per-user `BrokerSessionPool`.
 """
 
 import base64
+import json
 import logging
 import threading
 from collections.abc import Generator
@@ -22,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_active_user, get_current_user
 from app.core.config import get_settings
+from app.core.mfa_crypto import decrypt_secret
 from app.core.security import RequestUser
 from app.db.models.auth import AuditEvent, User
 from app.db.models.broker_account import BrokerAccount
@@ -194,6 +196,18 @@ def _bind_body(personal_id: str = "A123456789", cert_password: str = CERT_PASSWO
     }
 
 
+def _decrypt(row: BrokerAccount) -> FubonCredentials:
+    """The repository only encrypts in this PR (decrypt lands with its PR3 caller);
+    prove the round-trip with the same primitive it uses."""
+    payload = json.loads(decrypt_secret(TEST_CREDENTIAL_KEY, row.credentials_encrypted))
+    return FubonCredentials(
+        personal_id=payload["personal_id"],
+        password=payload["password"],
+        cert_pfx=base64.b64decode(payload["cert_pfx_base64"]),
+        cert_password=payload["cert_password"],
+    )
+
+
 def _row(engine: Engine, user_id: UUID) -> BrokerAccount | None:
     with Session(engine) as session:
         return session.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalar_one_or_none()
@@ -243,12 +257,9 @@ def test_bind_logs_in_subscribes_open_intents_and_persists_encrypted(engine: Eng
     assert row.status == "active"
     assert row.broker_account_no == "9876543"
     assert row.last_login_at is not None
-    # Stored encrypted, and only the repository (with the key) can get it back.
+    # Stored encrypted; decrypting with the key gives the exact material back.
     assert b"A123456789" not in row.credentials_encrypted
-    with Session(engine) as session:
-        repo = BrokerAccountRepository(session, encryption_key=TEST_CREDENTIAL_KEY)
-        creds = repo.get_credentials(user_id)
-    assert creds == FubonCredentials(
+    assert _decrypt(row) == FubonCredentials(
         personal_id="A123456789", password="login-pw", cert_pfx=PFX, cert_password=CERT_PASSWORD
     )
     assert _audit_types(engine, harness.admin_id) == ["broker_account_bound"]
@@ -356,14 +367,8 @@ def test_rebind_success_swaps_session_and_shuts_the_old_one_down(engine: Engine)
     assert first.stopped
     assert live_session(harness.pool, user_id) is second
     with Session(engine) as session:
-        assert (
-            session.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalars().all().__len__()
-            == 1
-        )
-        repo = BrokerAccountRepository(session, encryption_key=TEST_CREDENTIAL_KEY)
-        creds = repo.get_credentials(user_id)
-    assert creds is not None
-    assert creds.personal_id == "B222222222"
+        [row] = session.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalars().all()
+        assert _decrypt(row).personal_id == "B222222222"
     assert _audit_types(engine, harness.admin_id) == ["broker_account_bound", "broker_account_bound"]
 
 
@@ -492,43 +497,6 @@ def test_unbind_cancels_intents_deletes_row_and_logs_out(engine: Engine) -> None
 
 
 @pytest.mark.integration
-def test_mark_login_failed_stores_only_the_whitelisted_message(engine: Engine) -> None:
-    user_id = _seed_user(engine)
-    key = TEST_CREDENTIAL_KEY
-    now = datetime.now(UTC)
-    with Session(engine) as session:
-        repo = BrokerAccountRepository(session, encryption_key=key)
-        repo.upsert(
-            user_id,
-            broker="fubon",
-            credentials=FubonCredentials(personal_id=SECRET_SENTINEL, password="p", cert_pfx=PFX, cert_password="c"),
-            broker_account_no="1",
-            cert_expires_at=DEFAULT_NOT_AFTER,
-            now=now,
-        )
-        repo.mark_login_failed(user_id, code="login_rejected", now=now)
-        session.commit()
-
-    row = _row(engine, user_id)
-    assert row is not None
-    assert row.status == "login_failed"
-    assert row.last_error == "券商拒絕登入，請確認身分證字號、密碼與憑證"
-
-    with Session(engine) as session:
-        repo = BrokerAccountRepository(session, encryption_key=key)
-        repo.mark_login_ok(user_id, now=now)
-        session.commit()
-        assert [a.user_id for a in repo.list_all() if a.user_id == user_id] == [user_id]
-    row = _row(engine, user_id)
-    assert row is not None
-    assert row.status == "active"
-    assert row.last_error is None
-
-
-# --- extreme paths --------------------------------------------------------------
-
-
-@pytest.mark.integration
 def test_rebind_whose_subscribe_fails_keeps_old_session_and_returns_503(engine: Engine) -> None:
     """Login succeeded but the market-data socket is gone (broker closes it after
     hours): the candidate is logged out, nothing is written, the old session stays."""
@@ -569,10 +537,8 @@ def test_old_session_logout_raising_does_not_undo_a_committed_rebind(engine: Eng
     first, second = harness.built
     assert first.stopped  # attempted, raised, swallowed
     assert live_session(harness.pool, user_id) is second
-    with Session(engine) as session:
-        repo = BrokerAccountRepository(session, encryption_key=TEST_CREDENTIAL_KEY)
-        creds = repo.get_credentials(user_id)
-    assert creds is not None and creds.personal_id == "B222222222"
+    row = _row(engine, user_id)
+    assert row is not None and _decrypt(row).personal_id == "B222222222"
 
 
 @pytest.mark.integration
@@ -614,31 +580,6 @@ def test_second_bind_and_unbind_are_refused_while_the_first_login_is_in_flight(e
     assert len(harness.built) == 1  # the refused bind never built (or logged in) a provider
     assert live_session(harness.pool, user_id) is harness.built[0]
     assert _row(engine, user_id) is not None
-
-
-@pytest.mark.integration
-def test_credentials_encrypted_under_a_rotated_key_raise_invalid_token(engine: Engine) -> None:
-    """If MFA_ENCRYPTION_KEY is rotated without re-encrypting broker_accounts, the
-    repository cannot decrypt: it raises the domain error (never the raw
-    cryptography one). PR3's startup loop handles it per user."""
-    from app.domain.broker_account import BrokerCredentialKeyError
-
-    user_id = _seed_user(engine)
-    now = datetime.now(UTC)
-    with Session(engine) as session:
-        BrokerAccountRepository(session, encryption_key=TEST_CREDENTIAL_KEY).upsert(
-            user_id,
-            broker="fubon",
-            credentials=FubonCredentials(personal_id="A1", password="p", cert_pfx=PFX, cert_password="c"),
-            broker_account_no="1",
-            cert_expires_at=DEFAULT_NOT_AFTER,
-            now=now,
-        )
-        session.commit()
-
-    with Session(engine) as session, pytest.raises(BrokerCredentialKeyError) as info:
-        BrokerAccountRepository(session, encryption_key=Fernet.generate_key().decode()).get_credentials(user_id)
-    assert info.value.reason == "undecryptable"
 
 
 @pytest.mark.integration
