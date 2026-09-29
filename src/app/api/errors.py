@@ -40,6 +40,7 @@ from app.domain.broker_account import (
     BrokerBindInProgressError,
     BrokerLoginFailedError,
     BrokerSessionLimitReachedError,
+    BrokerSessionSetupError,
 )
 from app.domain.notification import NotificationNotFoundError
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
@@ -119,6 +120,7 @@ class ErrorCode(StrEnum):
     BROKER_SESSION_LIMIT_REACHED = "BROKER_SESSION_LIMIT_REACHED"
     BROKER_BIND_IN_PROGRESS = "BROKER_BIND_IN_PROGRESS"
     BROKER_BINDING_NOT_ENABLED = "BROKER_BINDING_NOT_ENABLED"
+    BROKER_SESSION_SETUP_FAILED = "BROKER_SESSION_SETUP_FAILED"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -178,6 +180,7 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.BROKER_BINDING_NOT_ENABLED: (
         "目前為共用帳號行情模式，未啟用 per-user 券商綁定（QUOTE_PROVIDER 需為 fubon）"
     ),
+    ErrorCode.BROKER_SESSION_SETUP_FAILED: "券商連線初始化失敗，非登入資料問題，請聯絡維運",
 }
 
 
@@ -345,6 +348,14 @@ def register_exception_handlers(app: FastAPI) -> None:
             )
         if isinstance(exc, BrokerBindInProgressError):
             return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.BROKER_BIND_IN_PROGRESS)
+        if isinstance(exc, BrokerSessionSetupError):
+            # Not a broker answer: 5xx so it is never mistaken for bad credentials.
+            return build_error_response(
+                request,
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                ErrorCode.BROKER_SESSION_SETUP_FAILED,
+                details={"exceptionType": exc.exception_type},
+            )
         if isinstance(exc, BrokerBindingNotEnabledError):
             return build_error_response(
                 request,

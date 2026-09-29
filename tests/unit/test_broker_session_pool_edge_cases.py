@@ -17,8 +17,8 @@ from tests.unit.test_broker_session_pool import FakeProvider
 from app.core.config import get_settings
 from app.domain.broker_account import (
     BrokerBindInProgressError,
-    BrokerLoginFailedError,
     BrokerSessionLimitReachedError,
+    BrokerSessionSetupError,
     FubonCredentials,
 )
 from app.services.broker_session_pool import BrokerSessionPool
@@ -175,9 +175,10 @@ def test_churn_never_leaks_a_session() -> None:
 # --- broker misbehaviour ----------------------------------------------------------
 
 
-def test_factory_import_error_becomes_unknown_and_releases_the_slot() -> None:
+def test_factory_import_error_is_a_setup_error_and_releases_the_slot() -> None:
     """On a box without the Linux-only wheel, building the provider raises
-    ImportError. It must surface as a safe 422, not a 500, and free the slot."""
+    ImportError. That is an environment fault, not a login failure: it surfaces
+    as a setup error naming the type (-> 5xx), and frees the slot."""
 
     def broken(_creds: FubonCredentials) -> FakeProvider:
         raise ImportError("No module named 'fubon_neo'")
@@ -186,9 +187,9 @@ def test_factory_import_error_becomes_unknown_and_releases_the_slot() -> None:
     pool = BrokerSessionPool(settings, shared=None, provider_factory=broken)
     user_id = uuid4()
 
-    with pytest.raises(BrokerLoginFailedError) as info:
+    with pytest.raises(BrokerSessionSetupError) as info:
         pool.prepare(user_id, _CREDS)
-    assert info.value.code == "unknown"
+    assert info.value.exception_type == "ImportError"
     assert not pool.is_binding(user_id)
     # The slot is free again: a working factory on a fresh pool with the same cap admits the user.
     ok_pool, _ = _pool(max_sessions=1)
@@ -275,10 +276,10 @@ def test_failure_after_a_successful_login_inside_prepare_logs_out_and_releases()
     pool, built = _pool(max_sessions=1, provider_for=ExplodingAccountNo)
     user_id = uuid4()
 
-    with pytest.raises(BrokerLoginFailedError) as info:
+    with pytest.raises(BrokerSessionSetupError) as info:
         pool.prepare(user_id, _CREDS)
 
-    assert info.value.code == "unknown"
+    assert info.value.exception_type == "RuntimeError"
     assert built[0].started and built[0].stopped
     assert not pool.is_binding(user_id)
     assert pool.get(user_id) is None

@@ -15,6 +15,7 @@ from app.domain.broker_account import (
     BrokerBindInProgressError,
     BrokerLoginFailedError,
     BrokerSessionLimitReachedError,
+    BrokerSessionSetupError,
     FubonCredentials,
 )
 from app.services.broker_session_pool import BrokerSessionPool
@@ -169,7 +170,6 @@ def test_rebind_replaces_session_and_returns_old_provider() -> None:
         (_SdkLoginError("login_rejected"), "login_rejected"),
         (_SdkLoginError("session_limit"), "session_limit"),
         (QuoteProviderUnavailableError("fubon", "realtime_connect_failed"), "provider_unavailable"),
-        (RuntimeError("boom A123456789"), "unknown"),
     ],
 )
 def test_prepare_failure_maps_to_safe_code_and_releases_token(exc: Exception, expected_code: str) -> None:
@@ -180,9 +180,30 @@ def test_prepare_failure_maps_to_safe_code_and_releases_token(exc: Exception, ex
         pool.prepare(user_id, _CREDS)
 
     assert info.value.code == expected_code
-    assert "A123456789" not in str(info.value)
     assert not pool.is_binding(user_id)
     # Token and slot released: the same user may try again, and the slot is free.
+    ok_pool, _ = _pool(max_sessions=1)
+    ok_pool.activate(ok_pool.prepare(user_id, _CREDS))
+
+
+def test_non_broker_exception_is_a_setup_error_with_type_only(caplog: pytest.LogCaptureFixture) -> None:
+    """Review finding: everything non-broker was squashed into `unknown` (a 422
+    that reads like bad credentials) with a log line that could not tell a
+    missing wheel from SDK drift. Now: the exception class name is in the log
+    and the error, the message (which may echo login material) is in neither,
+    and the token / slot are released."""
+    pool, _ = _pool(max_sessions=1, fail_with=AttributeError("'FubonSDK' has no attribute 'login' A123456789"))
+    user_id = uuid4()
+
+    with caplog.at_level("ERROR"), pytest.raises(BrokerSessionSetupError) as info:
+        pool.prepare(user_id, _CREDS)
+
+    assert info.value.exception_type == "AttributeError"
+    assert "A123456789" not in str(info.value)
+    [record] = [r for r in caplog.records if r.name == "app.services.broker_session_pool"]
+    assert "exception=AttributeError" in record.getMessage()
+    assert "A123456789" not in caplog.text
+    assert not pool.is_binding(user_id)
     ok_pool, _ = _pool(max_sessions=1)
     ok_pool.activate(ok_pool.prepare(user_id, _CREDS))
 

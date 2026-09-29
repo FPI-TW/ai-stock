@@ -32,7 +32,7 @@ from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.services.broker_session_pool import BrokerSessionPool, BrokerStopClaim
 from app.services.quote.base import QuoteProviderUnavailableError
 from tests.pfx_helpers import DEFAULT_NOT_AFTER, build_test_pfx
-from tests.unit.test_broker_session_pool import FakeProvider
+from tests.unit.test_broker_session_pool import FakeProvider, _SdkLoginError
 
 CERT_PASSWORD = "cert-pw"
 PFX = build_test_pfx(password=CERT_PASSWORD)
@@ -187,6 +187,15 @@ def _row(engine: Engine, user_id: UUID) -> BrokerAccount | None:
         return session.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalar_one_or_none()
 
 
+def _capture_app_logs(caplog: pytest.LogCaptureFixture) -> None:
+    """Alembic's `fileConfig(alembic.ini)` (run by the engine fixture) disables every
+    logger that already existed, including the app's, so caplog would stay empty and
+    a "secret not in log" assertion would be vacuous. Re-enable what we assert on."""
+    for name in ("app.services.broker_session_pool", "app.commands.broker_account", "app.api.errors"):
+        logging.getLogger(name).disabled = False
+    caplog.set_level(logging.DEBUG)
+
+
 def _audit_types(engine: Engine, actor_id: UUID) -> list[str]:
     with Session(engine) as session:
         rows = session.execute(
@@ -238,22 +247,50 @@ def test_first_bind_login_failure_is_422_without_a_row_and_without_secrets(
     engine: Engine, caplog: pytest.LogCaptureFixture
 ) -> None:
     harness = _Harness(engine)
-    harness.fail_with = RuntimeError(f"login raised for {SECRET_SENTINEL}")
+    harness.fail_with = _SdkLoginError("login_rejected")
+    harness.fail_with.args = (f"broker said no for {SECRET_SENTINEL}",)
     user_id = _seed_user(engine)
+    _capture_app_logs(caplog)
 
-    with caplog.at_level(logging.DEBUG):
-        response = harness.admin_client().put(
-            f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id=SECRET_SENTINEL)
-        )
+    response = harness.admin_client().put(
+        f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id=SECRET_SENTINEL)
+    )
 
     assert response.status_code == 422, response.text
     assert response.json()["error"]["code"] == "BROKER_LOGIN_FAILED"
-    assert response.json()["error"]["details"] == {"reason": "unknown"}
+    assert response.json()["error"]["details"] == {"reason": "login_rejected"}
     assert SECRET_SENTINEL not in response.text
-    assert SECRET_SENTINEL not in caplog.text
+    assert "code=login_rejected" in caplog.text  # the log line exists...
+    assert SECRET_SENTINEL not in caplog.text  # ...and carries no login material
     assert _row(engine, user_id) is None
     assert harness.pool.get(user_id) is None
     assert _audit_types(engine, harness.admin_id) == []
+
+
+@pytest.mark.integration
+def test_non_broker_failure_is_500_with_type_only_and_no_secrets(
+    engine: Engine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A missing wheel / SDK drift must not read as bad credentials: 5xx with the
+    exception class, message kept out of the response and the log."""
+    harness = _Harness(engine)
+    harness.fail_with = AttributeError(f"'FubonSDK' object has no attribute 'login' {SECRET_SENTINEL}")
+    user_id = _seed_user(engine)
+    _capture_app_logs(caplog)
+
+    response = harness.admin_client().put(
+        f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id=SECRET_SENTINEL)
+    )
+
+    assert response.status_code == 500, response.text
+    assert response.json()["error"]["code"] == "BROKER_SESSION_SETUP_FAILED"
+    assert response.json()["error"]["details"] == {"exceptionType": "AttributeError"}
+    assert SECRET_SENTINEL not in response.text
+    assert SECRET_SENTINEL not in caplog.text
+    assert "exception=AttributeError" in caplog.text
+    assert _row(engine, user_id) is None
+    assert harness.pool.get(user_id) is None
+    assert not harness.pool.is_binding(user_id)
 
 
 @pytest.mark.integration
@@ -281,7 +318,7 @@ def test_rebind_failure_keeps_the_old_session_and_row(engine: Engine) -> None:
     before = _row(engine, user_id)
     assert before is not None
 
-    harness.fail_with = RuntimeError("second login refused")
+    harness.fail_with = _SdkLoginError("login_rejected")
     response = client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id="B222222222"))
 
     assert response.status_code == 422

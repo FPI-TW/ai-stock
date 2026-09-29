@@ -84,6 +84,16 @@ class BrokerBindInProgressError(BrokerAccountError):
     """Another bind / unbind for the same user is mid-flight; retry after it settles."""
 
 
+class BrokerSessionSetupError(BrokerAccountError):
+    """Building or starting the candidate session raised something that is not a
+    broker answer (missing SDK wheel, SDK API drift, programming error). Carries
+    only the exception class name — never its message — and maps to a 5xx."""
+
+    def __init__(self, exception_type: str) -> None:
+        super().__init__(exception_type)
+        self.exception_type = exception_type
+
+
 class BrokerBindingNotEnabledError(BrokerAccountError):
     """The runtime is in shared-provider mode (`in_memory` / demo): there is no
     per-user broker login to perform, so binding is refused outright. Not retryable."""

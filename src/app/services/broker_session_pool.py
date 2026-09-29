@@ -35,6 +35,7 @@ never enter this module.
 
 import logging
 import threading
+import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol, cast
@@ -48,6 +49,7 @@ from app.domain.broker_account import (
     BrokerLoginFailedError,
     BrokerLoginFailureCode,
     BrokerSessionLimitReachedError,
+    BrokerSessionSetupError,
     FubonCredentials,
 )
 from app.services.quote.base import QuoteProvider, QuoteProviderError, QuoteSnapshot
@@ -80,15 +82,26 @@ class BrokerStopClaim:
     user_id: UUID
 
 
-def _failure_code(exc: Exception) -> BrokerLoginFailureCode:
-    # FubonLoginError carries `failure_code`; duck-typed so this module never
-    # imports the Fubon package (the in_memory runtime must not load it).
+def _failure_code(exc: Exception) -> BrokerLoginFailureCode | None:
+    """The safe code for a *broker answer*; None when the exception is not one.
+
+    FubonLoginError carries `failure_code`; duck-typed so this module never
+    imports the Fubon package (the in_memory runtime must not load it). Any other
+    QuoteProviderError is the provider saying "not available". Everything else
+    (ImportError for the missing wheel, AttributeError from SDK drift, ...) is
+    ours to fix, not the admin's to retry, and is reported separately.
+    """
     code = getattr(exc, "failure_code", None)
     if code in _LOGIN_CODES:
         return cast(BrokerLoginFailureCode, code)
     if isinstance(exc, QuoteProviderError):
         return "provider_unavailable"
-    return "unknown"
+    return None
+
+
+def _frames_only(exc: BaseException) -> str:
+    # Diagnosable without the message: SDK / socket text may echo login material.
+    return "".join(traceback.format_tb(exc.__traceback__))
 
 
 class BrokerSessionPool:
@@ -185,13 +198,23 @@ class BrokerSessionPool:
             with self._lock:
                 self._pending[user_id] = candidate
         except Exception as exc:
-            code = _failure_code(exc)
-            logger.warning("broker session prepare failed user_id=%s code=%s", user_id, code)
             with self._lock:
                 self._pending.pop(user_id, None)
             if logged_in and provider is not None:
                 # Logged in, then something after startup() raised: don't leak the login.
                 _shutdown_quietly(provider, user_id)
+            code = _failure_code(exc)
+            if code is None:
+                logger.error(
+                    "broker session setup failed user_id=%s exception=%s\n%s",
+                    user_id,
+                    type(exc).__name__,
+                    _frames_only(exc),
+                )
+                raise BrokerSessionSetupError(type(exc).__name__) from exc
+            logger.warning(
+                "broker session prepare failed user_id=%s code=%s exception=%s", user_id, code, type(exc).__name__
+            )
             raise BrokerLoginFailedError(code) from exc
         return candidate
 
