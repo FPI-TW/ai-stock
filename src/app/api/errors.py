@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.domain.auth import (
     AccountError,
+    AccountNotActiveError,
     AccountNotDisabledError,
     AuthError,
     CsrfFailedError,
@@ -31,6 +32,13 @@ from app.domain.auth import (
     UnauthenticatedError,
     UserNotFoundError,
     WeakPasswordError,
+)
+from app.domain.broker_account import (
+    BrokerAccountError,
+    BrokerAccountNotBoundError,
+    BrokerBindInProgressError,
+    BrokerLoginFailedError,
+    BrokerSessionLimitReachedError,
 )
 from app.domain.notification import NotificationNotFoundError
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
@@ -101,6 +109,12 @@ class ErrorCode(StrEnum):
     MFA_ALREADY_ENABLED = "MFA_ALREADY_ENABLED"
     MFA_NOT_SETUP = "MFA_NOT_SETUP"
     ACCOUNT_NOT_DISABLED = "ACCOUNT_NOT_DISABLED"
+    ACCOUNT_NOT_ACTIVE = "ACCOUNT_NOT_ACTIVE"
+    # Broker account binding (per-user sessions)
+    BROKER_ACCOUNT_NOT_BOUND = "BROKER_ACCOUNT_NOT_BOUND"
+    BROKER_LOGIN_FAILED = "BROKER_LOGIN_FAILED"
+    BROKER_SESSION_LIMIT_REACHED = "BROKER_SESSION_LIMIT_REACHED"
+    BROKER_BIND_IN_PROGRESS = "BROKER_BIND_IN_PROGRESS"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -152,6 +166,11 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.MFA_ALREADY_ENABLED: "已啟用兩階段驗證",
     ErrorCode.MFA_NOT_SETUP: "尚未設定兩階段驗證",
     ErrorCode.ACCOUNT_NOT_DISABLED: "帳號未處於停用狀態，無法復權",
+    ErrorCode.ACCOUNT_NOT_ACTIVE: "帳號未處於啟用狀態",
+    ErrorCode.BROKER_ACCOUNT_NOT_BOUND: "尚未綁定券商帳號，請聯絡管理員",
+    ErrorCode.BROKER_LOGIN_FAILED: "券商登入失敗",
+    ErrorCode.BROKER_SESSION_LIMIT_REACHED: "券商連線數已達本系統上限",
+    ErrorCode.BROKER_BIND_IN_PROGRESS: "此使用者的券商綁定正在處理中，請稍後再試",
 }
 
 
@@ -295,7 +314,33 @@ def register_exception_handlers(app: FastAPI) -> None:
             return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.MFA_NOT_SETUP)
         if isinstance(exc, AccountNotDisabledError):
             return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.ACCOUNT_NOT_DISABLED)
+        if isinstance(exc, AccountNotActiveError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.ACCOUNT_NOT_ACTIVE)
         return build_error_response(request, status.HTTP_400_BAD_REQUEST, ErrorCode.VALIDATION_ERROR)
+
+    @app.exception_handler(BrokerAccountError)
+    async def broker_account_error_handler(request: Request, exc: BrokerAccountError) -> JSONResponse:
+        if isinstance(exc, BrokerLoginFailedError):
+            # Only the enumerable code and its whitelisted message — never SDK text.
+            return build_error_response(
+                request,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                ErrorCode.BROKER_LOGIN_FAILED,
+                message=exc.safe_message,
+                details={"reason": exc.code},
+            )
+        if isinstance(exc, BrokerSessionLimitReachedError):
+            return build_error_response(
+                request,
+                status.HTTP_409_CONFLICT,
+                ErrorCode.BROKER_SESSION_LIMIT_REACHED,
+                details={"limit": exc.limit},
+            )
+        if isinstance(exc, BrokerBindInProgressError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.BROKER_BIND_IN_PROGRESS)
+        if isinstance(exc, BrokerAccountNotBoundError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.BROKER_ACCOUNT_NOT_BOUND)
+        return build_error_response(request, status.HTTP_500_INTERNAL_SERVER_ERROR, ErrorCode.INTERNAL_ERROR)
 
     @app.exception_handler(SymbolError)
     async def symbol_error_handler(request: Request, exc: SymbolError) -> JSONResponse:

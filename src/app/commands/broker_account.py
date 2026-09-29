@@ -1,0 +1,192 @@
+"""Admin binds / unbinds a user's broker account.
+
+Bind is "login first, persist second": the candidate session must log in and
+subscribe the user's open intents before anything is written, and the live
+session (on re-bind) is only replaced after the row and audit are committed.
+Unbind cancels the user's open intents (no session, no quotes, they would never
+fire), deletes the row, commits, and only then logs the session out.
+
+Nothing here ever logs or stores `str(exc)` from the broker path: DB, API and
+logs see only `BrokerLoginFailureCode` and its whitelisted message.
+"""
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from uuid import UUID
+
+from cryptography.hazmat.primitives.serialization import pkcs12
+from sqlalchemy.orm import Session
+
+from app.core.config import BrokerName
+from app.domain.auth import AccountError, AccountNotActiveError, UserNotFoundError
+from app.domain.broker_account import (
+    BrokerAccountData,
+    BrokerAccountError,
+    BrokerBindInProgressError,
+    BrokerLoginFailedError,
+    FubonCredentials,
+)
+from app.repositories.broker_account_repository import BrokerAccountRepository
+from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
+from app.repositories.user_repository import UserRepository
+from app.services.audit import AuditEventWriter
+from app.services.broker_session_pool import BrokerSessionPool
+
+logger = logging.getLogger(__name__)
+
+# Unbound users lose their quote source; the intents are cancelled as if by the user.
+UNBOUND_INTENT_STATUS = "cancelled"
+
+
+@dataclass(frozen=True, slots=True)
+class BindBrokerAccountInput:
+    target_user_id: UUID
+    broker: BrokerName
+    credentials: FubonCredentials
+    actor_admin_id: UUID
+    now: datetime
+    request_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UnbindBrokerAccountInput:
+    target_user_id: UUID
+    actor_admin_id: UUID
+    now: datetime
+    request_id: str | None = None
+
+
+def _cert_expires_at(cert_pfx: bytes, cert_password: str) -> datetime:
+    """Open the pfx with its password (a wrong one fails here, before any broker call)
+    and read the certificate's expiry. Nothing from the bundle is kept."""
+    try:
+        _key, cert, _extra = pkcs12.load_key_and_certificates(cert_pfx, cert_password.encode("utf-8"))
+    except Exception as exc:
+        raise BrokerLoginFailedError("cert_invalid") from exc
+    if cert is None:
+        raise BrokerLoginFailedError("cert_invalid")
+    return cert.not_valid_after_utc
+
+
+class BindBrokerAccountCommand:
+    def __init__(
+        self,
+        db: Session,
+        users: UserRepository,
+        accounts: BrokerAccountRepository,
+        core_intents: TradeIntentCoreRepository,
+        audit: AuditEventWriter,
+        pool: BrokerSessionPool,
+    ) -> None:
+        self._db = db
+        self._users = users
+        self._accounts = accounts
+        self._core_intents = core_intents
+        self._audit = audit
+        self._pool = pool
+
+    def execute(self, inp: BindBrokerAccountInput) -> BrokerAccountData:
+        user = self._users.get_by_id(inp.target_user_id)
+        if user is None:
+            raise UserNotFoundError()
+        if user.status != "active":
+            raise AccountNotActiveError()
+        cert_expires_at = _cert_expires_at(inp.credentials.cert_pfx, inp.credentials.cert_password)
+        rebinding = self._accounts.get_by_user_id(user.id) is not None
+
+        # Login happens here; failure leaves the live session and the DB untouched.
+        candidate = self._pool.prepare(user.id, inp.credentials)
+        try:
+            for symbol in sorted(self._core_intents.active_or_scheduled_symbols_by_owner(user.id)):
+                candidate.provider.subscribe(symbol)
+            self._accounts.upsert(
+                user.id,
+                broker=inp.broker,
+                credentials=inp.credentials,
+                broker_account_no=candidate.broker_account_no,
+                cert_expires_at=cert_expires_at,
+                now=inp.now,
+            )
+            self._audit.write(
+                event_type="broker_account_bound",
+                actor_type="admin",
+                actor_id=inp.actor_admin_id,
+                metadata={"target_user_id": str(user.id), "broker": inp.broker, "rebinding": rebinding},
+                request_id=inp.request_id,
+                now=inp.now,
+            )
+            self._db.commit()
+        except (AccountError, BrokerAccountError):
+            self._db.rollback()
+            self._pool.discard(candidate)
+            raise
+        except Exception as exc:
+            self._db.rollback()
+            self._pool.discard(candidate)
+            logger.warning(
+                "broker account bind failed before commit %s user_id=%s request_id=%s",
+                type(exc).__name__,
+                user.id,
+                inp.request_id,
+            )
+            raise
+
+        old = self._pool.activate(candidate)
+        if old is not None:
+            try:
+                old.shutdown()
+            except Exception as exc:
+                # The new binding is already committed and live; a stale logout is not a rollback reason.
+                logger.warning("previous broker session shutdown raised %s user_id=%s", type(exc).__name__, user.id)
+        bound = self._accounts.get_by_user_id(user.id)
+        assert bound is not None  # just committed
+        return bound
+
+
+class UnbindBrokerAccountCommand:
+    """Idempotent: a user without a binding still gets a clean 204 and no side effects."""
+
+    def __init__(
+        self,
+        db: Session,
+        users: UserRepository,
+        accounts: BrokerAccountRepository,
+        core_intents: TradeIntentCoreRepository,
+        audit: AuditEventWriter,
+        pool: BrokerSessionPool,
+    ) -> None:
+        self._db = db
+        self._users = users
+        self._accounts = accounts
+        self._core_intents = core_intents
+        self._audit = audit
+        self._pool = pool
+
+    def execute(self, inp: UnbindBrokerAccountInput) -> None:
+        try:
+            user = self._users.get_by_id(inp.target_user_id)
+            if user is None:
+                raise UserNotFoundError()
+            if self._pool.is_binding(user.id):
+                raise BrokerBindInProgressError()
+            if self._accounts.get_by_user_id(user.id) is None:
+                return
+            cancelled = self._core_intents.cancel_active_for_owner(user.id, status=UNBOUND_INTENT_STATUS, now=inp.now)
+            self._accounts.delete(user.id)
+            self._audit.write(
+                event_type="broker_account_unbound",
+                actor_type="admin",
+                actor_id=inp.actor_admin_id,
+                metadata={"target_user_id": str(user.id), "cancelled_intent_count": cancelled},
+                request_id=inp.request_id,
+                now=inp.now,
+            )
+            self._db.commit()
+        except (AccountError, BrokerAccountError):
+            raise
+        except Exception:
+            self._db.rollback()
+            raise
+        # Row is gone; the session goes last so a DB failure never leaves a rowless live session.
+        self._pool.stop(user.id)

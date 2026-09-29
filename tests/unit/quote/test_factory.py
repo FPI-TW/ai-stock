@@ -10,8 +10,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from app.domain.broker_account import FubonCredentials
 from app.services.quote.factory import build_quote_provider
-from app.services.quote.fubon.client import FubonCredentials
 from app.services.quote.fubon.provider import FubonQuoteProvider
 from app.services.quote.in_memory import InMemoryQuoteProvider
 

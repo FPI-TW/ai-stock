@@ -16,6 +16,7 @@ from app.commands.account import (
     ResendInvitationCommand,
 )
 from app.commands.auth import LoginCommand, LogoutCommand, RefreshCommand
+from app.commands.broker_account import BindBrokerAccountCommand, UnbindBrokerAccountCommand
 from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.commands.kill_switch import SetKillSwitchCommand
 from app.commands.notification import MarkNotificationReadCommand
@@ -36,6 +37,7 @@ from app.db.session import check_database_connectivity, get_session_factory
 from app.domain.auth import RateLimitedError
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
+from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.repositories.idempotency_repository import IdempotencyRepository
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.invitation_repository import InvitationRepository
@@ -48,6 +50,7 @@ from app.repositories.telegram_intent_repository import TelegramIntentInteractio
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.repositories.user_repository import UserRepository
 from app.services.audit import AuditEventWriter
+from app.services.broker_session_pool import BrokerSessionPool
 from app.services.idempotency import IdempotencyManager
 from app.services.kill_switch import KillSwitchProvider
 from app.services.mailer import LoggingMailer, Mailer, SesMailer
@@ -233,6 +236,18 @@ def get_kill_switch_provider(request: Request) -> KillSwitchProvider | None:
 
 
 KillSwitchProviderDep = Annotated[KillSwitchProvider | None, Depends(get_kill_switch_provider)]
+
+
+def get_broker_session_pool(request: Request) -> BrokerSessionPool:
+    """The process-wide per-user broker session pool built in `create_app()`."""
+
+    pool = getattr(request.app.state, "broker_sessions", None)
+    if pool is None:
+        raise RuntimeError("broker_sessions is not initialised on app.state; check that create_app() ran.")
+    return pool
+
+
+BrokerSessionPoolDep = Annotated[BrokerSessionPool, Depends(get_broker_session_pool)]
 
 CURRENT_PRICE_ALLOWED_SYMBOLS: frozenset[str] = frozenset({"2330", "2317", "0050", "00878"})
 
@@ -460,6 +475,41 @@ def get_audit_writer(db: DatabaseDep) -> AuditEventWriter:
 
 
 AuditWriterDep = Annotated[AuditEventWriter, Depends(get_audit_writer)]
+
+
+def get_broker_account_repository(db: DatabaseDep, settings: SettingsDep) -> BrokerAccountRepository:
+    return BrokerAccountRepository(db, encryption_key=settings.resolved_mfa_encryption_key)
+
+
+BrokerAccountRepoDep = Annotated[BrokerAccountRepository, Depends(get_broker_account_repository)]
+
+
+def get_bind_broker_account_command(
+    db: DatabaseDep,
+    users: UserRepoDep,
+    accounts: BrokerAccountRepoDep,
+    core_intents: TradeIntentCoreRepoDep,
+    audit: AuditWriterDep,
+    pool: BrokerSessionPoolDep,
+) -> BindBrokerAccountCommand:
+    return BindBrokerAccountCommand(db, users, accounts, core_intents, audit, pool)
+
+
+BindBrokerAccountCommandDep = Annotated[BindBrokerAccountCommand, Depends(get_bind_broker_account_command)]
+
+
+def get_unbind_broker_account_command(
+    db: DatabaseDep,
+    users: UserRepoDep,
+    accounts: BrokerAccountRepoDep,
+    core_intents: TradeIntentCoreRepoDep,
+    audit: AuditWriterDep,
+    pool: BrokerSessionPoolDep,
+) -> UnbindBrokerAccountCommand:
+    return UnbindBrokerAccountCommand(db, users, accounts, core_intents, audit, pool)
+
+
+UnbindBrokerAccountCommandDep = Annotated[UnbindBrokerAccountCommand, Depends(get_unbind_broker_account_command)]
 
 
 def get_rate_limiter(db: DatabaseDep) -> RateLimiter:

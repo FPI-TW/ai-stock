@@ -6,6 +6,7 @@ from app.db.models.auth import (
     RefreshToken,
     User,
 )
+from app.db.models.broker_account import BrokerAccount
 from app.db.models.core import Notification, Symbol, TelegramIntentInteraction, TradeIntent, TriggerEvent, TwapSlice
 from app.db.models.trade_intent_core import (
     TradeIntentCore,
@@ -17,6 +18,7 @@ from app.db.models.trade_intent_core import (
 
 __all__ = [
     "AuditEvent",
+    "BrokerAccount",
     "Invitation",
     "Notification",
     "PasswordReset",

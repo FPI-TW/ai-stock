@@ -157,3 +157,8 @@ class MfaNotSetupError(AccountError):
 
 class AccountNotDisabledError(AccountError):
     """Reactivation attempted on a user that is not currently disabled."""
+
+
+class AccountNotActiveError(AccountError):
+    """An admin operation that needs an active target user (e.g. broker binding) hit
+    an invited or disabled one."""

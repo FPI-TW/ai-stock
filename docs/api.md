@@ -47,6 +47,12 @@ Access token 過期時以 refresh 取得新 session。refresh token rotation 偵
 - `POST /admin/users/{id}/resend-invitation`
 - `POST /admin/2fa/setup`、`POST /admin/2fa/verify`
 - `GET /admin/kill-switch`、`POST /admin/kill-switch`
+- `PUT /admin/users/{id}/broker-account`：代使用者綁定券商帳號。body 為 `broker`（目前只有 `fubon`）、`personalId`、`password`、`certPfxBase64`（pfx 解碼後 ≤ 64 KB）、`certPassword`；系統先以候選 session 試登入並訂閱該使用者的有效委託標的，成功才加密落庫並切換 session，重綁即整包覆蓋。登入失敗回 422 `BROKER_LOGIN_FAILED`（`details.reason` 為 `login_rejected`／`session_limit`／`provider_unavailable`／`cert_invalid`／`unknown`，訊息固定白名單、不含券商原文）；目標非 active 回 409 `ACCOUNT_NOT_ACTIVE`；本系統 `BROKER_MAX_SESSIONS` 已滿回 409 `BROKER_SESSION_LIMIT_REACHED`；同一使用者綁定進行中回 409 `BROKER_BIND_IN_PROGRESS`。回應與 log 不含任何機密。
+- `DELETE /admin/users/{id}/broker-account`：解除綁定，冪等回 204；一併把該使用者所有非終態委託轉為 `cancelled` 並登出其券商 session。
+
+### Broker account（使用者自己看）
+
+- `GET /me/broker-account`：回 `broker`、`brokerAccountNo`（遮罩僅留後四碼）、`status`（`active`／`login_failed`）、`certExpiresAt`、`lastLoginAt`、`lastError`、`updatedAt`；未綁定回 404。綁定與解除只有管理員能做。
 
 ### Symbols 與行情
 

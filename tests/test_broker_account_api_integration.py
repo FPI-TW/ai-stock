@@ -1,0 +1,430 @@
+"""HTTP integration tests for admin broker-account binding (PR2 of
+docs/orders/per-user-broker-sessions.md). Against real PostgreSQL; the broker
+session is a recording fake injected through a per-user `BrokerSessionPool`.
+"""
+
+import base64
+import logging
+from collections.abc import Generator
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from pathlib import Path
+from uuid import UUID, uuid4
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from fastapi.testclient import TestClient
+from sqlalchemy import Engine, create_engine, select, text
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_active_user, get_current_user
+from app.core.config import get_settings
+from app.core.security import RequestUser
+from app.db.models.auth import AuditEvent, User
+from app.db.models.broker_account import BrokerAccount
+from app.db.models.core import Symbol
+from app.db.models.trade_intent_core import TradeIntentCore, TradeIntentPriceParams
+from app.domain.broker_account import FubonCredentials
+from app.main import create_app
+from app.repositories.broker_account_repository import BrokerAccountRepository
+from app.services.broker_session_pool import BrokerSessionPool
+from tests.pfx_helpers import DEFAULT_NOT_AFTER, build_test_pfx
+from tests.unit.test_broker_session_pool import FakeProvider
+
+CERT_PASSWORD = "cert-pw"
+PFX = build_test_pfx(password=CERT_PASSWORD)
+# Sentinel that a leaky path would echo: looks like an identity number.
+SECRET_SENTINEL = "Z987654321"
+
+
+def _alembic_config() -> Config:
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", get_settings().database_url or "")
+    return config
+
+
+@pytest.fixture(scope="module")
+def engine() -> Generator[Engine]:
+    config = _alembic_config()
+    command.downgrade(config, "base")
+    command.upgrade(config, "head")
+    engine = create_engine(get_settings().database_url or "")
+    with Session(engine) as session:
+        session.add(
+            Symbol(
+                id=uuid4(),
+                symbol="2330",
+                display_name="台積電",
+                market="TWSE",
+                instrument_type="stock",
+                tradable_status="tradable",
+            )
+        )
+        session.commit()
+    try:
+        yield engine
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("TRUNCATE trade_intent_core CASCADE"))
+        engine.dispose()
+        command.downgrade(config, "base")
+
+
+def _seed_user(engine: Engine, *, role: str = "user", status: str = "active", mfa: bool = False) -> UUID:
+    user_id = uuid4()
+    with Session(engine) as session:
+        session.add(User(id=user_id, email=f"{role}-{user_id}@example.com", role=role, status=status, mfa_enabled=mfa))
+        session.commit()
+    return user_id
+
+
+def _seed_core_intent(engine: Engine, owner_id: UUID) -> UUID:
+    intent_id = uuid4()
+    with Session(engine) as session:
+        session.add(
+            TradeIntentCore(
+                id=intent_id,
+                owner_user_id=owner_id,
+                symbol="2330",
+                strategy="buy_price_alert",
+                execution_mode="notify_only",
+                quantity_lots=1,
+                trigger_reference_price_type="ask",
+                trading_date=date(2026, 1, 1),
+                time_in_force="day",
+                status="active",
+                dedup_key=f"100.0000:{intent_id}",
+            )
+        )
+        session.add(
+            TradeIntentPriceParams(
+                trade_intent_id=intent_id,
+                target_price_original=Decimal("100.0000"),
+                target_price_effective=Decimal("100.0000"),
+            )
+        )
+        session.commit()
+    return intent_id
+
+
+class _Harness:
+    """One app + one per-user pool whose provider factory we control per call."""
+
+    def __init__(self, engine: Engine, *, max_sessions: int = 2) -> None:
+        self.built: list[FakeProvider] = []
+        self.fail_with: Exception | None = None
+        settings = get_settings().model_copy(update={"broker_max_sessions": max_sessions})
+        self.pool = BrokerSessionPool(settings, shared=None, provider_factory=self._factory)
+        self.app = create_app()
+        self.app.state.broker_sessions = self.pool
+        self.admin_id = _seed_user(engine, role="admin", mfa=True)
+
+    def _factory(self, credentials: FubonCredentials) -> FakeProvider:
+        provider = FakeProvider(fail_with=self.fail_with)
+        self.built.append(provider)
+        return provider
+
+    def client_as(self, principal: RequestUser) -> TestClient:
+        self.app.dependency_overrides[get_current_user] = lambda: principal
+        self.app.dependency_overrides[get_active_user] = lambda: principal
+        return TestClient(self.app)
+
+    def admin_client(self) -> TestClient:
+        return self.client_as(RequestUser(user_id=self.admin_id, role="admin", mfa_verified=True))
+
+    def user_client(self, user_id: UUID) -> TestClient:
+        return self.client_as(RequestUser(user_id=user_id, role="user", mfa_verified=False))
+
+
+def _bind_body(personal_id: str = "A123456789", cert_password: str = CERT_PASSWORD) -> dict[str, str]:
+    return {
+        "broker": "fubon",
+        "personalId": personal_id,
+        "password": "login-pw",
+        "certPfxBase64": base64.b64encode(PFX).decode("ascii"),
+        "certPassword": cert_password,
+    }
+
+
+def _row(engine: Engine, user_id: UUID) -> BrokerAccount | None:
+    with Session(engine) as session:
+        return session.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalar_one_or_none()
+
+
+def _audit_types(engine: Engine, actor_id: UUID) -> list[str]:
+    with Session(engine) as session:
+        rows = session.execute(
+            select(AuditEvent.event_type).where(AuditEvent.actor_id == actor_id).order_by(AuditEvent.occurred_at)
+        ).all()
+    return [row for (row,) in rows]
+
+
+@pytest.mark.integration
+def test_bind_logs_in_subscribes_open_intents_and_persists_encrypted(engine: Engine) -> None:
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+    _seed_core_intent(engine, user_id)
+
+    response = harness.admin_client().put(f"/admin/users/{user_id}/broker-account", json=_bind_body())
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["broker"] == "fubon"
+    assert body["brokerAccountNo"] == "***6543"
+    assert body["status"] == "active"
+    assert body["lastError"] is None
+    assert datetime.fromisoformat(body["certExpiresAt"]) == DEFAULT_NOT_AFTER
+    for secret in ("A123456789", "login-pw", CERT_PASSWORD, "certPfxBase64"):
+        assert secret not in response.text
+
+    provider = harness.built[0]
+    assert harness.pool.get(user_id) is provider
+    assert provider.subscribed == {"2330"}
+
+    row = _row(engine, user_id)
+    assert row is not None
+    assert row.status == "active"
+    assert row.broker_account_no == "9876543"
+    assert row.last_login_at is not None
+    # Stored encrypted, and only the repository (with the key) can get it back.
+    assert b"A123456789" not in row.credentials_encrypted
+    with Session(engine) as session:
+        repo = BrokerAccountRepository(session, encryption_key=get_settings().resolved_mfa_encryption_key)
+        creds = repo.get_credentials(user_id)
+    assert creds == FubonCredentials(
+        personal_id="A123456789", password="login-pw", cert_pfx=PFX, cert_password=CERT_PASSWORD
+    )
+    assert _audit_types(engine, harness.admin_id) == ["broker_account_bound"]
+
+
+@pytest.mark.integration
+def test_first_bind_login_failure_is_422_without_a_row_and_without_secrets(
+    engine: Engine, caplog: pytest.LogCaptureFixture
+) -> None:
+    harness = _Harness(engine)
+    harness.fail_with = RuntimeError(f"login raised for {SECRET_SENTINEL}")
+    user_id = _seed_user(engine)
+
+    with caplog.at_level(logging.DEBUG):
+        response = harness.admin_client().put(
+            f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id=SECRET_SENTINEL)
+        )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "BROKER_LOGIN_FAILED"
+    assert response.json()["error"]["details"] == {"reason": "unknown"}
+    assert SECRET_SENTINEL not in response.text
+    assert SECRET_SENTINEL not in caplog.text
+    assert _row(engine, user_id) is None
+    assert harness.pool.get(user_id) is None
+    assert _audit_types(engine, harness.admin_id) == []
+
+
+@pytest.mark.integration
+def test_wrong_cert_password_fails_before_any_broker_call(engine: Engine) -> None:
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+
+    response = harness.admin_client().put(
+        f"/admin/users/{user_id}/broker-account", json=_bind_body(cert_password="nope")
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["details"] == {"reason": "cert_invalid"}
+    assert harness.built == []
+    assert _row(engine, user_id) is None
+
+
+@pytest.mark.integration
+def test_rebind_failure_keeps_the_old_session_and_row(engine: Engine) -> None:
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+    client = harness.admin_client()
+    assert client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body()).status_code == 200
+    first = harness.built[0]
+    before = _row(engine, user_id)
+    assert before is not None
+
+    harness.fail_with = RuntimeError("second login refused")
+    response = client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id="B222222222"))
+
+    assert response.status_code == 422
+    assert harness.pool.get(user_id) is first
+    assert not first.stopped
+    after = _row(engine, user_id)
+    assert after is not None
+    assert after.updated_at == before.updated_at
+    assert after.credentials_encrypted == before.credentials_encrypted
+
+
+@pytest.mark.integration
+def test_rebind_success_swaps_session_and_shuts_the_old_one_down(engine: Engine) -> None:
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+    client = harness.admin_client()
+    assert client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body()).status_code == 200
+
+    response = client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id="B222222222"))
+
+    assert response.status_code == 200, response.text
+    first, second = harness.built
+    assert first.stopped
+    assert harness.pool.get(user_id) is second
+    with Session(engine) as session:
+        assert (
+            session.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalars().all().__len__()
+            == 1
+        )
+        repo = BrokerAccountRepository(session, encryption_key=get_settings().resolved_mfa_encryption_key)
+        creds = repo.get_credentials(user_id)
+    assert creds is not None
+    assert creds.personal_id == "B222222222"
+    assert _audit_types(engine, harness.admin_id) == ["broker_account_bound", "broker_account_bound"]
+
+
+@pytest.mark.integration
+def test_session_cap_refuses_the_next_user_with_409(engine: Engine) -> None:
+    harness = _Harness(engine, max_sessions=1)
+    first, second = _seed_user(engine), _seed_user(engine)
+    client = harness.admin_client()
+    assert client.put(f"/admin/users/{first}/broker-account", json=_bind_body()).status_code == 200
+
+    response = client.put(f"/admin/users/{second}/broker-account", json=_bind_body())
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "BROKER_SESSION_LIMIT_REACHED"
+    assert response.json()["error"]["details"] == {"limit": 1}
+    assert _row(engine, second) is None
+
+
+@pytest.mark.integration
+def test_bind_requires_an_active_target_user(engine: Engine) -> None:
+    harness = _Harness(engine)
+    client = harness.admin_client()
+    invited = _seed_user(engine, status="invited")
+
+    response = client.put(f"/admin/users/{invited}/broker-account", json=_bind_body())
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "ACCOUNT_NOT_ACTIVE"
+
+    assert client.put(f"/admin/users/{uuid4()}/broker-account", json=_bind_body()).status_code == 404
+
+
+@pytest.mark.integration
+def test_bind_request_validation(engine: Engine) -> None:
+    harness = _Harness(engine)
+    client = harness.admin_client()
+    user_id = _seed_user(engine)
+
+    # pydantic's Base64Bytes is lenient (drops non-alphabet chars), so garbage
+    # becomes an unreadable pfx and is refused by the cert check before any login.
+    not_base64 = client.put(f"/admin/users/{user_id}/broker-account", json={**_bind_body(), "certPfxBase64": "!!"})
+    assert not_base64.status_code == 422
+    assert not_base64.json()["error"]["code"] == "BROKER_LOGIN_FAILED"
+    assert not_base64.json()["error"]["details"] == {"reason": "cert_invalid"}
+
+    extra = client.put(f"/admin/users/{user_id}/broker-account", json={**_bind_body(), "userId": "x"})
+    assert extra.status_code == 422
+
+    too_big = base64.b64encode(b"\0" * (64 * 1024 + 1)).decode("ascii")
+    oversized = client.put(f"/admin/users/{user_id}/broker-account", json={**_bind_body(), "certPfxBase64": too_big})
+    assert oversized.status_code == 422
+    assert oversized.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert harness.built == []
+
+
+@pytest.mark.integration
+def test_me_broker_account_is_read_only_and_secret_free(engine: Engine) -> None:
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+
+    assert harness.user_client(user_id).get("/me/broker-account").status_code == 404
+
+    assert harness.admin_client().put(f"/admin/users/{user_id}/broker-account", json=_bind_body()).status_code == 200
+    # Overrides live on the shared app, so the principal is re-set after the admin call.
+    response = harness.user_client(user_id).get("/me/broker-account")
+
+    assert response.status_code == 200
+    assert set(response.json()) == {
+        "broker",
+        "brokerAccountNo",
+        "status",
+        "certExpiresAt",
+        "lastLoginAt",
+        "lastError",
+        "updatedAt",
+    }
+    assert response.json()["brokerAccountNo"] == "***6543"
+
+
+@pytest.mark.integration
+def test_non_admin_cannot_bind_or_unbind(engine: Engine) -> None:
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+    me = harness.user_client(user_id)
+
+    assert me.put(f"/admin/users/{user_id}/broker-account", json=_bind_body()).status_code == 403
+    assert me.delete(f"/admin/users/{user_id}/broker-account").status_code == 403
+    assert _row(engine, user_id) is None
+
+
+@pytest.mark.integration
+def test_unbind_cancels_intents_deletes_row_and_logs_out(engine: Engine) -> None:
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+    intent_id = _seed_core_intent(engine, user_id)
+    client = harness.admin_client()
+    assert client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body()).status_code == 200
+    provider = harness.built[0]
+
+    response = client.delete(f"/admin/users/{user_id}/broker-account")
+
+    assert response.status_code == 204
+    assert provider.stopped
+    assert harness.pool.get(user_id) is None
+    assert _row(engine, user_id) is None
+    with Session(engine) as session:
+        intent = session.execute(select(TradeIntentCore).where(TradeIntentCore.id == intent_id)).scalar_one()
+    assert intent.status == "cancelled"
+    assert intent.cancelled_at is not None
+    assert _audit_types(engine, harness.admin_id) == ["broker_account_bound", "broker_account_unbound"]
+
+    # Idempotent: nothing left to do, no second audit row.
+    assert client.delete(f"/admin/users/{user_id}/broker-account").status_code == 204
+    assert _audit_types(engine, harness.admin_id) == ["broker_account_bound", "broker_account_unbound"]
+    assert client.delete(f"/admin/users/{uuid4()}/broker-account").status_code == 404
+
+
+@pytest.mark.integration
+def test_mark_login_failed_stores_only_the_whitelisted_message(engine: Engine) -> None:
+    user_id = _seed_user(engine)
+    key = get_settings().resolved_mfa_encryption_key
+    now = datetime.now(UTC)
+    with Session(engine) as session:
+        repo = BrokerAccountRepository(session, encryption_key=key)
+        repo.upsert(
+            user_id,
+            broker="fubon",
+            credentials=FubonCredentials(personal_id=SECRET_SENTINEL, password="p", cert_pfx=PFX, cert_password="c"),
+            broker_account_no="1",
+            cert_expires_at=DEFAULT_NOT_AFTER,
+            now=now,
+        )
+        repo.mark_login_failed(user_id, code="login_rejected", now=now)
+        session.commit()
+
+    row = _row(engine, user_id)
+    assert row is not None
+    assert row.status == "login_failed"
+    assert row.last_error == "券商拒絕登入，請確認身分證字號、密碼與憑證"
+
+    with Session(engine) as session:
+        repo = BrokerAccountRepository(session, encryption_key=key)
+        repo.mark_login_ok(user_id, now=now)
+        session.commit()
+        assert [a.user_id for a in repo.list_all() if a.user_id == user_id] == [user_id]
+    row = _row(engine, user_id)
+    assert row is not None
+    assert row.status == "active"
+    assert row.last_error is None

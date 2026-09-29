@@ -8,16 +8,12 @@ is **lazy-imported** — top-level `import` is forbidden so that:
 - A broken environment produces a clear actionable error, not a stray ImportError.
 """
 
-from typing import TYPE_CHECKING
-
 from app.core.config import Settings
+from app.domain.broker_account import FubonCredentials
 from app.services.quote.base import QuoteProvider
 
-if TYPE_CHECKING:
-    from app.services.quote.fubon.client import FubonCredentials
 
-
-def build_quote_provider(settings: Settings, *, credentials: "FubonCredentials | None" = None) -> QuoteProvider:
+def build_quote_provider(settings: Settings, *, credentials: FubonCredentials | None = None) -> QuoteProvider:
     """Build one provider instance.
 
     `credentials` is only meaningful for `fubon`: that provider is per-user, so

@@ -51,12 +51,14 @@ production 使用單一 `app` container，同時承載 API、quote callback、TW
 - `trade_intent_triggers`：新軌不可變的觸發快照。
 - `notifications`：新舊軌共用的使用者收件匣。
 
+`broker_accounts`：每位使用者一筆券商綁定（`user_id` unique），登入四件套以 `MFA_ENCRYPTION_KEY` Fernet 加密成單一 `credentials_encrypted` blob，只有 `BrokerAccountRepository` 會加解密；`last_error` 只存 `app.domain.broker_account` 的白名單訊息。
+
 `users`、refresh tokens、invitation、password reset、audit、idempotency keys 與 system flags 是共用基礎設施。TWAP confirm／slice worker 仍讀寫舊 `trade_intents` 與 `twap_slices`；其他舊單表路徑也仍存在但已凍結，詳見 [已知技術債](technical-debt.md)。
 
 ## 外部整合
 
 - **Shioaji demo**：目前 runtime quote provider，adapter 細節隔離在 `services/quote/shioaji_demo/`；provider 上限與 allowlist 由設定控制。
-- **Fubon Neo**：per-user 行情 provider，隔離在 `services/quote/fubon/`（`client.py` 是唯一 `import fubon_neo` 的模組，wheel 只有 Linux 版，本機測試以 fake SDK 注入）。`QUOTE_PROVIDER=fubon` 需由呼叫端提供該使用者的 `FubonCredentials`，尚未接上 lifespan；接線與 session pool 見 `docs/orders/per-user-broker-sessions.md`。
+- **Fubon Neo**：per-user 行情 provider，隔離在 `services/quote/fubon/`（`client.py` 是唯一 `import fubon_neo` 的模組，wheel 只有 Linux 版，本機測試以 fake SDK 注入）。`QUOTE_PROVIDER=fubon` 需由呼叫端提供該使用者的 `FubonCredentials`（定義在 `domain/broker_account.py`）。`services/broker_session_pool.py` 的 `BrokerSessionPool` 掛在 `app.state.broker_sessions`：`fubon` 為 per-user 模式（每位綁定使用者一條 session，`BROKER_MAX_SESSIONS` 為應用層上限，綁定採 `prepare` → 訂閱／落庫 → `activate` 的兩階段切換，重綁失敗不影響現行 session）；`in_memory`／demo provider 為 shared 模式，所有人共用同一個 provider。lifespan 尚未依 `broker_accounts` 逐人登入、dispatcher 尚未依 owner 過濾，見 `docs/orders/per-user-broker-sessions.md` PR3。
 - **Telegram outbound**：trigger／TWAP transaction 內建立 notification row 後直接 best-effort 呼叫 Bot API，失敗只寫安全 warning並繼續完成 DB transaction。
 - **Telegram inbound**：webhook secret + chat allowlist，使用 DeepSeek 將文字分類成四種受支援 intent，確認後呼叫相同 core command。
 - **AWS SES**：四個 SES 設定全有值時使用 SMTP，否則使用 logging stub；部分設定會在啟動時 fail fast。

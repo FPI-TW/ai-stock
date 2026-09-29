@@ -10,6 +10,7 @@ from fastapi import APIRouter, Request, status
 from app.api.deps import (
     AdminRoleDep,
     AdminUserDep,
+    BindBrokerAccountCommandDep,
     CreateUserCommandDep,
     DisableUserCommandDep,
     ProvisionUserCommandDep,
@@ -18,10 +19,12 @@ from app.api.deps import (
     SetKillSwitchCommandDep,
     SetupTwoFactorCommandDep,
     SystemFlagRepoDep,
+    UnbindBrokerAccountCommandDep,
     UserRepoDep,
     VerifyTwoFactorCommandDep,
 )
 from app.api.errors import ErrorResponse, get_request_id
+from app.api.routes.broker_account import to_response as broker_account_response
 from app.api.schemas.admin import (
     CreateUserRequest,
     CreateUserResponse,
@@ -34,6 +37,7 @@ from app.api.schemas.admin import (
     UserListResponse,
     UserSummary,
 )
+from app.api.schemas.broker_account import BindBrokerAccountRequest, BrokerAccountResponse
 from app.commands.account import (
     CreateUserInput,
     DisableUserInput,
@@ -41,8 +45,10 @@ from app.commands.account import (
     ReactivateUserInput,
     ResendInvitationInput,
 )
+from app.commands.broker_account import BindBrokerAccountInput, UnbindBrokerAccountInput
 from app.commands.kill_switch import SetKillSwitchInput
 from app.commands.two_factor import SetupTwoFactorInput, VerifyTwoFactorInput
+from app.domain.broker_account import FubonCredentials
 from app.repositories.system_flag_repository import SystemFlagRepository
 from app.services.kill_switch import GLOBAL_TRIGGER_HALT
 
@@ -181,6 +187,73 @@ def resend_invitation(
 ) -> None:
     command.execute(
         ResendInvitationInput(
+            target_user_id=user_id,
+            actor_admin_id=admin.user_id,
+            now=datetime.now(UTC),
+            request_id=get_request_id(request),
+        )
+    )
+
+
+@router.put(
+    "/users/{user_id}/broker-account",
+    response_model=BrokerAccountResponse,
+    summary="代使用者綁定券商帳號（登入成功才儲存；重綁即整包覆蓋）",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"model": ErrorResponse, "description": "使用者不存在（NOT_FOUND）"},
+        status.HTTP_409_CONFLICT: {
+            "model": ErrorResponse,
+            "description": (
+                "使用者非 active、本系統 session 數已達上限、或同一使用者的綁定正在處理中"
+                "（ACCOUNT_NOT_ACTIVE / BROKER_SESSION_LIMIT_REACHED / BROKER_BIND_IN_PROGRESS）"
+            ),
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse,
+            "description": "券商登入失敗或請求格式錯誤（BROKER_LOGIN_FAILED / VALIDATION_ERROR）",
+        },
+    },
+)
+def bind_broker_account(
+    user_id: UUID,
+    request: Request,
+    body: BindBrokerAccountRequest,
+    admin: AdminUserDep,
+    command: BindBrokerAccountCommandDep,
+) -> BrokerAccountResponse:
+    """憑證由我們代申請，四件套（身分證字號、密碼、pfx、憑證密碼）在管理端一次送出；系統當場
+    以候選 session 試登入，成功才加密落庫並切換為該使用者的行情來源。回應與 log 不含任何機密。"""
+    bound = command.execute(
+        BindBrokerAccountInput(
+            target_user_id=user_id,
+            broker=body.broker,
+            credentials=FubonCredentials(
+                personal_id=body.personal_id,
+                password=body.password,
+                cert_pfx=bytes(body.cert_pfx),
+                cert_password=body.cert_password,
+            ),
+            actor_admin_id=admin.user_id,
+            now=datetime.now(UTC),
+            request_id=get_request_id(request),
+        )
+    )
+    return broker_account_response(bound)
+
+
+@router.delete(
+    "/users/{user_id}/broker-account",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="解除使用者的券商綁定（冪等；一併取消該使用者所有有效委託並登出 session）",
+)
+def unbind_broker_account(
+    user_id: UUID,
+    request: Request,
+    admin: AdminUserDep,
+    command: UnbindBrokerAccountCommandDep,
+) -> None:
+    command.execute(
+        UnbindBrokerAccountInput(
             target_user_id=user_id,
             actor_admin_id=admin.user_id,
             now=datetime.now(UTC),
