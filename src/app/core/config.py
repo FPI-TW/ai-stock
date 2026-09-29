@@ -9,9 +9,8 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 QuoteProviderName = Literal["shioaji_demo", "in_memory", "fubon"]
-# 已接上的券商；第二家出現時才擴充列舉，不建 registry。
+# 已接上的券商；第二家出現時才擴充列舉，不建 registry。需要 runtime 序列時用 typing.get_args。
 BrokerName = Literal["fubon"]
-BROKER_NAMES: tuple[BrokerName, ...] = ("fubon",)
 # 富邦預設連測試環境；真單環境以 FUBON_WS_URL 切換（product.md〈下單能力演進〉）。
 FUBON_TEST_WS_URL = "wss://neoapitest.fbs.com.tw/TASP/XCPXWS"
 

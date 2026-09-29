@@ -138,7 +138,7 @@
 **Pool**
 
 - `BrokerSessionPool(settings, *, shared=None)`：`set_quote_listener`、`get`、`require`、`prepare(user_id, credentials) -> PreparedBrokerSession`、`activate(candidate)`、`discard(candidate)`、`stop`、`stop_all`、`bound_user_ids`。`prepare` 在鎖內為 user 取得單一操作 token 並保留名額，再於鎖外建 provider 與登入，不改動正式 session；同一 user 的第二個 prepare、stop 或解綁必須等候或明確拒絕，不得與候選切換並行。替換同一 user 不多佔應用層名額，但候選登入仍可能被富邦外部硬上限拒絕，此時舊 session 保留。`prepare` 自身失敗時必須釋放 token 與名額保留。`activate` 只在鎖內驗證 token、掛 owner listener、原子替換 dict 並消耗名額保留，不做網路或 DB I/O，回傳舊 provider 供鎖外 shutdown。`discard` 先在鎖內釋放 token 與名額保留，再於鎖外 shutdown 未啟用的候選 provider。`stop` 必呼叫 `logout`；log 只記 user_id 與安全錯誤碼。
-- `config.py` 加 `broker_max_sessions`（預設 2，validator 1..10）、`BrokerName = Literal["fubon"]`、`BROKER_NAMES`。
+- `config.py` 加 `broker_max_sessions`（預設 2，validator 1..10）、`BrokerName = Literal["fubon"]`（不另建 `BROKER_NAMES` tuple，與 `QuoteProviderName` 一致以 `get_args` 取序列）。
 
 **綁定 API**（全部需登入；寫入只開給管理員）
 
