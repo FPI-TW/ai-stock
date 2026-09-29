@@ -45,6 +45,10 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    # 關機時 lifespan 要逐條登出券商 session（每條最壞等 websocket close frame 約 3 秒，
+    # 已改平行但仍要留餘裕）；Docker 預設 10 秒就 SIGKILL，殘留的 session 會占住富邦
+    # 連線上限直到對方逾時，下次啟動撞「Maximum number of connections reached」。
+    stop_grace_period: 40s
     healthcheck:
       test:
         - "CMD-SHELL"

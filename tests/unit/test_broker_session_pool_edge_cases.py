@@ -283,3 +283,23 @@ def test_failure_after_a_successful_login_inside_prepare_logs_out_and_releases()
     assert built[0].started and built[0].stopped
     assert not pool.is_binding(user_id)
     assert pool.get(user_id) is None
+
+
+def test_stop_all_logs_sessions_out_in_parallel() -> None:
+    """Review finding: sequential logouts × ~3 s close-frame wait outgrow the
+    container stop grace. A barrier only opens if both shutdowns run at once."""
+    barrier = threading.Barrier(2, timeout=5)
+
+    class BarrierProvider(FakeProvider):
+        def shutdown(self) -> None:
+            barrier.wait()  # BrokenBarrierError if the other logout never overlaps
+            super().shutdown()
+
+    pool, built = _pool(max_sessions=2, provider_for=BarrierProvider)
+    for _ in range(2):
+        pool.activate(pool.prepare(uuid4(), _CREDS))
+
+    pool.stop_all()
+
+    assert all(p.stopped for p in built)
+    assert pool.bound_user_ids() == set()

@@ -38,6 +38,7 @@ import logging
 import threading
 import traceback
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
@@ -280,11 +281,22 @@ class BrokerSessionPool:
             _shutdown_quietly(provider, claim.user_id)
 
     def stop_all(self) -> None:
+        """Log every live session out, in parallel.
+
+        Each logout may wait up to ~3 s for the market-data socket's close frame
+        (verified with the SDK), so N sequential logouts would exceed a container's
+        stop grace period once N grows; sessions left over then keep occupying the
+        broker's connection cap until it times them out. Parallel keeps the worst
+        case at one logout regardless of N (N ≤ BROKER_MAX_SESSIONS ≤ 10).
+        """
         with self._lock:
             sessions = list(self._sessions.items())
             self._sessions.clear()
-        for user_id, provider in sessions:
-            _shutdown_quietly(provider, user_id)
+        if not sessions:
+            return
+        with ThreadPoolExecutor(max_workers=len(sessions), thread_name_prefix="broker-logout") as pool:
+            for user_id, provider in sessions:
+                pool.submit(_shutdown_quietly, provider, user_id)
 
     # --- internals ----------------------------------------------------------------
 

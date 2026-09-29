@@ -60,6 +60,7 @@ Schema 已前進時 app image rollback 不代表 DB downgrade；migration 必須
 ## 健康與程序限制
 
 - `GET /health` 會檢查 DB；失敗回 503。
+- app container 的 `stop_grace_period` 為 40 秒：關機時 lifespan 會平行登出所有券商 session（每條最壞約 3 秒等 close frame），Docker 預設 10 秒 SIGKILL 會讓殘留 session 占住富邦連線上限。
 - app container 使用單一 Uvicorn process。未先拆出 broker／scheduler ownership 或加入 leader election 前，不得增加 workers 或複本。
 - TWAP 與 idempotency cleanup 在 app process 中運行；排程故障會記錄 log，但目前沒有獨立 worker dashboard。
 
