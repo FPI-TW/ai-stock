@@ -28,6 +28,7 @@ from tests.test_broker_account_api_integration import (
     _Harness,
     _seed_core_intent,
     _seed_user,
+    credential_key,  # noqa: F401 - autouse fixture: the bind path refuses the dev fallback key
     engine,  # noqa: F401 - module-scoped fixture re-exported for this file
 )
 from tests.unit.test_broker_session_pool import FakeProvider, _SdkLoginError

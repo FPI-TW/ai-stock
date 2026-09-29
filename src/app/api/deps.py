@@ -478,7 +478,7 @@ AuditWriterDep = Annotated[AuditEventWriter, Depends(get_audit_writer)]
 
 
 def get_broker_account_repository(db: DatabaseDep, settings: SettingsDep) -> BrokerAccountRepository:
-    return BrokerAccountRepository(db, encryption_key=settings.resolved_mfa_encryption_key)
+    return BrokerAccountRepository(db, encryption_key=settings.broker_credential_key)
 
 
 BrokerAccountRepoDep = Annotated[BrokerAccountRepository, Depends(get_broker_account_repository)]

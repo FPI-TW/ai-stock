@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, select, text
 from sqlalchemy.orm import Session
@@ -35,9 +36,20 @@ from tests.pfx_helpers import DEFAULT_NOT_AFTER, build_test_pfx
 from tests.unit.test_broker_session_pool import FakeProvider, _SdkLoginError
 
 CERT_PASSWORD = "cert-pw"
+# The bind path refuses the repo's dev fallback key even in LOCAL_MODE (a real
+# identity number + password would otherwise sit in the DB under a public key),
+# so these tests run with a real key like a deployment would.
+TEST_CREDENTIAL_KEY = Fernet.generate_key().decode()
 PFX = build_test_pfx(password=CERT_PASSWORD)
 # Sentinel that a leaky path would echo: looks like an identity number.
 SECRET_SENTINEL = "Z987654321"
+
+
+@pytest.fixture(autouse=True)
+def credential_key(monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setenv("MFA_ENCRYPTION_KEY", TEST_CREDENTIAL_KEY)
+    get_settings.cache_clear()
+    return TEST_CREDENTIAL_KEY
 
 
 def _alembic_config() -> Config:
@@ -234,7 +246,7 @@ def test_bind_logs_in_subscribes_open_intents_and_persists_encrypted(engine: Eng
     # Stored encrypted, and only the repository (with the key) can get it back.
     assert b"A123456789" not in row.credentials_encrypted
     with Session(engine) as session:
-        repo = BrokerAccountRepository(session, encryption_key=get_settings().resolved_mfa_encryption_key)
+        repo = BrokerAccountRepository(session, encryption_key=TEST_CREDENTIAL_KEY)
         creds = repo.get_credentials(user_id)
     assert creds == FubonCredentials(
         personal_id="A123456789", password="login-pw", cert_pfx=PFX, cert_password=CERT_PASSWORD
@@ -348,7 +360,7 @@ def test_rebind_success_swaps_session_and_shuts_the_old_one_down(engine: Engine)
             session.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalars().all().__len__()
             == 1
         )
-        repo = BrokerAccountRepository(session, encryption_key=get_settings().resolved_mfa_encryption_key)
+        repo = BrokerAccountRepository(session, encryption_key=TEST_CREDENTIAL_KEY)
         creds = repo.get_credentials(user_id)
     assert creds is not None
     assert creds.personal_id == "B222222222"
@@ -482,7 +494,7 @@ def test_unbind_cancels_intents_deletes_row_and_logs_out(engine: Engine) -> None
 @pytest.mark.integration
 def test_mark_login_failed_stores_only_the_whitelisted_message(engine: Engine) -> None:
     user_id = _seed_user(engine)
-    key = get_settings().resolved_mfa_encryption_key
+    key = TEST_CREDENTIAL_KEY
     now = datetime.now(UTC)
     with Session(engine) as session:
         repo = BrokerAccountRepository(session, encryption_key=key)
@@ -558,7 +570,7 @@ def test_old_session_logout_raising_does_not_undo_a_committed_rebind(engine: Eng
     assert first.stopped  # attempted, raised, swallowed
     assert harness.pool.get(user_id) is second
     with Session(engine) as session:
-        repo = BrokerAccountRepository(session, encryption_key=get_settings().resolved_mfa_encryption_key)
+        repo = BrokerAccountRepository(session, encryption_key=TEST_CREDENTIAL_KEY)
         creds = repo.get_credentials(user_id)
     assert creds is not None and creds.personal_id == "B222222222"
 
@@ -607,14 +619,14 @@ def test_second_bind_and_unbind_are_refused_while_the_first_login_is_in_flight(e
 @pytest.mark.integration
 def test_credentials_encrypted_under_a_rotated_key_raise_invalid_token(engine: Engine) -> None:
     """If MFA_ENCRYPTION_KEY is rotated without re-encrypting broker_accounts, the
-    repository cannot decrypt: it raises rather than returning garbage. PR3's
-    startup loop must treat this per user, not abort the whole lifespan."""
-    from cryptography.fernet import Fernet, InvalidToken
+    repository cannot decrypt: it raises the domain error (never the raw
+    cryptography one). PR3's startup loop handles it per user."""
+    from app.domain.broker_account import BrokerCredentialKeyError
 
     user_id = _seed_user(engine)
     now = datetime.now(UTC)
     with Session(engine) as session:
-        BrokerAccountRepository(session, encryption_key=get_settings().resolved_mfa_encryption_key).upsert(
+        BrokerAccountRepository(session, encryption_key=TEST_CREDENTIAL_KEY).upsert(
             user_id,
             broker="fubon",
             credentials=FubonCredentials(personal_id="A1", password="p", cert_pfx=PFX, cert_password="c"),
@@ -624,8 +636,9 @@ def test_credentials_encrypted_under_a_rotated_key_raise_invalid_token(engine: E
         )
         session.commit()
 
-    with Session(engine) as session, pytest.raises(InvalidToken):
+    with Session(engine) as session, pytest.raises(BrokerCredentialKeyError) as info:
         BrokerAccountRepository(session, encryption_key=Fernet.generate_key().decode()).get_credentials(user_id)
+    assert info.value.reason == "undecryptable"
 
 
 @pytest.mark.integration
@@ -636,7 +649,7 @@ def test_two_transactions_inserting_the_same_user_hit_the_unique_index(engine: E
     from sqlalchemy.exc import IntegrityError
 
     user_id = _seed_user(engine)
-    key = get_settings().resolved_mfa_encryption_key
+    key = TEST_CREDENTIAL_KEY
     now = datetime.now(UTC)
     creds = FubonCredentials(personal_id="A1", password="p", cert_pfx=PFX, cert_password="c")
     errors: list[Exception] = []
@@ -780,3 +793,26 @@ def test_shared_mode_refuses_binding_with_a_non_retryable_409(engine: Engine) ->
     assert _row(engine, user_id) is None
     assert _audit_types(engine, harness.admin_id) == []
     assert harness.admin_client().get("/me/broker-account").status_code == 404
+
+
+@pytest.mark.integration
+def test_bind_refuses_the_dev_fallback_key_even_in_local_mode(engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review finding: with MFA_ENCRYPTION_KEY unset, LOCAL_MODE encrypted broker
+    credentials under the key checked into the repo. The write path now refuses
+    (500 naming the config), the candidate login is released, no row is written."""
+    monkeypatch.delenv("MFA_ENCRYPTION_KEY", raising=False)
+    get_settings.cache_clear()
+    assert get_settings().local_mode and get_settings().broker_credential_key is None
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+
+    response = harness.admin_client().put(f"/admin/users/{user_id}/broker-account", json=_bind_body())
+
+    assert response.status_code == 500, response.text
+    assert response.json()["error"]["code"] == "BROKER_CREDENTIAL_KEY_INVALID"
+    assert response.json()["error"]["details"] == {"reason": "missing"}
+    assert _row(engine, user_id) is None
+    assert harness.built[0].started and harness.built[0].stopped  # logged in, then discarded
+    assert harness.pool.get(user_id) is None and not harness.pool.is_binding(user_id)
+    # Non-secret reads still work without a key.
+    assert harness.user_client(user_id).get("/me/broker-account").status_code == 404

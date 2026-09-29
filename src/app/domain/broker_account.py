@@ -94,6 +94,16 @@ class BrokerSessionSetupError(BrokerAccountError):
         self.exception_type = exception_type
 
 
+class BrokerCredentialKeyError(BrokerAccountError):
+    """The at-rest encryption key is unusable: not configured (`missing`, dev
+    fallback refused) or no longer the one the row was written with
+    (`undecryptable`, after a rotation without re-binding). Operations, not admins."""
+
+    def __init__(self, reason: Literal["missing", "undecryptable"]) -> None:
+        super().__init__(reason)
+        self.reason: Literal["missing", "undecryptable"] = reason
+
+
 class BrokerBindingNotEnabledError(BrokerAccountError):
     """The runtime is in shared-provider mode (`in_memory` / demo): there is no
     per-user broker login to perform, so binding is refused outright. Not retryable."""

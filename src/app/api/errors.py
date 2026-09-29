@@ -39,6 +39,7 @@ from app.domain.broker_account import (
     BrokerAccountNotBoundError,
     BrokerBindingNotEnabledError,
     BrokerBindInProgressError,
+    BrokerCredentialKeyError,
     BrokerLoginFailedError,
     BrokerSessionLimitReachedError,
     BrokerSessionSetupError,
@@ -194,6 +195,7 @@ class ErrorCode(StrEnum):
     BROKER_BIND_IN_PROGRESS = "BROKER_BIND_IN_PROGRESS"
     BROKER_BINDING_NOT_ENABLED = "BROKER_BINDING_NOT_ENABLED"
     BROKER_SESSION_SETUP_FAILED = "BROKER_SESSION_SETUP_FAILED"
+    BROKER_CREDENTIAL_KEY_INVALID = "BROKER_CREDENTIAL_KEY_INVALID"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -254,6 +256,7 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
         "目前為共用帳號行情模式，未啟用 per-user 券商綁定（QUOTE_PROVIDER 需為 fubon）"
     ),
     ErrorCode.BROKER_SESSION_SETUP_FAILED: "券商連線初始化失敗，非登入資料問題，請聯絡維運",
+    ErrorCode.BROKER_CREDENTIAL_KEY_INVALID: "券商金鑰加密設定異常（MFA_ENCRYPTION_KEY 未設定或已輪替），請聯絡維運",
 }
 
 
@@ -428,6 +431,13 @@ def register_exception_handlers(app: FastAPI) -> None:
                 status.HTTP_500_INTERNAL_SERVER_ERROR,
                 ErrorCode.BROKER_SESSION_SETUP_FAILED,
                 details={"exceptionType": exc.exception_type},
+            )
+        if isinstance(exc, BrokerCredentialKeyError):
+            return build_error_response(
+                request,
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                ErrorCode.BROKER_CREDENTIAL_KEY_INVALID,
+                details={"reason": exc.reason},
             )
         if isinstance(exc, BrokerBindingNotEnabledError):
             return build_error_response(

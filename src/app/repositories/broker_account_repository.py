@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID, uuid4
 
+from cryptography.fernet import InvalidToken
 from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.orm import Session
 
@@ -19,6 +20,7 @@ from app.db.models.broker_account import BrokerAccount
 from app.domain.broker_account import (
     LOGIN_FAILURE_MESSAGES,
     BrokerAccountData,
+    BrokerCredentialKeyError,
     BrokerLoginFailureCode,
     FubonCredentials,
 )
@@ -40,9 +42,16 @@ def _to_domain(row: BrokerAccount) -> BrokerAccountData:
 
 
 class BrokerAccountRepository:
-    def __init__(self, db: Session, *, encryption_key: str) -> None:
+    def __init__(self, db: Session, *, encryption_key: str | None) -> None:
         self._db = db
+        # None = not configured. Reads of non-secret columns still work; anything
+        # that touches `credentials_encrypted` refuses instead of using a dev key.
         self._key = encryption_key
+
+    def _require_key(self) -> str:
+        if not self._key:
+            raise BrokerCredentialKeyError("missing")
+        return self._key
 
     def get_by_user_id(self, user_id: UUID) -> BrokerAccountData | None:
         row = self._db.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalar_one_or_none()
@@ -58,13 +67,19 @@ class BrokerAccountRepository:
         ).scalar_one_or_none()
         if blob is None:
             return None
-        payload = json.loads(decrypt_secret(self._key, blob))
-        return FubonCredentials(
-            personal_id=payload["personal_id"],
-            password=payload["password"],
-            cert_pfx=base64.b64decode(payload["cert_pfx_base64"]),
-            cert_password=payload["cert_password"],
-        )
+        key = self._require_key()
+        try:
+            payload = json.loads(decrypt_secret(key, blob))
+            return FubonCredentials(
+                personal_id=payload["personal_id"],
+                password=payload["password"],
+                cert_pfx=base64.b64decode(payload["cert_pfx_base64"]),
+                cert_password=payload["cert_password"],
+            )
+        except (InvalidToken, ValueError, KeyError, TypeError) as exc:
+            # Rotated key, or a blob this code never wrote. Never let the raw
+            # crypto error escape: callers (PR3 startup loop) handle it per user.
+            raise BrokerCredentialKeyError("undecryptable") from exc
 
     def upsert(
         self,
@@ -79,7 +94,7 @@ class BrokerAccountRepository:
         """Replace the whole binding (re-binding is how a yearly cert renewal lands).
         Only called after a successful login, so the row starts / returns to `active`."""
         blob = encrypt_secret(
-            self._key,
+            self._require_key(),
             json.dumps(
                 {
                     "personal_id": credentials.personal_id,
