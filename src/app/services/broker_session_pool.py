@@ -29,8 +29,9 @@ moment they return until activate / discard / stop / release; whoever asks
 second gets `BrokerBindInProgressError`.
 
 Thread model: `threading.Lock` guards the dict / pending set only; every broker
-call (login, logout, subscribe) happens outside it. Callbacks from the SDK thread
-never enter this module.
+call (login, logout, subscribe, and attaching a listener — which takes the
+provider's own RLock) happens outside it, so the pool lock never waits on a
+provider lock. Callbacks from the SDK thread never enter this module.
 """
 
 import logging
@@ -217,12 +218,27 @@ class BrokerSessionPool:
 
     def activate(self, candidate: PreparedBrokerSession) -> QuoteProvider | None:
         """Atomically make `candidate` the user's live session. No network, no DB.
-        Returns the replaced provider (shut it down outside the lock) or None."""
+        Returns the replaced provider (shut it down outside the lock) or None.
+
+        The owner listener is attached *before* taking the pool lock: the
+        provider's own RLock is held across broker I/O in subscribe / shutdown /
+        reconnect, so acquiring it while holding the pool lock would nest the two
+        and let a slow broker call stall every other user's `get`. Attaching
+        early is harmless — the row is already committed, and a frame arriving in
+        the gap is a frame for this owner from their own session.
+        """
         with self._lock:
             if self._pending.get(candidate.user_id) is not candidate:
                 raise BrokerBindInProgressError()
-            if self._listener is not None:
-                candidate.provider.add_quote_listener(self._owner_listener(candidate.user_id))
+            listener = self._listener
+        forward = self._owner_listener(candidate.user_id, listener) if listener is not None else None
+        if forward is not None:
+            candidate.provider.add_quote_listener(forward)
+        with self._lock:
+            if self._pending.get(candidate.user_id) is not candidate:  # cannot change under us, but be exact
+                if forward is not None:
+                    candidate.provider.remove_quote_listener(forward)
+                raise BrokerBindInProgressError()
             old = self._sessions.get(candidate.user_id)
             self._sessions[candidate.user_id] = candidate.provider
             del self._pending[candidate.user_id]
@@ -272,10 +288,7 @@ class BrokerSessionPool:
 
     # --- internals ----------------------------------------------------------------
 
-    def _owner_listener(self, user_id: UUID) -> Callable[[QuoteSnapshot], None]:
-        listener = self._listener
-        assert listener is not None
-
+    def _owner_listener(self, user_id: UUID, listener: OwnerScopedQuoteListener) -> Callable[[QuoteSnapshot], None]:
         def forward(snapshot: QuoteSnapshot) -> None:
             listener(snapshot, owner_user_id=user_id)
 

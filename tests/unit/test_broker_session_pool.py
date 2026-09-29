@@ -151,6 +151,32 @@ def test_activate_attaches_owner_scoped_listener() -> None:
     assert seen == [("2330", user_id)]
 
 
+def test_activate_attaches_the_listener_outside_the_pool_lock() -> None:
+    """Review finding: `add_quote_listener` takes the provider RLock, which is held
+    across broker I/O elsewhere; calling it under the pool lock nested the two."""
+
+    class LockProbeProvider(FakeProvider):
+        def add_quote_listener(self, listener: QuoteListener) -> None:
+            self.pool_lock_held_during_attach = pool._lock.locked()
+            super().add_quote_listener(listener)
+
+    built: list[LockProbeProvider] = []
+
+    def factory(_creds: FubonCredentials) -> LockProbeProvider:
+        built.append(LockProbeProvider())
+        return built[-1]
+
+    pool = BrokerSessionPool(_settings(), shared=None, provider_factory=factory)
+    pool.set_quote_listener(lambda snapshot, *, owner_user_id: None)
+    user_id = uuid4()
+
+    pool.activate(pool.prepare(user_id, _CREDS))
+
+    assert built[0].pool_lock_held_during_attach is False
+    assert len(built[0].listeners) == 1
+    assert pool.get(user_id) is built[0]
+
+
 def test_rebind_replaces_session_and_returns_old_provider() -> None:
     pool, built = _pool()
     user_id = uuid4()
