@@ -285,7 +285,8 @@ def test_unbind_rollback_raising_on_a_dead_connection_still_releases_the_claim()
     user_id = uuid4()
     pool.activate(pool.prepare(user_id, _CREDS))
     live = built[0]
-    command = UnbindBrokerAccountCommand(db, _Users(user_id), _Accounts(bound=object()), _CoreIntents(), _Audit(), pool)  # type: ignore[arg-type]
+    stubs = (db, _Users(user_id), _Accounts(bound=object()), _CoreIntents(), _CoreIntents(), _Audit())
+    command = UnbindBrokerAccountCommand(*stubs, pool)  # type: ignore[arg-type]
 
     with pytest.raises(OperationalError) as info:
         command.execute(UnbindBrokerAccountInput(target_user_id=user_id, actor_admin_id=uuid4(), now=datetime.now(UTC)))

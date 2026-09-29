@@ -502,11 +502,12 @@ def get_unbind_broker_account_command(
     db: DatabaseDep,
     users: UserRepoDep,
     accounts: BrokerAccountRepoDep,
+    intents: IntentRepoDep,
     core_intents: TradeIntentCoreRepoDep,
     audit: AuditWriterDep,
     pool: BrokerSessionPoolDep,
 ) -> UnbindBrokerAccountCommand:
-    return UnbindBrokerAccountCommand(db, users, accounts, core_intents, audit, pool)
+    return UnbindBrokerAccountCommand(db, users, accounts, intents, core_intents, audit, pool)
 
 
 UnbindBrokerAccountCommandDep = Annotated[UnbindBrokerAccountCommand, Depends(get_unbind_broker_account_command)]

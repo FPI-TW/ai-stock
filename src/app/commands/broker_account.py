@@ -27,6 +27,7 @@ from app.domain.broker_account import (
     FubonCredentials,
 )
 from app.repositories.broker_account_repository import BrokerAccountRepository
+from app.repositories.intent_repository import IntentRepository
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.repositories.user_repository import UserRepository
 from app.services.audit import AuditEventWriter
@@ -165,6 +166,7 @@ class UnbindBrokerAccountCommand:
         db: Session,
         users: UserRepository,
         accounts: BrokerAccountRepository,
+        intents: IntentRepository,
         core_intents: TradeIntentCoreRepository,
         audit: AuditEventWriter,
         pool: BrokerSessionPool,
@@ -172,6 +174,7 @@ class UnbindBrokerAccountCommand:
         self._db = db
         self._users = users
         self._accounts = accounts
+        self._intents = intents
         self._core_intents = core_intents
         self._audit = audit
         self._pool = pool
@@ -187,7 +190,12 @@ class UnbindBrokerAccountCommand:
         try:
             if self._accounts.get_by_user_id(user.id) is None:
                 return
-            cancelled = self._core_intents.cancel_active_for_owner(user.id, status=UNBOUND_INTENT_STATUS, now=inp.now)
+            # Both tracks, same as DisableUserCommand: TWAP still lives on the legacy
+            # table, and a TWAP left active here would keep slicing and notifying
+            # for a user who no longer has a quote source.
+            cancelled = self._intents.cancel_active_for_owner(
+                user.id, status=UNBOUND_INTENT_STATUS, now=inp.now
+            ) + self._core_intents.cancel_active_for_owner(user.id, status=UNBOUND_INTENT_STATUS, now=inp.now)
             self._accounts.delete(user.id)
             self._audit.write(
                 event_type="broker_account_unbound",

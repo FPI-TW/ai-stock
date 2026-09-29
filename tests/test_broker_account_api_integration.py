@@ -24,7 +24,7 @@ from app.core.config import get_settings
 from app.core.security import RequestUser
 from app.db.models.auth import AuditEvent, User
 from app.db.models.broker_account import BrokerAccount
-from app.db.models.core import Symbol
+from app.db.models.core import Symbol, TradeIntent
 from app.db.models.trade_intent_core import TradeIntentCore, TradeIntentPriceParams
 from app.domain.broker_account import FubonCredentials
 from app.main import create_app
@@ -68,7 +68,7 @@ def engine() -> Generator[Engine]:
         yield engine
     finally:
         with engine.begin() as conn:
-            conn.execute(text("TRUNCATE trade_intent_core CASCADE"))
+            conn.execute(text("TRUNCATE trade_intents, trade_intent_core CASCADE"))
         engine.dispose()
         command.downgrade(config, "base")
 
@@ -79,6 +79,31 @@ def _seed_user(engine: Engine, *, role: str = "user", status: str = "active", mf
         session.add(User(id=user_id, email=f"{role}-{user_id}@example.com", role=role, status=status, mfa_enabled=mfa))
         session.commit()
     return user_id
+
+
+def _seed_legacy_intent(engine: Engine, owner_id: UUID) -> UUID:
+    """舊軌委託（TWAP 仍寫這張表）：解綁必須連這邊一起取消，否則 scheduler 照樣切片發通知。"""
+
+    intent_id = uuid4()
+    with Session(engine) as session:
+        session.add(
+            TradeIntent(
+                id=intent_id,
+                owner_user_id=owner_id,
+                symbol="2330",
+                strategy="buy_price_alert",
+                execution_mode="notify_only",
+                quantity_lots=1,
+                target_price_original=Decimal("100.0000"),
+                target_price_effective=Decimal("100.0000"),
+                trigger_reference_price_type="ask",
+                trading_date=date(2026, 1, 1),
+                time_in_force="day",
+                status="active",
+            )
+        )
+        session.commit()
+    return intent_id
 
 
 def _seed_core_intent(engine: Engine, owner_id: UUID) -> UUID:
@@ -384,6 +409,7 @@ def test_unbind_cancels_intents_deletes_row_and_logs_out(engine: Engine) -> None
     harness = _Harness(engine)
     user_id = _seed_user(engine)
     intent_id = _seed_core_intent(engine, user_id)
+    legacy_intent_id = _seed_legacy_intent(engine, user_id)
     client = harness.admin_client()
     assert client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body()).status_code == 200
     provider = harness.built[0]
@@ -396,8 +422,17 @@ def test_unbind_cancels_intents_deletes_row_and_logs_out(engine: Engine) -> None
     assert _row(engine, user_id) is None
     with Session(engine) as session:
         intent = session.execute(select(TradeIntentCore).where(TradeIntentCore.id == intent_id)).scalar_one()
+        legacy = session.execute(select(TradeIntent).where(TradeIntent.id == legacy_intent_id)).scalar_one()
+        unbound_audit = session.execute(
+            select(AuditEvent).where(
+                AuditEvent.event_type == "broker_account_unbound", AuditEvent.actor_id == harness.admin_id
+            )
+        ).scalar_one()
     assert intent.status == "cancelled"
     assert intent.cancelled_at is not None
+    # 兩軌都要取消：TWAP 仍寫舊表，漏掉這邊的話 scheduler 會替沒有行情來源的人繼續切片發通知。
+    assert legacy.status == "cancelled"
+    assert unbound_audit.event_metadata["cancelled_intent_count"] == 2
     assert _audit_types(engine, harness.admin_id) == ["broker_account_bound", "broker_account_unbound"]
 
     # Idempotent: nothing left to do, no second audit row.
