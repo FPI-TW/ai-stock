@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from math import ceil
 from typing import Any
@@ -59,7 +60,79 @@ from app.services.quote.base import QuoteProviderError
 
 logger = logging.getLogger(__name__)
 
-_VALIDATION_ERROR_PRIVATE_KEYS = frozenset({"input", "url"})
+# What a 422 envelope may carry per error. pydantic's raw errors echo the value
+# (`input`), its size (`ctx.actual_length`, and "..., not 300" in `msg`), or an
+# arbitrary exception object (`ctx.error`); a password or a certificate must not
+# come back through any of those. So: allow-listed keys only, `ctx` restricted to
+# schema constants, and `msg` taken from pydantic only for types whose text is a
+# pure template of those constants — everything else gets a fixed message.
+_VALIDATION_CTX_ALLOWED_KEYS = frozenset(
+    {
+        "min_length",
+        "max_length",
+        "expected",
+        "ge",
+        "gt",
+        "le",
+        "lt",
+        "multiple_of",
+        "pattern",
+        "max_digits",
+        "decimal_places",
+    }
+)
+_VALIDATION_MSG_PASSTHROUGH_TYPES = frozenset(
+    {
+        "missing",
+        "extra_forbidden",
+        "string_too_long",
+        "string_too_short",
+        "bytes_too_long",
+        "bytes_too_short",
+        "literal_error",
+        "enum",
+        "greater_than",
+        "greater_than_equal",
+        "less_than",
+        "less_than_equal",
+        "multiple_of",
+        "string_pattern_mismatch",
+        "int_parsing",
+        "float_parsing",
+        "bool_parsing",
+        "decimal_parsing",
+        "int_type",
+        "float_type",
+        "string_type",
+        "bytes_type",
+        "bool_type",
+        "list_type",
+        "dict_type",
+        "model_type",
+        "none_required",
+        "date_type",
+        "datetime_type",
+        "decimal_type",
+    }
+)
+
+
+def sanitize_validation_errors(errors: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Reduce pydantic error dicts to `{type, loc, msg, ctx}` with nothing input-derived."""
+    sanitized: list[dict[str, Any]] = []
+    for error in errors:
+        error_type = str(error.get("type", ""))
+        ctx = {k: v for k, v in (error.get("ctx") or {}).items() if k in _VALIDATION_CTX_ALLOWED_KEYS}
+        if error_type in _VALIDATION_MSG_PASSTHROUGH_TYPES:
+            msg = str(error.get("msg", ""))
+        elif error_type == "too_long":
+            msg = f"Value should have at most {ctx.get('max_length')} items"
+        elif error_type == "too_short":
+            msg = f"Value should have at least {ctx.get('min_length')} items"
+        else:
+            msg = "Invalid value"
+        sanitized.append({"type": error_type, "loc": list(error.get("loc", ())), "msg": msg, "ctx": ctx})
+    return sanitized
 
 
 class ErrorCode(StrEnum):
@@ -571,16 +644,11 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-        # pydantic attaches the offending value as `input` on every error. That
-        # echoes passwords, identity numbers and whole certificate bundles back
-        # into the 422 body (and into any proxy / APM that logs bodies), so the
-        # envelope keeps only what a client needs to point at the field.
-        errors = [{k: v for k, v in error.items() if k not in _VALIDATION_ERROR_PRIVATE_KEYS} for error in exc.errors()]
         return build_error_response(
             request=request,
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.VALIDATION_ERROR,
-            details={"errors": errors},
+            details={"errors": sanitize_validation_errors(exc.errors())},
         )
 
     @app.exception_handler(StarletteHTTPException)

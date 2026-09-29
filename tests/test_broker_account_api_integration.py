@@ -756,7 +756,10 @@ def test_validation_failures_never_echo_the_submitted_secrets(engine: Engine) ->
         assert value not in response.text, field
         [error] = body["error"]["details"]["errors"]
         assert error["loc"] == ["body", field]
-        assert "input" not in error and "url" not in error
+        assert set(error) == {"type", "loc", "msg", "ctx"}
+        # Not even the size of the secret comes back (SecretStr `too_long` used to).
+        assert "actual_length" not in error["ctx"]
+        assert str(len(value)) not in error["msg"]
     assert harness.built == []
 
 
