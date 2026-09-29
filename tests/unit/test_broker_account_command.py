@@ -72,6 +72,7 @@ _CREDS = FubonCredentials(personal_id="A123456789", password="pw", cert_pfx=_PFX
 @dataclass
 class _Db:
     commit_fail_with: Exception | None = None
+    rollback_fail_with: Exception | None = None
     commits: int = 0
     rollbacks: int = 0
 
@@ -82,6 +83,8 @@ class _Db:
 
     def rollback(self) -> None:
         self.rollbacks += 1
+        if self.rollback_fail_with is not None:
+            raise self.rollback_fail_with
 
 
 class _Users:
@@ -192,3 +195,42 @@ def test_rebind_failure_before_commit_leaves_the_live_session_untouched() -> Non
     assert pool.get(user_id) is live
     assert not live.stopped
     assert built[1].stopped
+
+
+def test_rollback_raising_on_a_dead_connection_still_logs_the_candidate_out() -> None:
+    """The review finding: commit fails because the DB connection died, then
+    rollback() raises against the same dead connection. The broker logout must
+    not depend on rollback succeeding, and the user's token must be released."""
+    dead = OperationalError("COMMIT", {}, Exception("connection lost"))
+    db = _Db(commit_fail_with=dead, rollback_fail_with=OperationalError("ROLLBACK", {}, Exception("connection lost")))
+    command, pool, built, user_id = _command(db)
+
+    with pytest.raises(OperationalError) as info:
+        command.execute(_input(user_id))
+
+    assert info.value is dead  # the original failure surfaces, not the rollback's
+    assert db.rollbacks == 1
+    assert built[0].stopped
+    assert pool.get(user_id) is None
+    assert not pool.is_binding(user_id)
+    # The user is not wedged: the token is free for the next bind.
+    pool.activate(pool.prepare(user_id, _CREDS))
+    assert pool.get(user_id) is built[1]
+
+
+def test_activate_failure_after_commit_logs_the_candidate_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the swap itself fails after the row is committed, the state must degrade
+    to "bound, no session" rather than a live login nobody tracks."""
+    db = _Db()
+    command, pool, built, user_id = _command(db)
+
+    def stolen(_candidate: object) -> None:
+        raise RuntimeError("token vanished")
+
+    monkeypatch.setattr(pool, "activate", stolen)
+    with pytest.raises(RuntimeError):
+        command.execute(_input(user_id))
+
+    assert db.commits == 1
+    assert built[0].stopped
+    assert pool.get(user_id) is None

@@ -124,6 +124,7 @@
 > - `FubonCredentials` 搬到 `domain/broker_account.py`，`fubon/client.py` 不再定義。
 > - `TradeIntentCoreRepository.active_or_scheduled_symbols_by_owner` 提前在本 PR 加入（綁定時訂閱該使用者的有效標的）。
 > - 解綁與綁定共用同一個 per-user 操作 token：`pool.stop` 改為 `claim(user_id)` → DB 工作 → commit → `stop(claim)`（失敗 `release(claim)`），unbind 全程持 token，綁定在 `prepare` 就被 409；原本「預檢 `is_binding` + commit 後才 `stop`」在兩位管理員幾秒內一 PUT 一 DELETE 時會留下已刪列但仍存活的 session（review 發現，已修）。
+> - 綁定的清理改為 `finally`：commit 前任一步失敗一律先 `pool.discard(candidate)`（登出候選）再 rollback，rollback 對死連線再拋錯也不影響登出；`prepare` 內 startup 成功後的失敗也會登出並釋放 token；`activate` 失敗則 discard 候選，狀態退化為「有列、無 session」。OS kill 無法在 process 內處理，富邦端殘留 session 等其 pong 逾時（30 秒 × 2）釋放，屬已知風險。
 
 **Schema**
 

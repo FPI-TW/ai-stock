@@ -96,6 +96,7 @@ class BindBrokerAccountCommand:
 
         # Login happens here; failure leaves the live session and the DB untouched.
         candidate = self._pool.prepare(user.id, inp.credentials)
+        committed = False
         try:
             for symbol in sorted(self._core_intents.active_or_scheduled_symbols_by_owner(user.id)):
                 candidate.provider.subscribe(symbol)
@@ -116,13 +117,10 @@ class BindBrokerAccountCommand:
                 now=inp.now,
             )
             self._db.commit()
+            committed = True
         except (AccountError, BrokerAccountError):
-            self._db.rollback()
-            self._pool.discard(candidate)
             raise
         except Exception as exc:
-            self._db.rollback()
-            self._pool.discard(candidate)
             logger.warning(
                 "broker account bind failed before commit %s user_id=%s request_id=%s",
                 type(exc).__name__,
@@ -130,8 +128,24 @@ class BindBrokerAccountCommand:
                 inp.request_id,
             )
             raise
+        finally:
+            if not committed:
+                # The candidate holds a real broker login: release it first, and
+                # unconditionally — a rollback on a dead DB connection raises too,
+                # and must not stand between us and the logout.
+                self._pool.discard(candidate)
+                try:
+                    self._db.rollback()
+                except Exception as exc:
+                    logger.warning("rollback after failed bind raised %s user_id=%s", type(exc).__name__, user.id)
 
-        old = self._pool.activate(candidate)
+        try:
+            old = self._pool.activate(candidate)
+        except Exception:
+            # Row is committed but the candidate could not go live: log it out so
+            # the state degrades to "bound, no session" (a restart re-logs in).
+            self._pool.discard(candidate)
+            raise
         if old is not None:
             try:
                 old.shutdown()

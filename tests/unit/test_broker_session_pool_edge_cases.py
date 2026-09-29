@@ -256,3 +256,29 @@ def test_listener_that_raises_does_not_break_the_pool_or_other_frames() -> None:
         built[0].listeners[0](object())  # type: ignore[arg-type]
     assert calls == [user_id]
     assert pool.get(user_id) is built[0]
+
+
+def test_failure_after_a_successful_login_inside_prepare_logs_out_and_releases() -> None:
+    """startup() succeeded; reading `broker_account_no` (or anything between the
+    login and the token hand-off) raises. The login must not be leaked and the
+    user must not be wedged behind a token nobody holds."""
+
+    class ExplodingAccountNo(FakeProvider):
+        @property
+        def broker_account_no(self) -> str:  # type: ignore[override]
+            raise RuntimeError("sdk account object went away")
+
+        @broker_account_no.setter
+        def broker_account_no(self, _value: str) -> None:
+            pass  # FakeProvider.__init__ assigns it; only the read must fail
+
+    pool, built = _pool(max_sessions=1, provider_for=ExplodingAccountNo)
+    user_id = uuid4()
+
+    with pytest.raises(BrokerLoginFailedError) as info:
+        pool.prepare(user_id, _CREDS)
+
+    assert info.value.code == "unknown"
+    assert built[0].started and built[0].stopped
+    assert not pool.is_binding(user_id)
+    assert pool.get(user_id) is None

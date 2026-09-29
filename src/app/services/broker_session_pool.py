@@ -160,22 +160,28 @@ class BrokerSessionPool:
             if user_id not in self._sessions and reserved >= self._max:
                 raise BrokerSessionLimitReachedError(self._max)
             self._pending[user_id] = object()
+        provider: QuoteProvider | None = None
+        logged_in = False
         try:
             provider = self._build(credentials)
             provider.startup()
+            logged_in = True  # startup() cleans up after its own failures; we own it from here
+            candidate = PreparedBrokerSession(
+                user_id=user_id,
+                provider=provider,
+                broker_account_no=str(getattr(provider, "broker_account_no", "") or ""),
+            )
+            with self._lock:
+                self._pending[user_id] = candidate
         except Exception as exc:
             code = _failure_code(exc)
             logger.warning("broker session prepare failed user_id=%s code=%s", user_id, code)
             with self._lock:
                 self._pending.pop(user_id, None)
+            if logged_in and provider is not None:
+                # Logged in, then something after startup() raised: don't leak the login.
+                _shutdown_quietly(provider, user_id)
             raise BrokerLoginFailedError(code) from exc
-        candidate = PreparedBrokerSession(
-            user_id=user_id,
-            provider=provider,
-            broker_account_no=str(getattr(provider, "broker_account_no", "") or ""),
-        )
-        with self._lock:
-            self._pending[user_id] = candidate
         return candidate
 
     def activate(self, candidate: PreparedBrokerSession) -> QuoteProvider | None:
