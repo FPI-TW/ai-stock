@@ -202,7 +202,7 @@ def test_capacity_counts_live_and_pending_but_not_rebinds() -> None:
     pool.discard(rebind)
 
     # A pending first bind reserves the slot until activated or discarded.
-    pool.stop(first)
+    pool.stop(pool.claim(first))
     pending = pool.prepare(second, _CREDS)
     with pytest.raises(BrokerSessionLimitReachedError):
         pool.prepare(first, _CREDS)
@@ -219,7 +219,7 @@ def test_same_user_second_prepare_and_stop_are_refused_while_pending() -> None:
     with pytest.raises(BrokerBindInProgressError):
         pool.prepare(user_id, _CREDS)
     with pytest.raises(BrokerBindInProgressError):
-        pool.stop(user_id)
+        pool.claim(user_id)
 
     pool.activate(candidate)
     assert not pool.is_binding(user_id)
@@ -243,11 +243,41 @@ def test_stop_logs_out_and_is_idempotent() -> None:
     user_id = uuid4()
     pool.activate(pool.prepare(user_id, _CREDS))
 
-    pool.stop(user_id)
-    pool.stop(user_id)
+    pool.stop(pool.claim(user_id))
+    pool.stop(pool.claim(user_id))
 
     assert built[0].stopped
     assert pool.get(user_id) is None
+    assert not pool.is_binding(user_id)
+
+
+def test_claim_holds_the_token_until_stop_or_release() -> None:
+    """An unbind in progress blocks a bind for the same user, and vice versa; a
+    released claim (DB failed) leaves the live session untouched."""
+    pool, built = _pool()
+    user_id = uuid4()
+    pool.activate(pool.prepare(user_id, _CREDS))
+
+    claim = pool.claim(user_id)
+    with pytest.raises(BrokerBindInProgressError):
+        pool.prepare(user_id, _CREDS)
+    with pytest.raises(BrokerBindInProgressError):
+        pool.claim(user_id)
+    assert pool.is_binding(user_id)
+
+    pool.release(claim)
+    assert not pool.is_binding(user_id)
+    assert pool.get(user_id) is built[0]
+    assert not built[0].stopped
+    with pytest.raises(BrokerBindInProgressError):
+        pool.stop(claim)  # a released claim is stale; the session stays
+
+    candidate = pool.prepare(user_id, _CREDS)  # bind may proceed again
+    with pytest.raises(BrokerBindInProgressError):
+        pool.claim(user_id)
+    pool.discard(candidate)
+    pool.stop(pool.claim(user_id))
+    assert built[0].stopped
 
 
 def test_stop_all_shuts_every_live_session_down() -> None:

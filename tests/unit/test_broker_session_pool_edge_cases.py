@@ -157,7 +157,7 @@ def test_churn_never_leaks_a_session() -> None:
                     else:
                         pool.discard(candidate)
                 else:
-                    pool.stop(user_id)
+                    pool.stop(pool.claim(user_id))
             except (BrokerBindInProgressError, BrokerSessionLimitReachedError):
                 pass
 
@@ -210,7 +210,7 @@ def test_logout_raising_is_swallowed_and_state_is_still_cleared(via: str) -> Non
     else:
         pool.activate(candidate)
         pool.activate(pool.prepare(uuid4(), _CREDS))  # a second live session must still be torn down
-        pool.stop(user_id) if via == "stop" else pool.stop_all()
+        pool.stop(pool.claim(user_id)) if via == "stop" else pool.stop_all()
 
     assert built[0].stopped
     assert pool.get(user_id) is None

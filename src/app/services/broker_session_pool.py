@@ -16,6 +16,17 @@ the working session down:
     old = pool.activate(candidate)                   # atomic dict swap, no I/O
     old.shutdown()                                   # outside the lock, best-effort
 
+Tearing one down is symmetric, so a bind and an unbind for the same user can
+never interleave (the DB row and the live session would otherwise drift apart):
+
+    claim = pool.claim(user_id)                      # takes the same per-user token
+    ... cancel intents, delete DB row, commit ...    # any failure -> pool.release(claim)
+    pool.stop(claim)                                 # logout outside the lock, token released
+
+Both `prepare` and `claim` hold the user's single operation token from the
+moment they return until activate / discard / stop / release; whoever asks
+second gets `BrokerBindInProgressError`.
+
 Thread model: `threading.Lock` guards the dict / pending set only; every broker
 call (login, logout, subscribe) happens outside it. Callbacks from the SDK thread
 never enter this module.
@@ -60,6 +71,13 @@ class PreparedBrokerSession:
     broker_account_no: str
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class BrokerStopClaim:
+    """The user's operation token held by an unbind in progress. Identity-compared."""
+
+    user_id: UUID
+
+
 def _failure_code(exc: Exception) -> BrokerLoginFailureCode:
     # FubonLoginError carries `failure_code`; duck-typed so this module never
     # imports the Fubon package (the in_memory runtime must not load it).
@@ -84,8 +102,9 @@ class BrokerSessionPool:
         self._build = provider_factory or (lambda creds: build_quote_provider(settings, credentials=creds))
         self._lock = threading.Lock()
         self._sessions: dict[UUID, QuoteProvider] = {}
-        # user_id -> the candidate that holds this user's single in-flight operation token.
-        self._pending: dict[UUID, PreparedBrokerSession | None] = {}
+        # user_id -> whoever holds this user's single in-flight operation token: a
+        # placeholder while logging in, then the candidate; or an unbind's claim.
+        self._pending: dict[UUID, object] = {}
         self._listener: OwnerScopedQuoteListener | None = None
 
     @property
@@ -140,7 +159,7 @@ class BrokerSessionPool:
             reserved = len(self._sessions) + sum(1 for uid in self._pending if uid not in self._sessions)
             if user_id not in self._sessions and reserved >= self._max:
                 raise BrokerSessionLimitReachedError(self._max)
-            self._pending[user_id] = None
+            self._pending[user_id] = object()
         try:
             provider = self._build(credentials)
             provider.startup()
@@ -181,15 +200,31 @@ class BrokerSessionPool:
 
     # --- teardown ---------------------------------------------------------------
 
-    def stop(self, user_id: UUID) -> None:
-        """Log the user's live session out (no-op when absent). Refused while a bind
-        for the same user is mid-flight, so it cannot race the candidate swap."""
+    def claim(self, user_id: UUID) -> BrokerStopClaim:
+        """Take the user's operation token for an unbind. Refused while a bind (or
+        another unbind) for the same user is mid-flight. Pair with `stop` or `release`."""
         with self._lock:
             if user_id in self._pending:
                 raise BrokerBindInProgressError()
-            provider = self._sessions.pop(user_id, None)
+            claim = BrokerStopClaim(user_id=user_id)
+            self._pending[user_id] = claim
+        return claim
+
+    def release(self, claim: BrokerStopClaim) -> None:
+        """Give the token back without stopping anything (the unbind's DB work failed)."""
+        with self._lock:
+            if self._pending.get(claim.user_id) is claim:
+                del self._pending[claim.user_id]
+
+    def stop(self, claim: BrokerStopClaim) -> None:
+        """Log the user's live session out (no-op when absent) and release the claim."""
+        with self._lock:
+            if self._pending.get(claim.user_id) is not claim:
+                raise BrokerBindInProgressError()
+            provider = self._sessions.pop(claim.user_id, None)
+            del self._pending[claim.user_id]
         if provider is not None:
-            _shutdown_quietly(provider, user_id)
+            _shutdown_quietly(provider, claim.user_id)
 
     def stop_all(self) -> None:
         with self._lock:

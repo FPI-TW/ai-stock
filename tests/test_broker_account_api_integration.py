@@ -29,7 +29,7 @@ from app.db.models.trade_intent_core import TradeIntentCore, TradeIntentPricePar
 from app.domain.broker_account import FubonCredentials
 from app.main import create_app
 from app.repositories.broker_account_repository import BrokerAccountRepository
-from app.services.broker_session_pool import BrokerSessionPool
+from app.services.broker_session_pool import BrokerSessionPool, BrokerStopClaim
 from app.services.quote.base import QuoteProviderUnavailableError
 from tests.pfx_helpers import DEFAULT_NOT_AFTER, build_test_pfx
 from tests.unit.test_broker_session_pool import FakeProvider
@@ -605,3 +605,60 @@ def test_two_transactions_inserting_the_same_user_hit_the_unique_index(engine: E
     assert len(errors) == 1
     row = _row(engine, user_id)
     assert row is not None and row.broker_account_no == "1"
+
+
+class _GatedClaimPool(BrokerSessionPool):
+    """Pauses an unbind right after it took the user's token, so a bind can be
+    fired while the DELETE is between its claim and its commit."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.claimed = threading.Event()
+        self.gate = threading.Event()
+
+    def claim(self, user_id: UUID) -> BrokerStopClaim:
+        claim = super().claim(user_id)
+        self.claimed.set()
+        assert self.gate.wait(timeout=10)
+        return claim
+
+
+@pytest.mark.integration
+def test_bind_during_an_unbind_is_refused_and_the_unbind_completes(engine: Engine) -> None:
+    """The race found in review: DELETE past its pre-check, PUT logs in, DELETE
+    deletes the row, PUT's UPDATE hits a vanished row and DELETE's final stop is
+    refused — leaving a live session with no row. With the unbind holding the
+    token for its whole duration the PUT is turned away at `prepare` instead."""
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+    _seed_core_intent(engine, user_id)
+    client = harness.admin_client()
+    assert client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body()).status_code == 200
+
+    gated = _GatedClaimPool(get_settings(), shared=None, provider_factory=harness._factory)
+    gated.activate(gated.prepare(user_id, FubonCredentials("x", "y", PFX, "z")))  # re-home the live session
+    harness.pool = gated
+    harness.app.state.broker_sessions = gated
+    delete_result: list[int] = []
+
+    def unbind() -> None:
+        delete_result.append(harness.admin_client().delete(f"/admin/users/{user_id}/broker-account").status_code)
+
+    worker = threading.Thread(target=unbind)
+    worker.start()
+    try:
+        assert gated.claimed.wait(timeout=5)
+        built_before = len(harness.built)
+        response = client.put(f"/admin/users/{user_id}/broker-account", json=_bind_body(personal_id="B222222222"))
+    finally:
+        gated.gate.set()
+        worker.join(timeout=10)
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "BROKER_BIND_IN_PROGRESS"
+    assert len(harness.built) == built_before  # the refused bind never logged in
+    assert delete_result == [204]
+    assert _row(engine, user_id) is None
+    assert gated.get(user_id) is None
+    assert not gated.is_binding(user_id)
+    assert harness.built[1].stopped  # the session that was live in the gated pool when the unbind ran

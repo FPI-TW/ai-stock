@@ -123,6 +123,7 @@
 > - 解綁取消委託的狀態用既有的 `cancelled`（`trade_intent_core.status` CHECK 沒有新值，不加 migration）。
 > - `FubonCredentials` 搬到 `domain/broker_account.py`，`fubon/client.py` 不再定義。
 > - `TradeIntentCoreRepository.active_or_scheduled_symbols_by_owner` 提前在本 PR 加入（綁定時訂閱該使用者的有效標的）。
+> - 解綁與綁定共用同一個 per-user 操作 token：`pool.stop` 改為 `claim(user_id)` → DB 工作 → commit → `stop(claim)`（失敗 `release(claim)`），unbind 全程持 token，綁定在 `prepare` 就被 409；原本「預檢 `is_binding` + commit 後才 `stop`」在兩位管理員幾秒內一 PUT 一 DELETE 時會留下已刪列但仍存活的 session（review 發現，已修）。
 
 **Schema**
 

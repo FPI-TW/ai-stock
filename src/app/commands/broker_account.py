@@ -23,7 +23,6 @@ from app.domain.auth import AccountError, AccountNotActiveError, UserNotFoundErr
 from app.domain.broker_account import (
     BrokerAccountData,
     BrokerAccountError,
-    BrokerBindInProgressError,
     BrokerLoginFailedError,
     FubonCredentials,
 )
@@ -164,13 +163,15 @@ class UnbindBrokerAccountCommand:
         self._pool = pool
 
     def execute(self, inp: UnbindBrokerAccountInput) -> None:
+        user = self._users.get_by_id(inp.target_user_id)
+        if user is None:
+            raise UserNotFoundError()
+        # Hold the user's operation token for the whole unbind: a concurrent bind
+        # now fails at `prepare` instead of racing the row delete below.
+        claim = self._pool.claim(user.id)
         try:
-            user = self._users.get_by_id(inp.target_user_id)
-            if user is None:
-                raise UserNotFoundError()
-            if self._pool.is_binding(user.id):
-                raise BrokerBindInProgressError()
             if self._accounts.get_by_user_id(user.id) is None:
+                self._pool.release(claim)
                 return
             cancelled = self._core_intents.cancel_active_for_owner(user.id, status=UNBOUND_INTENT_STATUS, now=inp.now)
             self._accounts.delete(user.id)
@@ -183,10 +184,9 @@ class UnbindBrokerAccountCommand:
                 now=inp.now,
             )
             self._db.commit()
-        except (AccountError, BrokerAccountError):
-            raise
         except Exception:
             self._db.rollback()
+            self._pool.release(claim)
             raise
         # Row is gone; the session goes last so a DB failure never leaves a rowless live session.
-        self._pool.stop(user.id)
+        self._pool.stop(claim)
