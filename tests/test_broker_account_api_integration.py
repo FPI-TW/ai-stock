@@ -353,11 +353,12 @@ def test_bind_request_validation(engine: Engine) -> None:
     user_id = _seed_user(engine)
 
     # pydantic's Base64Bytes is lenient (drops non-alphabet chars), so garbage
-    # becomes an unreadable pfx and is refused by the cert check before any login.
+    # decodes to nothing; the decoded-size check turns that into a plain 422.
     not_base64 = client.put(f"/admin/users/{user_id}/broker-account", json={**_bind_body(), "certPfxBase64": "!!"})
     assert not_base64.status_code == 422
-    assert not_base64.json()["error"]["code"] == "BROKER_LOGIN_FAILED"
-    assert not_base64.json()["error"]["details"] == {"reason": "cert_invalid"}
+    assert not_base64.json()["error"]["code"] == "VALIDATION_ERROR"
+    [error] = not_base64.json()["error"]["details"]["errors"]
+    assert error["loc"] == ["body", "certPfxBase64"] and error["type"] == "bytes_too_short"
 
     extra = client.put(f"/admin/users/{user_id}/broker-account", json={**_bind_body(), "userId": "x"})
     assert extra.status_code == 422

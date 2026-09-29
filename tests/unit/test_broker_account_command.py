@@ -48,6 +48,42 @@ def test_bind_request_repr_masks_every_secret() -> None:
     assert bytes(body.cert_pfx) == b"ABC"
 
 
+@pytest.mark.parametrize(
+    ("decoded_size", "ok"),
+    [
+        (50 * 1024, True),  # > 48 KB: the old encoded-length cap rejected this
+        (64 * 1024, True),  # exactly the documented limit
+        (64 * 1024 + 1, False),
+        (0, False),
+    ],
+)
+def test_cert_pfx_limit_is_measured_on_decoded_bytes(decoded_size: int, ok: bool) -> None:
+    import base64
+
+    from pydantic import ValidationError
+
+    from app.api.schemas.broker_account import BindBrokerAccountRequest
+
+    body = {
+        "broker": "fubon",
+        "personalId": "A123456789",
+        "password": "pw",
+        "certPfxBase64": base64.b64encode(b"\x01" * decoded_size).decode("ascii"),
+        "certPassword": "cpw",
+    }
+    if ok:
+        assert len(bytes(BindBrokerAccountRequest.model_validate(body).cert_pfx)) == decoded_size
+        return
+    with pytest.raises(ValidationError) as info:
+        BindBrokerAccountRequest.model_validate(body)
+    [error] = info.value.errors()
+    assert error["loc"] == ("certPfxBase64",)
+    assert error["type"] in {"bytes_too_long", "bytes_too_short"}
+    import json
+
+    json.dumps(error.get("ctx"))  # the 422 envelope must stay serialisable
+
+
 def test_cert_expiry_is_read_from_the_pfx() -> None:
     expires = datetime(2027, 6, 30, 12, 0, tzinfo=UTC)
     pfx = build_test_pfx(password="secret", not_valid_after=expires)
