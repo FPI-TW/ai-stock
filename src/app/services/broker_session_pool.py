@@ -156,7 +156,14 @@ class BrokerSessionPool:
         with self._lock:
             if user_id in self._pending:
                 raise BrokerBindInProgressError()
-            reserved = len(self._sessions) + sum(1 for uid in self._pending if uid not in self._sessions)
+            # Slots in use = live sessions + first-bind candidates still logging in.
+            # An unbind's claim holds the user's token but never a slot: the session
+            # it will stop is already counted (or never existed).
+            reserved = len(self._sessions) + sum(
+                1
+                for uid, holder in self._pending.items()
+                if uid not in self._sessions and not isinstance(holder, BrokerStopClaim)
+            )
             if user_id not in self._sessions and reserved >= self._max:
                 raise BrokerSessionLimitReachedError(self._max)
             self._pending[user_id] = object()

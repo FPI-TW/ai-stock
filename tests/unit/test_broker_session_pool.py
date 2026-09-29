@@ -303,3 +303,29 @@ def test_shared_mode_serves_everyone_and_refuses_prepare() -> None:
     assert info.value.code == "provider_unavailable"
     pool.stop_all()
     assert not shared.stopped  # lifespan owns the shared provider's shutdown
+
+
+def test_unbind_claim_does_not_reserve_a_slot() -> None:
+    """Review finding: X's unbind claim (no live session, e.g. a login_failed row)
+    was counted as a reserved slot, so with BROKER_MAX_SESSIONS=1 an unrelated
+    Y's first bind got 409 while X was merely unbinding."""
+    pool, built = _pool(max_sessions=1)
+    x_user, y_user = uuid4(), uuid4()
+
+    x_claim = pool.claim(x_user)  # X has no live session; only the row is being removed
+    y_candidate = pool.prepare(y_user, _CREDS)  # must not be refused
+    pool.activate(y_candidate)
+    pool.stop(x_claim)
+
+    assert pool.bound_user_ids() == {y_user}
+    assert built[0].started and not built[0].stopped
+
+    # With X live, its unbind claim still counts X's *live* slot exactly once:
+    # a third user is refused until X's stop actually frees it.
+    pool.stop(pool.claim(y_user))
+    pool.activate(pool.prepare(x_user, _CREDS))
+    x_claim = pool.claim(x_user)
+    with pytest.raises(BrokerSessionLimitReachedError):
+        pool.prepare(uuid4(), _CREDS)
+    pool.stop(x_claim)
+    pool.activate(pool.prepare(uuid4(), _CREDS))
