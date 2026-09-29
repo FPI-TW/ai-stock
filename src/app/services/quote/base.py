@@ -13,6 +13,8 @@ from typing import ClassVar, Protocol, runtime_checkable
 
 from fastapi import status
 
+from app.domain.broker_account import BrokerLoginFailureCode
+
 
 @dataclass(frozen=True)
 class QuoteSnapshot:
@@ -134,3 +136,14 @@ class QuoteProviderUnavailableError(QuoteProviderError):
         if self.reason:
             d["reason"] = self.reason
         return d
+
+
+class BrokerLoginError(QuoteProviderUnavailableError):
+    """A broker refused or lost a login. `failure_code` is the *only* content: one
+    enumerable value from `app.domain.broker_account.BrokerLoginFailureCode`, never
+    SDK text. Concrete providers raise this (or a subclass); the session pool and
+    the repository consume `failure_code` without knowing which broker it was."""
+
+    def __init__(self, provider: str, failure_code: BrokerLoginFailureCode) -> None:
+        super().__init__(provider, failure_code)
+        self.failure_code: BrokerLoginFailureCode = failure_code

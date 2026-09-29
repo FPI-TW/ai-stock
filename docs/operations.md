@@ -25,7 +25,7 @@ production Compose 不自架 PostgreSQL。`migrate` service 先對外部 DB 執�
 `.env.prod.example` 是欄位清單，CD 由 GitHub Variables／Secrets 逐項產生 `.env.prod` 並以 `0600` 放到 EC2。production 必須：
 
 - `LOCAL_MODE=false`，避免掛載 `/dev/*`。
-- 提供 `DATABASE_URL`、`JWT_ACCESS_SECRET`、`MFA_ENCRYPTION_KEY`。
+- 提供 `DATABASE_URL`、`JWT_ACCESS_SECRET`、`MFA_ENCRYPTION_KEY`。`MFA_ENCRYPTION_KEY` 同時保護 admin TOTP 與 `broker_accounts` 的券商金鑰；`QUOTE_PROVIDER=fubon` 時不論 `LOCAL_MODE` 都必須設定（無 dev fallback），未設定時綁定回 500 `BROKER_CREDENTIAL_KEY_INVALID`。輪替金鑰後既有綁定無法解密，需請管理員重新綁定（啟動時逐人偵測屬 PR3）。
 - 將 `CORS_ALLOW_ORIGINS`、`APP_BASE_URL` 改為正式前端網域。
 - 讓 `TRUSTED_PROXY_IPS` 與 Compose backend subnet／實際代理鏈一致。
 - 不在 log、shell history、Docker argv 或 Git 中保存原始 token、密碼與私鑰。
@@ -60,6 +60,7 @@ Schema 已前進時 app image rollback 不代表 DB downgrade；migration 必須
 ## 健康與程序限制
 
 - `GET /health` 會檢查 DB；失敗回 503。
+- app container 的 `stop_grace_period` 為 40 秒：關機時 lifespan 會平行登出所有券商 session（每條最壞約 3 秒等 close frame），Docker 預設 10 秒 SIGKILL 會讓殘留 session 占住富邦連線上限。
 - app container 使用單一 Uvicorn process。未先拆出 broker／scheduler ownership 或加入 leader election 前，不得增加 workers 或複本。
 - TWAP 與 idempotency cleanup 在 app process 中運行；排程故障會記錄 log，但目前沒有獨立 worker dashboard。
 

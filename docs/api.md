@@ -9,6 +9,7 @@ API 預設 base URL 為 `http://127.0.0.1:8100`。完整 request／response sche
 - response 使用 camelCase；列表採 cursor pagination，常用欄位為 `cursor`、`pageSize` 與 `nextCursor`。
 - 每個 response 都會回傳設定指定的 request ID header，預設 `X-Request-Id`。
 - 錯誤 envelope 為 `{ "error": { "code", "message", "details", "requestId" } }`；前端邏輯應依 `code`，不要解析 message。
+- `VALIDATION_ERROR` 的 `details.errors[]` 固定為 `type`、`loc`、`msg`、`ctx` 四鍵：不回傳原始值（`input`）；`ctx` 只留 schema 常數（`max_length`、`min_length`、`expected` 等），不含 `actual_length` 之類由輸入推得的值；`msg` 只在訊息純為 schema 常數模板的錯誤型別沿用 pydantic 原文，其餘一律固定為 `Invalid value`。避免密碼、身分證字號或憑證的內容或長度在 422 回應中回流。
 - owner 由 access token 決定；跨使用者資源以 not found 語意處理，不允許 client 指定 owner。
 
 ## Session 與 CSRF
@@ -47,6 +48,12 @@ Access token 過期時以 refresh 取得新 session。refresh token rotation 偵
 - `POST /admin/users/{id}/resend-invitation`
 - `POST /admin/2fa/setup`、`POST /admin/2fa/verify`
 - `GET /admin/kill-switch`、`POST /admin/kill-switch`
+- `PUT /admin/users/{id}/broker-account`：代使用者綁定券商帳號。body 為 `broker`（目前只有 `fubon`）、`personalId`、`password`、`certPfxBase64`（pfx 解碼後 ≤ 64 KB，以解碼後位元組數計）、`certPassword`；系統先以候選 session 試登入並訂閱該使用者的有效委託標的，成功才加密落庫並切換 session，重綁即整包覆蓋。登入失敗回 422 `BROKER_LOGIN_FAILED`（`details.reason` 為 `login_rejected`／`session_limit`／`provider_unavailable`／`cert_invalid`，訊息固定白名單、不含券商原文）；候選連線建立時發生非券商回應的例外（缺 SDK wheel、SDK 改版等）回 500 `BROKER_SESSION_SETUP_FAILED`（`details.exceptionType` 為例外類別名，不含訊息），屬環境問題、重試無效；`MFA_ENCRYPTION_KEY` 未設定（不分 `LOCAL_MODE`）回 500 `BROKER_CREDENTIAL_KEY_INVALID`（`details.reason` 為 `missing`）；目標非 active 回 409 `ACCOUNT_NOT_ACTIVE`；本系統 `BROKER_MAX_SESSIONS` 已滿回 409 `BROKER_SESSION_LIMIT_REACHED`；同一使用者綁定進行中回 409 `BROKER_BIND_IN_PROGRESS`。`QUOTE_PROVIDER` 不是 `fubon`（`in_memory`／`shioaji_demo` 的共用帳號模式）時沒有 per-user 登入可驗證，一律回 409 `BROKER_BINDING_NOT_ENABLED`（`details.quoteProvider` 為目前模式），不可重試；per-user 模式的啟動接線在工單 PR3。回應與 log 不含任何機密。
+- `DELETE /admin/users/{id}/broker-account`：解除綁定，冪等回 204；一併把該使用者兩軌（含舊軌 TWAP）所有非終態委託轉為 `cancelled` 並登出其券商 session。
+
+### Broker account（使用者自己看）
+
+- `GET /me/broker-account`：回 `broker`、`brokerAccountNo`（遮罩僅留後四碼）、`status`（`active`／`login_failed`）、`certExpiresAt`、`lastLoginAt`、`lastError`、`updatedAt`；未綁定回 404。綁定與解除只有管理員能做。
 
 ### Symbols 與行情
 

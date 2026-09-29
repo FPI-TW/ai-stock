@@ -359,6 +359,20 @@ class TradeIntentCoreRepository:
         stmt = select(TradeIntentCore.symbol).where(TradeIntentCore.status.in_(CANCELLABLE_STATUSES)).distinct()
         return {row for (row,) in self._db.execute(stmt).all()}
 
+    def active_or_scheduled_symbols_by_owner(self, owner_user_id: UUID) -> set[str]:
+        """Distinct symbols of one owner's non-terminal intents — what that owner's own
+        broker session must subscribe to (per-user mode bind / startup)."""
+
+        stmt = (
+            select(TradeIntentCore.symbol)
+            .where(
+                TradeIntentCore.owner_user_id == owner_user_id,
+                TradeIntentCore.status.in_(CANCELLABLE_STATUSES),
+            )
+            .distinct()
+        )
+        return {row for (row,) in self._db.execute(stmt).all()}
+
     def count_active_or_scheduled_for_user(self, owner_user_id: UUID) -> int:
         stmt = (
             select(func.count())

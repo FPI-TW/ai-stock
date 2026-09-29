@@ -9,6 +9,8 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 QuoteProviderName = Literal["shioaji_demo", "in_memory", "fubon"]
+# 已接上的券商；第二家出現時才擴充列舉，不建 registry。需要 runtime 序列時用 typing.get_args。
+BrokerName = Literal["fubon"]
 # 富邦預設連測試環境；真單環境以 FUBON_WS_URL 切換（product.md〈下單能力演進〉）。
 FUBON_TEST_WS_URL = "wss://neoapitest.fbs.com.tw/TASP/XCPXWS"
 
@@ -58,6 +60,9 @@ class Settings(BaseSettings):
 
     # Fubon（per-user）：只有連線位址，帳密與憑證由使用者綁定時提供，不走 .env。
     fubon_ws_url: str = Field(default=FUBON_TEST_WS_URL, alias="FUBON_WS_URL")
+    # per-user 券商 session 的應用層上限。富邦登入連線硬上限 10（每帳號或每應用程式
+    # 尚未實測），預設 2 待 Linux RSS 量測後調整；達上限時綁定回 409。
+    broker_max_sessions: int = Field(default=2, ge=1, le=10, alias="BROKER_MAX_SESSIONS")
 
     # Shioaji-demo-only settings; read only when quote_provider == "shioaji_demo".
     shioaji_api_key: str | None = Field(default=None, alias="SHIOAJI_API_KEY")
@@ -216,7 +221,17 @@ class Settings(BaseSettings):
     def _enforce_mfa_encryption_key(self) -> "Settings":
         if not self.local_mode and not self.mfa_encryption_key:
             raise ValueError("MFA_ENCRYPTION_KEY is required when LOCAL_MODE is false")
+        # per-user 券商模式會把使用者的券商金鑰存進 DB；用 repo 內建的 dev key 加密等於明文，
+        # 不論 LOCAL_MODE 一律要求真正的金鑰。
+        if self.quote_provider == "fubon" and not self.mfa_encryption_key:
+            raise ValueError("MFA_ENCRYPTION_KEY is required when QUOTE_PROVIDER is fubon (broker credentials at rest)")
         return self
+
+    @property
+    def broker_credential_key(self) -> str | None:
+        """Key for broker credentials at rest. Unlike the TOTP key this never falls
+        back to the dev key: None means "not configured", and writes are refused."""
+        return self.mfa_encryption_key or None
 
     @property
     def resolved_mfa_encryption_key(self) -> str:

@@ -128,6 +128,11 @@ class FubonQuoteProvider(QuoteProvider):
                 self._client.subscribe(symbol)
 
     @property
+    def broker_account_no(self) -> str:
+        """The securities account the broker returned at login (display only)."""
+        return str(getattr(self._client.account, "account", "") or "")
+
+    @property
     def realtime_connected(self) -> bool:
         return self._client.realtime_connected
 

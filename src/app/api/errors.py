@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from math import ceil
 from typing import Any
@@ -11,6 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.domain.auth import (
     AccountError,
+    AccountNotActiveError,
     AccountNotDisabledError,
     AuthError,
     CsrfFailedError,
@@ -32,6 +34,16 @@ from app.domain.auth import (
     UserNotFoundError,
     WeakPasswordError,
 )
+from app.domain.broker_account import (
+    BrokerAccountError,
+    BrokerAccountNotBoundError,
+    BrokerBindingNotEnabledError,
+    BrokerBindInProgressError,
+    BrokerCredentialKeyError,
+    BrokerLoginFailedError,
+    BrokerSessionLimitReachedError,
+    BrokerSessionSetupError,
+)
 from app.domain.notification import NotificationNotFoundError
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
 from app.domain.symbol_errors import SymbolError, SymbolNotTradableError, UnknownSymbolError
@@ -48,6 +60,80 @@ from app.services.idempotency import IdempotencyConflictError
 from app.services.quote.base import QuoteProviderError
 
 logger = logging.getLogger(__name__)
+
+# What a 422 envelope may carry per error. pydantic's raw errors echo the value
+# (`input`), its size (`ctx.actual_length`, and "..., not 300" in `msg`), or an
+# arbitrary exception object (`ctx.error`); a password or a certificate must not
+# come back through any of those. So: allow-listed keys only, `ctx` restricted to
+# schema constants, and `msg` taken from pydantic only for types whose text is a
+# pure template of those constants — everything else gets a fixed message.
+_VALIDATION_CTX_ALLOWED_KEYS = frozenset(
+    {
+        "min_length",
+        "max_length",
+        "expected",
+        "ge",
+        "gt",
+        "le",
+        "lt",
+        "multiple_of",
+        "pattern",
+        "max_digits",
+        "decimal_places",
+    }
+)
+_VALIDATION_MSG_PASSTHROUGH_TYPES = frozenset(
+    {
+        "missing",
+        "extra_forbidden",
+        "string_too_long",
+        "string_too_short",
+        "bytes_too_long",
+        "bytes_too_short",
+        "literal_error",
+        "enum",
+        "greater_than",
+        "greater_than_equal",
+        "less_than",
+        "less_than_equal",
+        "multiple_of",
+        "string_pattern_mismatch",
+        "int_parsing",
+        "float_parsing",
+        "bool_parsing",
+        "decimal_parsing",
+        "int_type",
+        "float_type",
+        "string_type",
+        "bytes_type",
+        "bool_type",
+        "list_type",
+        "dict_type",
+        "model_type",
+        "none_required",
+        "date_type",
+        "datetime_type",
+        "decimal_type",
+    }
+)
+
+
+def sanitize_validation_errors(errors: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Reduce pydantic error dicts to `{type, loc, msg, ctx}` with nothing input-derived."""
+    sanitized: list[dict[str, Any]] = []
+    for error in errors:
+        error_type = str(error.get("type", ""))
+        ctx = {k: v for k, v in (error.get("ctx") or {}).items() if k in _VALIDATION_CTX_ALLOWED_KEYS}
+        if error_type in _VALIDATION_MSG_PASSTHROUGH_TYPES:
+            msg = str(error.get("msg", ""))
+        elif error_type == "too_long":
+            msg = f"Value should have at most {ctx.get('max_length')} items"
+        elif error_type == "too_short":
+            msg = f"Value should have at least {ctx.get('min_length')} items"
+        else:
+            msg = "Invalid value"
+        sanitized.append({"type": error_type, "loc": list(error.get("loc", ())), "msg": msg, "ctx": ctx})
+    return sanitized
 
 
 class ErrorCode(StrEnum):
@@ -101,6 +187,15 @@ class ErrorCode(StrEnum):
     MFA_ALREADY_ENABLED = "MFA_ALREADY_ENABLED"
     MFA_NOT_SETUP = "MFA_NOT_SETUP"
     ACCOUNT_NOT_DISABLED = "ACCOUNT_NOT_DISABLED"
+    ACCOUNT_NOT_ACTIVE = "ACCOUNT_NOT_ACTIVE"
+    # Broker account binding (per-user sessions)
+    BROKER_ACCOUNT_NOT_BOUND = "BROKER_ACCOUNT_NOT_BOUND"
+    BROKER_LOGIN_FAILED = "BROKER_LOGIN_FAILED"
+    BROKER_SESSION_LIMIT_REACHED = "BROKER_SESSION_LIMIT_REACHED"
+    BROKER_BIND_IN_PROGRESS = "BROKER_BIND_IN_PROGRESS"
+    BROKER_BINDING_NOT_ENABLED = "BROKER_BINDING_NOT_ENABLED"
+    BROKER_SESSION_SETUP_FAILED = "BROKER_SESSION_SETUP_FAILED"
+    BROKER_CREDENTIAL_KEY_INVALID = "BROKER_CREDENTIAL_KEY_INVALID"
 
 
 DEFAULT_MESSAGES: dict[ErrorCode, str] = {
@@ -152,6 +247,16 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.MFA_ALREADY_ENABLED: "已啟用兩階段驗證",
     ErrorCode.MFA_NOT_SETUP: "尚未設定兩階段驗證",
     ErrorCode.ACCOUNT_NOT_DISABLED: "帳號未處於停用狀態，無法復權",
+    ErrorCode.ACCOUNT_NOT_ACTIVE: "帳號未處於啟用狀態",
+    ErrorCode.BROKER_ACCOUNT_NOT_BOUND: "尚未綁定券商帳號，請聯絡管理員",
+    ErrorCode.BROKER_LOGIN_FAILED: "券商登入失敗",
+    ErrorCode.BROKER_SESSION_LIMIT_REACHED: "券商連線數已達本系統上限",
+    ErrorCode.BROKER_BIND_IN_PROGRESS: "此使用者的券商綁定正在處理中，請稍後再試",
+    ErrorCode.BROKER_BINDING_NOT_ENABLED: (
+        "目前為共用帳號行情模式，未啟用 per-user 券商綁定（QUOTE_PROVIDER 需為 fubon）"
+    ),
+    ErrorCode.BROKER_SESSION_SETUP_FAILED: "券商連線初始化失敗，非登入資料問題，請聯絡維運",
+    ErrorCode.BROKER_CREDENTIAL_KEY_INVALID: "券商金鑰加密設定異常（MFA_ENCRYPTION_KEY 未設定或已輪替），請聯絡維運",
 }
 
 
@@ -295,7 +400,55 @@ def register_exception_handlers(app: FastAPI) -> None:
             return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.MFA_NOT_SETUP)
         if isinstance(exc, AccountNotDisabledError):
             return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.ACCOUNT_NOT_DISABLED)
+        if isinstance(exc, AccountNotActiveError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.ACCOUNT_NOT_ACTIVE)
         return build_error_response(request, status.HTTP_400_BAD_REQUEST, ErrorCode.VALIDATION_ERROR)
+
+    @app.exception_handler(BrokerAccountError)
+    async def broker_account_error_handler(request: Request, exc: BrokerAccountError) -> JSONResponse:
+        if isinstance(exc, BrokerLoginFailedError):
+            # Only the enumerable code and its whitelisted message — never SDK text.
+            return build_error_response(
+                request,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                ErrorCode.BROKER_LOGIN_FAILED,
+                message=exc.safe_message,
+                details={"reason": exc.code},
+            )
+        if isinstance(exc, BrokerSessionLimitReachedError):
+            return build_error_response(
+                request,
+                status.HTTP_409_CONFLICT,
+                ErrorCode.BROKER_SESSION_LIMIT_REACHED,
+                details={"limit": exc.limit},
+            )
+        if isinstance(exc, BrokerBindInProgressError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.BROKER_BIND_IN_PROGRESS)
+        if isinstance(exc, BrokerSessionSetupError):
+            # Not a broker answer: 5xx so it is never mistaken for bad credentials.
+            return build_error_response(
+                request,
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                ErrorCode.BROKER_SESSION_SETUP_FAILED,
+                details={"exceptionType": exc.exception_type},
+            )
+        if isinstance(exc, BrokerCredentialKeyError):
+            return build_error_response(
+                request,
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                ErrorCode.BROKER_CREDENTIAL_KEY_INVALID,
+                details={"reason": exc.reason},
+            )
+        if isinstance(exc, BrokerBindingNotEnabledError):
+            return build_error_response(
+                request,
+                status.HTTP_409_CONFLICT,
+                ErrorCode.BROKER_BINDING_NOT_ENABLED,
+                details={"quoteProvider": exc.quote_provider},
+            )
+        if isinstance(exc, BrokerAccountNotBoundError):
+            return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.BROKER_ACCOUNT_NOT_BOUND)
+        return build_error_response(request, status.HTTP_500_INTERNAL_SERVER_ERROR, ErrorCode.INTERNAL_ERROR)
 
     @app.exception_handler(SymbolError)
     async def symbol_error_handler(request: Request, exc: SymbolError) -> JSONResponse:
@@ -505,7 +658,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             request=request,
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code=ErrorCode.VALIDATION_ERROR,
-            details={"errors": exc.errors()},
+            details={"errors": sanitize_validation_errors(exc.errors())},
         )
 
     @app.exception_handler(StarletteHTTPException)

@@ -245,3 +245,24 @@ def test_cors_allow_origins_list_parses_and_trims(monkeypatch: pytest.MonkeyPatc
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.cors_allow_origins_list == ["https://a.example.com", "https://b.example.com"]
+
+
+def test_fubon_requires_a_real_encryption_key_even_in_local_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Per-user mode persists users' broker credentials; the repo's dev key is
+    public, so LOCAL_MODE gets no fallback here."""
+    from app.core.config import Settings
+
+    monkeypatch.setenv("LOCAL_MODE", "true")
+    monkeypatch.setenv("LOCAL_USER_ID", "00000000-0000-0000-0000-000000000001")
+    monkeypatch.setenv("QUOTE_PROVIDER", "fubon")
+    monkeypatch.delenv("MFA_ENCRYPTION_KEY", raising=False)
+    with pytest.raises(ValueError, match="MFA_ENCRYPTION_KEY is required when QUOTE_PROVIDER is fubon"):
+        Settings()
+
+    monkeypatch.setenv("MFA_ENCRYPTION_KEY", "some-real-key")
+    settings = Settings()
+    assert settings.broker_credential_key == "some-real-key"
+
+    monkeypatch.delenv("MFA_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setenv("QUOTE_PROVIDER", "in_memory")
+    assert Settings().broker_credential_key is None  # never the dev fallback

@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.errors import register_exception_handlers
 from app.api.routes.admin import router as admin_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.broker_account import router as broker_account_router
 from app.api.routes.dev import router as dev_router
 from app.api.routes.health import router as health_router
 from app.api.routes.intents import router as intents_router
@@ -24,6 +25,7 @@ from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
+from app.services.broker_session_pool import BrokerSessionPool
 from app.services.idempotency_cleanup import IdempotencyCleanupScheduler
 from app.services.kill_switch import KillSwitchProvider
 from app.services.quote import build_quote_provider
@@ -149,6 +151,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     await task
                 except CancelledError:
                     pass
+        app.state.broker_sessions.stop_all()
         provider.shutdown()
 
 
@@ -157,6 +160,14 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
     app.state.request_id_header = settings.request_id_header
     app.state.quote_provider = build_quote_provider(settings)
+    # per-user broker sessions (docs/orders/per-user-broker-sessions.md). Shared
+    # providers (in_memory and the demo provider) serve every user through the pool
+    # unchanged; `fubon` is per-user and only becomes startable once PR3 wires
+    # the lifespan to log bound users in from `broker_accounts`.
+    app.state.broker_sessions = BrokerSessionPool(
+        settings,
+        shared=None if settings.quote_provider == "fubon" else app.state.quote_provider,
+    )
     # Kill-switch read cache (L2). Needs a session factory, so it only comes online
     # when a DATABASE_URL is configured; DB-less unit/api wiring leaves it None and
     # the create / dispatch paths treat "no provider" as "not halted".
@@ -186,6 +197,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router, prefix="/auth", tags=["auth"])
     app.include_router(admin_router, prefix="/admin", tags=["admin"])
+    app.include_router(broker_account_router, prefix="/me", tags=["broker-account"])
     app.include_router(symbols_router, prefix="/symbols", tags=["symbols"])
     app.include_router(quotes_router, prefix="/quotes", tags=["quotes"])
     app.include_router(intents_router, prefix="/trade-intents", tags=["trade-intents"])

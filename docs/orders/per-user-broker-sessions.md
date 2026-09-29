@@ -116,6 +116,19 @@
 
 ### PR2 `feat/broker-account-binding`（schema + 綁定 API + pool；不改行情接線）
 
+> 2026-09-29 已實作（分支 `feat/broker-account-binding`，接在 PR1 之後）。與原設計的差異：
+> - `BrokerLoginFailureCode` 多一個 `cert_invalid`：command 先用憑證密碼解 pfx 取到期日，解不開就在呼叫券商前以 422 拒絕，管理員能分辨是憑證還是帳密錯。
+> - 多兩個錯誤碼：`BROKER_BIND_IN_PROGRESS`(409)＝同一使用者的 prepare／activate 尚未結束時第二個綁定或解綁被拒；`ACCOUNT_NOT_ACTIVE`(409)＝目標使用者非 active。
+> - 失敗碼只有 domain 一份 `BrokerLoginFailureCode`：`services/quote/base.py` 的 `BrokerLoginError` 帶它，`FubonLoginError` 為其子類，pool 以 `isinstance` 讀 `failure_code`（不 import fubon 套件）；非券商回應的例外（ImportError、AttributeError 等）不壓成 `unknown`，改拋 `BrokerSessionSetupError` → 500 `BROKER_SESSION_SETUP_FAILED`，log 記例外類別與 frames（不記訊息）；`unknown` 碼保留給 PR3 重連迴圈的 `mark_login_failed`；shared 模式下 `prepare` 回專屬的 `BrokerBindingNotEnabledError` → 409 `BROKER_BINDING_NOT_ENABLED`（不可重試，避免被當成暫時性券商故障無限重試）。
+> - 解綁取消委託的狀態用既有的 `cancelled`（`trade_intent_core.status` CHECK 沒有新值，不加 migration）。
+> - `FubonCredentials` 搬到 `domain/broker_account.py`，`fubon/client.py` 不再定義。
+> - `TradeIntentCoreRepository.active_or_scheduled_symbols_by_owner` 提前在本 PR 加入（綁定時訂閱該使用者的有效標的）。
+> - 解綁與綁定共用同一個 per-user 操作 token：`pool.stop` 改為 `claim(user_id)` → DB 工作 → commit → `stop(claim)`（失敗 `release(claim)`），unbind 全程持 token，綁定在 `prepare` 就被 409；原本「預檢 `is_binding` + commit 後才 `stop`」在兩位管理員幾秒內一 PUT 一 DELETE 時會留下已刪列但仍存活的 session（review 發現，已修）。
+> - pool 只出 PR2 有 caller 的成員：`prepare`／`activate`／`discard`／`claim`／`release`／`stop`／`stop_all`。`get`／`require`／`bound_user_ids`／`set_quote_listener`（owner-scoped listener）留到 PR3 與真正的呼叫端（建單、lifespan、dispatcher）一起定形，避免此處猜 dispatcher 簽名。
+> - 券商金鑰加密不使用 `MFA_ENCRYPTION_KEY` 的 LOCAL_MODE dev fallback：`Settings.broker_credential_key` 未設定即 `None`，repo 對 `credentials_encrypted` 的讀寫拒絕（`BrokerCredentialKeyError(missing)` → 500）；`QUOTE_PROVIDER=fubon` 且無金鑰在啟動即拒絕；解密路徑（`get_credentials`、金鑰輪替的 `undecryptable`）與 `mark_login_ok`／`mark_login_failed`／`list_all` 都沒有 PR2 呼叫端，延到 PR3 與 lifespan 登入迴圈一起加；PR2 的 repo 只有 `get_by_user_id`／`upsert`／`delete`。
+> - 重綁時舊 provider 的 shutdown 不在請求內：command 回傳 `replaced_session`，route 交給 `BackgroundTasks` 在回應後登出（PR3 的 reactivate 沒有舊 session，不受影響）。
+> - 綁定的清理改為 `finally`：commit 前任一步失敗一律先 `pool.discard(candidate)`（登出候選）再 rollback，rollback 對死連線再拋錯也不影響登出；`prepare` 內 startup 成功後的失敗也會登出並釋放 token；`activate` 失敗則 discard 候選，狀態退化為「有列、無 session」。OS kill 無法在 process 內處理，富邦端殘留 session 等其 pong 逾時（30 秒 × 2）釋放，屬已知風險。
+
 **Schema**
 
 - Migration `202609160001_create_broker_accounts.py`，`down_revision` 接當時的 head。
@@ -125,7 +138,7 @@
 **Pool**
 
 - `BrokerSessionPool(settings, *, shared=None)`：`set_quote_listener`、`get`、`require`、`prepare(user_id, credentials) -> PreparedBrokerSession`、`activate(candidate)`、`discard(candidate)`、`stop`、`stop_all`、`bound_user_ids`。`prepare` 在鎖內為 user 取得單一操作 token 並保留名額，再於鎖外建 provider 與登入，不改動正式 session；同一 user 的第二個 prepare、stop 或解綁必須等候或明確拒絕，不得與候選切換並行。替換同一 user 不多佔應用層名額，但候選登入仍可能被富邦外部硬上限拒絕，此時舊 session 保留。`prepare` 自身失敗時必須釋放 token 與名額保留。`activate` 只在鎖內驗證 token、掛 owner listener、原子替換 dict 並消耗名額保留，不做網路或 DB I/O，回傳舊 provider 供鎖外 shutdown。`discard` 先在鎖內釋放 token 與名額保留，再於鎖外 shutdown 未啟用的候選 provider。`stop` 必呼叫 `logout`；log 只記 user_id 與安全錯誤碼。
-- `config.py` 加 `broker_max_sessions`（預設 2，validator 1..10）、`BrokerName = Literal["fubon"]`、`BROKER_NAMES`。
+- `config.py` 加 `broker_max_sessions`（預設 2，validator 1..10）、`BrokerName = Literal["fubon"]`（不另建 `BROKER_NAMES` tuple，與 `QuoteProviderName` 一致以 `get_args` 取序列）。
 
 **綁定 API**（全部需登入；寫入只開給管理員）
 

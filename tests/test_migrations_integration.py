@@ -62,6 +62,7 @@ def test_migration_upgrade_creates_v0_5_schema(migrated_engine: Engine) -> None:
         "refresh_tokens",
         "rate_limit_buckets",
         "audit_events",
+        "broker_accounts",
     }.issubset(inspector.get_table_names())
     # P2 / P4 tables remain future work and must not exist yet.
     assert not {"outbox_events", "notification_deliveries", "import_reports"}.intersection(inspector.get_table_names())

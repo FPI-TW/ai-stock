@@ -103,3 +103,64 @@ def test_invalid_tick_size_not_caught_by_invalid_price_handler() -> None:
     response = client.get("/tick2")
 
     assert response.json()["error"]["code"] == "INVALID_TICK_SIZE"
+
+
+def test_sanitize_validation_errors_drops_everything_input_derived() -> None:
+    """Review finding: SecretStr length errors carried `ctx.actual_length` and
+    "..., not 300" in `msg`; `value_error` carries the exception object itself."""
+    from typing import Any
+
+    from app.api.errors import sanitize_validation_errors
+
+    raw: list[dict[str, Any]] = [
+        {
+            "type": "too_long",
+            "loc": ("body", "password"),
+            "msg": "Value should have at most 256 items after validation, not 300",
+            "input": "p" * 300,
+            "ctx": {"field_type": "Value", "max_length": 256, "actual_length": 300},
+            "url": "https://errors.pydantic.dev/2.12/v/too_long",
+        },
+        {
+            "type": "value_error",
+            "loc": ("body", "trailValue"),
+            "msg": "Value error, trailValue supports at most 4 decimal places (got 1.23456)",
+            "input": "1.23456",
+            "ctx": {"error": ValueError("got 1.23456")},
+        },
+        {
+            "type": "uuid_parsing",
+            "loc": ("path", "user_id"),
+            "msg": "Input should be a valid UUID, invalid character: found `Z` at 1",
+            "input": "Z9876",
+        },
+        {
+            "type": "string_too_long",
+            "loc": ("body", "email"),
+            "msg": "String should have at most 8 characters",
+            "input": "x" * 20,
+            "ctx": {"max_length": 8},
+        },
+    ]
+
+    out = sanitize_validation_errors(raw)
+
+    assert out == [
+        {
+            "type": "too_long",
+            "loc": ["body", "password"],
+            "msg": "Value should have at most 256 items",
+            "ctx": {"max_length": 256},
+        },
+        {"type": "value_error", "loc": ["body", "trailValue"], "msg": "Invalid value", "ctx": {}},
+        {"type": "uuid_parsing", "loc": ["path", "user_id"], "msg": "Invalid value", "ctx": {}},
+        {
+            "type": "string_too_long",
+            "loc": ["body", "email"],
+            "msg": "String should have at most 8 characters",
+            "ctx": {"max_length": 8},
+        },
+    ]
+    import json
+
+    json.dumps(out)  # always serialisable, whatever pydantic put in ctx

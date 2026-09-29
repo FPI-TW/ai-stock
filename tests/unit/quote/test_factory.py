@@ -10,8 +10,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
+from app.domain.broker_account import FubonCredentials
 from app.services.quote.factory import build_quote_provider
-from app.services.quote.fubon.client import FubonCredentials
 from app.services.quote.fubon.provider import FubonQuoteProvider
 from app.services.quote.in_memory import InMemoryQuoteProvider
 
@@ -91,7 +91,7 @@ def _fubon_credentials() -> FubonCredentials:
 def test_factory_builds_fubon_provider_from_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fubon is per-user: the factory needs that user's credentials, never `.env` secrets."""
 
-    settings = _settings(monkeypatch, QUOTE_PROVIDER="fubon")
+    settings = _settings(monkeypatch, QUOTE_PROVIDER="fubon", MFA_ENCRYPTION_KEY="real-key-for-broker-credentials")
 
     provider = build_quote_provider(settings, credentials=_fubon_credentials())
 
@@ -99,7 +99,7 @@ def test_factory_builds_fubon_provider_from_credentials(monkeypatch: pytest.Monk
 
 
 def test_factory_fubon_without_credentials_is_a_programming_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings(monkeypatch, QUOTE_PROVIDER="fubon")
+    settings = _settings(monkeypatch, QUOTE_PROVIDER="fubon", MFA_ENCRYPTION_KEY="real-key-for-broker-credentials")
 
     with pytest.raises(ValueError, match="credentials"):
         build_quote_provider(settings)
