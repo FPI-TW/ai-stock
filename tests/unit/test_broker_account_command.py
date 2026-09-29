@@ -14,7 +14,13 @@ from sqlalchemy.exc import OperationalError
 from tests.pfx_helpers import build_test_pfx
 from tests.unit.test_broker_session_pool import FakeProvider
 
-from app.commands.broker_account import BindBrokerAccountCommand, BindBrokerAccountInput, _cert_expires_at
+from app.commands.broker_account import (
+    BindBrokerAccountCommand,
+    BindBrokerAccountInput,
+    UnbindBrokerAccountCommand,
+    UnbindBrokerAccountInput,
+    _cert_expires_at,
+)
 from app.core.config import get_settings
 from app.domain.auth import UserData
 from app.domain.broker_account import BrokerLoginFailedError, FubonCredentials
@@ -128,12 +134,16 @@ class _Users:
 @dataclass
 class _Accounts:
     upserts: int = 0
+    bound: object | None = None  # truthy = "a row exists" for the unbind path
 
-    def get_by_user_id(self, user_id: UUID) -> None:
-        return None
+    def get_by_user_id(self, user_id: UUID) -> object | None:
+        return self.bound
 
     def upsert(self, user_id: UUID, **_: object) -> None:
         self.upserts += 1
+
+    def delete(self, user_id: UUID) -> bool:
+        return True
 
 
 @dataclass
@@ -142,6 +152,9 @@ class _CoreIntents:
 
     def active_or_scheduled_symbols_by_owner(self, owner_user_id: UUID) -> set[str]:
         return set(self.symbols)
+
+    def cancel_active_for_owner(self, owner_user_id: UUID, *, status: str, now: datetime) -> int:
+        return 1
 
 
 class _Audit:
@@ -254,3 +267,34 @@ def test_activate_failure_after_commit_logs_the_candidate_out(monkeypatch: pytes
     assert db.commits == 1
     assert built[0].stopped
     assert pool.get(user_id) is None
+
+
+def test_unbind_rollback_raising_on_a_dead_connection_still_releases_the_claim() -> None:
+    """Review finding: unbind released the claim only after rollback(), so a
+    rollback that raises (dead connection) wedged the user behind a token nobody
+    held — every later bind / unbind answered 409 until restart."""
+    dead = OperationalError("COMMIT", {}, Exception("connection lost"))
+    db = _Db(commit_fail_with=dead, rollback_fail_with=OperationalError("ROLLBACK", {}, Exception("connection lost")))
+    built: list[FakeProvider] = []
+
+    def factory(_creds: FubonCredentials) -> FakeProvider:
+        built.append(FakeProvider())
+        return built[-1]
+
+    pool = BrokerSessionPool(get_settings(), shared=None, provider_factory=factory)
+    user_id = uuid4()
+    pool.activate(pool.prepare(user_id, _CREDS))
+    live = built[0]
+    command = UnbindBrokerAccountCommand(db, _Users(user_id), _Accounts(bound=object()), _CoreIntents(), _Audit(), pool)  # type: ignore[arg-type]
+
+    with pytest.raises(OperationalError) as info:
+        command.execute(UnbindBrokerAccountInput(target_user_id=user_id, actor_admin_id=uuid4(), now=datetime.now(UTC)))
+
+    assert info.value is dead  # the commit failure surfaces, not the rollback's
+    assert db.rollbacks == 1
+    assert not pool.is_binding(user_id)  # claim released even though rollback raised
+    assert pool.get(user_id) is live and not live.stopped  # nothing committed, session stays
+    # Not wedged: a bind and an unbind both proceed afterwards.
+    pool.discard(pool.prepare(user_id, _CREDS))
+    pool.stop(pool.claim(user_id))
+    assert live.stopped

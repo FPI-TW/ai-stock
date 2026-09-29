@@ -183,9 +183,9 @@ class UnbindBrokerAccountCommand:
         # Hold the user's operation token for the whole unbind: a concurrent bind
         # now fails at `prepare` instead of racing the row delete below.
         claim = self._pool.claim(user.id)
+        committed = False
         try:
             if self._accounts.get_by_user_id(user.id) is None:
-                self._pool.release(claim)
                 return
             cancelled = self._core_intents.cancel_active_for_owner(user.id, status=UNBOUND_INTENT_STATUS, now=inp.now)
             self._accounts.delete(user.id)
@@ -198,9 +198,16 @@ class UnbindBrokerAccountCommand:
                 now=inp.now,
             )
             self._db.commit()
-        except Exception:
-            self._db.rollback()
-            self._pool.release(claim)
-            raise
+            committed = True
+        finally:
+            if not committed:
+                # Same shape as the bind path: give the token back before touching
+                # the DB again — a rollback on a dead connection raises too, and
+                # must not wedge this user behind a claim nobody holds.
+                self._pool.release(claim)
+                try:
+                    self._db.rollback()
+                except Exception as exc:
+                    logger.warning("rollback after failed unbind raised %s user_id=%s", type(exc).__name__, user.id)
         # Row is gone; the session goes last so a DB failure never leaves a rowless live session.
         self._pool.stop(claim)
