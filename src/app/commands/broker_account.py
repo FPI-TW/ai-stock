@@ -53,19 +53,10 @@ class BindBrokerAccountInput:
 @dataclass(frozen=True, slots=True)
 class BoundBrokerAccount:
     account: BrokerAccountData
-    # The session this bind replaced, still logged in. The caller retires it
-    # *after* responding (unsubscribe + logout can take seconds; the bind is
-    # already committed and live, so the admin should not wait on the old one).
+    # The session this bind replaced, still logged in. The caller hands it to
+    # `broker_session_pool.retire_broker_session` *after* responding (unsubscribe +
+    # logout can take seconds; the bind is already committed and live).
     replaced_session: QuoteProvider | None
-
-
-def retire_broker_session(provider: QuoteProvider, user_id: UUID) -> None:
-    """Best-effort logout of a session that is no longer live. Never raises: the
-    new binding is committed and serving; a stale logout is not a rollback reason."""
-    try:
-        provider.shutdown()
-    except Exception as exc:
-        logger.warning("previous broker session shutdown raised %s user_id=%s", type(exc).__name__, user_id)
 
 
 @dataclass(frozen=True, slots=True)

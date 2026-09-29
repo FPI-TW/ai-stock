@@ -201,7 +201,7 @@ class BrokerSessionPool:
                 self._pending.pop(user_id, None)
             if logged_in and provider is not None:
                 # Logged in, then something after startup() raised: don't leak the login.
-                _shutdown_quietly(provider, user_id)
+                retire_broker_session(provider, user_id)
             code = _failure_code(exc)
             if code is None:
                 logger.error(
@@ -250,7 +250,7 @@ class BrokerSessionPool:
         with self._lock:
             if self._pending.get(candidate.user_id) is candidate:
                 del self._pending[candidate.user_id]
-        _shutdown_quietly(candidate.provider, candidate.user_id)
+        retire_broker_session(candidate.provider, candidate.user_id)
 
     # --- teardown ---------------------------------------------------------------
 
@@ -278,7 +278,7 @@ class BrokerSessionPool:
             provider = self._sessions.pop(claim.user_id, None)
             del self._pending[claim.user_id]
         if provider is not None:
-            _shutdown_quietly(provider, claim.user_id)
+            retire_broker_session(provider, claim.user_id)
 
     def stop_all(self) -> None:
         """Log every live session out, in parallel.
@@ -296,7 +296,7 @@ class BrokerSessionPool:
             return
         with ThreadPoolExecutor(max_workers=len(sessions), thread_name_prefix="broker-logout") as pool:
             for user_id, provider in sessions:
-                pool.submit(_shutdown_quietly, provider, user_id)
+                pool.submit(retire_broker_session, provider, user_id)
 
     # --- internals ----------------------------------------------------------------
 
@@ -307,9 +307,14 @@ class BrokerSessionPool:
         return forward
 
 
-def _shutdown_quietly(provider: QuoteProvider, user_id: UUID) -> None:
+def retire_broker_session(provider: QuoteProvider, user_id: UUID) -> None:
+    """Best-effort logout of a session that is no longer (or never became) live.
+
+    Never raises: an already-dropped socket or a broker that stopped answering is
+    not a reason to fail the operation that retired the session, and the log line
+    carries only the exception class — this is the one place that rule lives.
+    """
     try:
         provider.shutdown()
     except Exception as exc:
-        # Already logged-out sessions or a broker-side drop; nothing to retry.
         logger.warning("broker session shutdown raised %s user_id=%s", type(exc).__name__, user_id)

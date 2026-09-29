@@ -20,12 +20,11 @@ from app.commands.broker_account import (
     UnbindBrokerAccountCommand,
     UnbindBrokerAccountInput,
     _cert_expires_at,
-    retire_broker_session,
 )
 from app.core.config import get_settings
 from app.domain.auth import UserData
 from app.domain.broker_account import BrokerLoginFailedError, FubonCredentials
-from app.services.broker_session_pool import BrokerSessionPool
+from app.services.broker_session_pool import BrokerSessionPool, retire_broker_session
 from app.services.quote.base import QuoteProviderUnavailableError
 
 

@@ -45,11 +45,12 @@ from app.commands.account import (
     ReactivateUserInput,
     ResendInvitationInput,
 )
-from app.commands.broker_account import BindBrokerAccountInput, UnbindBrokerAccountInput, retire_broker_session
+from app.commands.broker_account import BindBrokerAccountInput, UnbindBrokerAccountInput
 from app.commands.kill_switch import SetKillSwitchInput
 from app.commands.two_factor import SetupTwoFactorInput, VerifyTwoFactorInput
 from app.domain.broker_account import FubonCredentials
 from app.repositories.system_flag_repository import SystemFlagRepository
+from app.services.broker_session_pool import retire_broker_session
 from app.services.kill_switch import GLOBAL_TRIGGER_HALT
 
 router = APIRouter()
