@@ -2,6 +2,7 @@
 per-user operation token, failure-code mapping, shared mode."""
 
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import get_args
@@ -113,12 +114,21 @@ def _settings(max_sessions: int = 2) -> Settings:
     return get_settings().model_copy(update={"broker_max_sessions": max_sessions})
 
 
-def _pool(max_sessions: int = 2, **provider_kwargs: object) -> tuple[BrokerSessionPool, list[FakeProvider]]:
+def _pool(
+    max_sessions: int = 2,
+    provider_for: Callable[[], FakeProvider] | None = None,
+    **provider_kwargs: object,
+) -> tuple[BrokerSessionPool, list[FakeProvider]]:
+    """A per-user pool over recording fakes. `provider_for` builds each provider
+    (subclasses / gated fakes); otherwise `FakeProvider(**provider_kwargs)`. The
+    `built` list is safe to append from concurrent binds (contention tests)."""
     built: list[FakeProvider] = []
+    built_lock = threading.Lock()
 
     def factory(_creds: FubonCredentials) -> FakeProvider:
-        provider = FakeProvider(**provider_kwargs)  # type: ignore[arg-type]
-        built.append(provider)
+        provider = provider_for() if provider_for is not None else FakeProvider(**provider_kwargs)  # type: ignore[arg-type]
+        with built_lock:
+            built.append(provider)
         return provider
 
     return BrokerSessionPool(_settings(max_sessions), shared=None, provider_factory=factory), built

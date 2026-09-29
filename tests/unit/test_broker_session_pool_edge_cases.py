@@ -7,12 +7,11 @@ live session for its user or has been shut down.
 
 import random
 import threading
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import pytest
-from tests.unit.test_broker_session_pool import FakeProvider, live_session, live_user_ids, token_free
+from tests.unit.test_broker_session_pool import FakeProvider, _pool, live_session, live_user_ids, token_free
 
 from app.core.config import get_settings
 from app.domain.broker_account import (
@@ -24,22 +23,6 @@ from app.domain.broker_account import (
 from app.services.broker_session_pool import BrokerSessionPool
 
 _CREDS = FubonCredentials(personal_id="A123456789", password="pw", cert_pfx=b"pfx", cert_password="cpw")
-
-
-def _pool(
-    max_sessions: int, provider_for: Callable[[], FakeProvider] = FakeProvider
-) -> tuple[BrokerSessionPool, list[FakeProvider]]:
-    built: list[FakeProvider] = []
-    built_lock = threading.Lock()
-
-    def factory(_creds: FubonCredentials) -> FakeProvider:
-        provider = provider_for()
-        with built_lock:
-            built.append(provider)
-        return provider
-
-    settings = get_settings().model_copy(update={"broker_max_sessions": max_sessions})
-    return BrokerSessionPool(settings, shared=None, provider_factory=factory), built
 
 
 # --- contention ---------------------------------------------------------------
