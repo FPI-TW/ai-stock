@@ -105,10 +105,18 @@ def test_garbage_pfx_is_a_safe_login_failure() -> None:
     assert info.value.code == "cert_invalid"
 
 
-def test_in_memory_runtime_never_imports_the_fubon_package() -> None:
+def test_in_memory_runtime_never_imports_the_fubon_sdk() -> None:
     """Fresh interpreter: other tests in this process import the Fubon modules on
-    purpose, so `sys.modules` here would prove nothing."""
-    script = "import sys, app.main; print(sorted(n for n in sys.modules if n.startswith('app.services.quote.fubon')))"
+    purpose, so `sys.modules` here would prove nothing.
+
+    The boundary is the SDK: `fubon/client.py` is the only module that imports
+    `fubon_neo`, and neither may load in the in_memory runtime. The pure-Python
+    `fubon/provider.py` is imported by the reconnect loop (the concrete type the
+    per-user loop repairs) and is fine to load anywhere."""
+    script = (
+        "import sys, app.main; print(sorted(n for n in sys.modules "
+        "if n == 'app.services.quote.fubon.client' or n.startswith('fubon_neo')))"
+    )
     env = {
         **os.environ,
         "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),

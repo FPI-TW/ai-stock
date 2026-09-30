@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
 from app.main import create_app
+from app.services.broker_session_pool import BrokerSessionPool
 from app.services.quote.in_memory import InMemoryQuoteProvider
 
 
@@ -32,7 +33,7 @@ def test_lifespan_shuts_provider_down_when_reconcile_fails(monkeypatch: pytest.M
     get_settings.cache_clear()
     app = create_app()
     provider = LifecycleSpyProvider()
-    app.state.quote_provider = provider
+    app.state.broker_sessions = BrokerSessionPool(get_settings(), shared=provider)
 
     def broken_factory() -> None:
         raise RuntimeError("db down")

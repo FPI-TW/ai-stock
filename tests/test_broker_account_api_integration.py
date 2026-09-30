@@ -1,5 +1,5 @@
-"""HTTP integration tests for admin broker-account binding (PR2 of
-docs/orders/per-user-broker-sessions.md). Against real PostgreSQL; the broker
+"""HTTP integration tests for admin broker-account binding and per-user startup
+(docs/architecture.md「BrokerSessionPool」). Against real PostgreSQL; the broker
 session is a recording fake injected through a per-user `BrokerSessionPool`.
 """
 
@@ -30,6 +30,7 @@ from app.db.models.broker_account import BrokerAccount
 from app.db.models.core import Symbol, TradeIntent
 from app.db.models.trade_intent_core import TradeIntentCore, TradeIntentPriceParams
 from app.domain.broker_account import FubonCredentials
+from app.domain.trading_session import TradingSessionService
 from app.main import create_app
 from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.services.broker_session_pool import BrokerSessionPool, BrokerStopClaim
@@ -120,7 +121,7 @@ def _seed_legacy_intent(engine: Engine, owner_id: UUID) -> UUID:
     return intent_id
 
 
-def _seed_core_intent(engine: Engine, owner_id: UUID) -> UUID:
+def _seed_core_intent(engine: Engine, owner_id: UUID, *, trading_date: date = date(2026, 1, 1)) -> UUID:
     intent_id = uuid4()
     with Session(engine) as session:
         session.add(
@@ -132,7 +133,7 @@ def _seed_core_intent(engine: Engine, owner_id: UUID) -> UUID:
                 execution_mode="notify_only",
                 quantity_lots=1,
                 trigger_reference_price_type="ask",
-                trading_date=date(2026, 1, 1),
+                trading_date=trading_date,
                 time_in_force="day",
                 status="active",
                 dedup_key=f"100.0000:{intent_id}",
@@ -155,6 +156,7 @@ class _Harness:
     def __init__(self, engine: Engine, *, max_sessions: int = 2) -> None:
         self.built: list[FakeProvider] = []
         self.fail_with: Exception | None = None
+        self.fail_for_personal_id: str | None = None  # None = `fail_with` applies to every login
         self.subscribe_fail_with: Exception | None = None
         self.shutdown_fail_with: Exception | None = None
         self.startup_gate: threading.Event | None = None
@@ -165,8 +167,9 @@ class _Harness:
         self.admin_id = _seed_user(engine, role="admin", mfa=True)
 
     def _factory(self, credentials: FubonCredentials) -> FakeProvider:
+        applies = self.fail_for_personal_id is None or credentials.personal_id == self.fail_for_personal_id
         provider = FakeProvider(
-            fail_with=self.fail_with,
+            fail_with=self.fail_with if applies else None,
             subscribe_fail_with=self.subscribe_fail_with,
             shutdown_fail_with=self.shutdown_fail_with,
             startup_gate=self.startup_gate,
@@ -757,3 +760,164 @@ def test_bind_refuses_the_dev_fallback_key_even_in_local_mode(engine: Engine, mo
     assert live_session(harness.pool, user_id) is None and not (not token_free(harness.pool, user_id))
     # Non-secret reads still work without a key.
     assert harness.user_client(user_id).get("/me/broker-account").status_code == 404
+
+
+# --- PR3: per-user startup and the create path ---------------------------------------
+
+
+def _current_trading_date() -> date:
+    service = TradingSessionService()
+    return service.get_day_intent_trading_date(service.now_taipei())
+
+
+def _clear_bindings(engine: Engine) -> None:
+    """Lifespan tests boot from `broker_accounts` as a whole; rows left by the bind
+    tests above would eat `BROKER_MAX_SESSIONS` before the users under test."""
+    with Session(engine) as session:
+        session.execute(text("DELETE FROM broker_accounts"))
+        session.commit()
+
+
+def _store_binding(engine: Engine, user_id: UUID, *, personal_id: str) -> None:
+    with Session(engine) as session:
+        BrokerAccountRepository(session, encryption_key=TEST_CREDENTIAL_KEY).upsert(
+            user_id,
+            broker="fubon",
+            credentials=FubonCredentials(
+                personal_id=personal_id, password="login-pw", cert_pfx=PFX, cert_password=CERT_PASSWORD
+            ),
+            broker_account_no="9876543",
+            cert_expires_at=DEFAULT_NOT_AFTER,
+            now=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        session.commit()
+
+
+@pytest.mark.integration
+def test_lifespan_logs_every_bound_user_in_and_one_failure_does_not_stop_the_rest(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("QUOTE_PROVIDER", "fubon")
+    get_settings.cache_clear()
+    _clear_bindings(engine)
+    harness = _Harness(engine, max_sessions=3)
+    good, bad, stale = _seed_user(engine), _seed_user(engine), _seed_user(engine)
+    _seed_core_intent(engine, good, trading_date=_current_trading_date())
+    _seed_core_intent(engine, stale)  # a day intent from a past trading day: expired at boot, never subscribed
+    _store_binding(engine, good, personal_id="A111111111")
+    _store_binding(engine, bad, personal_id="B222222222")
+    _store_binding(engine, stale, personal_id="C333333333")
+    harness.fail_with = _login_error("login_rejected")
+    harness.fail_for_personal_id = "B222222222"
+
+    with TestClient(harness.app) as client:
+        assert client.get("/health").status_code == 200
+        live = live_session(harness.pool, good)
+        assert live is not None and live.active_subscriptions() == {"2330"}
+        stale_live = live_session(harness.pool, stale)
+        assert stale_live is not None and stale_live.active_subscriptions() == set()
+        assert live_session(harness.pool, bad) is None
+        good_row, bad_row = _row(engine, good), _row(engine, bad)
+        assert good_row is not None and good_row.status == "active" and good_row.last_error is None
+        assert (
+            good_row.last_login_at is not None
+            and good_row.last_login_at.year == 2026
+            and good_row.last_login_at.month >= 9
+        )
+        assert bad_row is not None and bad_row.status == "login_failed"
+        assert bad_row.last_error == "券商拒絕登入，請確認身分證字號、密碼與憑證"
+        assert "B222222222" not in (bad_row.last_error or "")
+        # Bound but no session: "unavailable", not "not bound" (which would contradict /me).
+        refused = harness.user_client(bad).post(
+            "/trade-intents",
+            json={"symbol": "2330", "strategy": "buy_price_alert", "quantityLots": 1, "targetPrice": "100"},
+            headers={"Idempotency-Key": str(uuid4())},
+        )
+        assert refused.status_code == 503, refused.text
+        assert refused.json()["error"]["code"] == "BROKER_SESSION_UNAVAILABLE"
+        assert harness.user_client(bad).get("/quotes/current-price/2330").status_code == 503
+        assert harness.user_client(bad).get("/me/broker-account").json()["status"] == "login_failed"
+
+    assert all(p.stopped for p in harness.built if p.started)
+
+
+@pytest.mark.integration
+def test_lifespan_skips_bindings_of_disabled_users(engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disable keeps the binding row (reactivate logs back in), so startup must
+    look at the user, not just the row."""
+    monkeypatch.setenv("QUOTE_PROVIDER", "fubon")
+    get_settings.cache_clear()
+    _clear_bindings(engine)
+    harness = _Harness(engine)
+    disabled = _seed_user(engine, status="disabled")
+    _store_binding(engine, disabled, personal_id="C333333333")
+
+    with TestClient(harness.app):
+        assert live_session(harness.pool, disabled) is None
+        assert all(p.broker_account_no and "C333333333" not in p.broker_account_no for p in harness.built)
+    assert harness.built == []
+
+
+@pytest.mark.integration
+def test_lifespan_without_any_binding_boots_with_no_session(engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QUOTE_PROVIDER", "fubon")
+    get_settings.cache_clear()
+    _clear_bindings(engine)
+    harness = _Harness(engine)
+
+    with TestClient(harness.app) as client:
+        assert client.get("/health").status_code == 200
+        assert harness.pool.live_sessions() == []
+    assert harness.built == []
+
+
+@pytest.mark.integration
+def test_create_intent_needs_the_callers_own_session(engine: Engine) -> None:
+    """Bound user: the intent is created and subscribed on *their* session. Unbound
+    user: 409 BROKER_ACCOUNT_NOT_BOUND and no row."""
+    harness = _Harness(engine)
+    bound, unbound = _seed_user(engine), _seed_user(engine)
+    assert harness.admin_client().put(f"/admin/users/{bound}/broker-account", json=_bind_body()).status_code == 200
+    payload = {"symbol": "2330", "strategy": "buy_price_alert", "quantityLots": 1, "targetPrice": "100"}
+
+    created = harness.user_client(bound).post("/trade-intents", json=payload, headers={"Idempotency-Key": str(uuid4())})
+    assert created.status_code == 201, created.text
+    assert harness.built[0].active_subscriptions() == {"2330"}
+
+    refused = harness.user_client(unbound).post(
+        "/trade-intents", json=payload, headers={"Idempotency-Key": str(uuid4())}
+    )
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["error"]["code"] == "BROKER_ACCOUNT_NOT_BOUND"
+    with Session(engine) as session:
+        owners = session.execute(select(TradeIntentCore.owner_user_id)).scalars().all()
+    assert unbound not in owners
+
+
+@pytest.mark.integration
+def test_unsubscribe_only_when_the_owners_last_intent_on_the_symbol_is_gone(engine: Engine) -> None:
+    """Two open 2330 intents on one user's own session: cancelling the first keeps
+    the subscription, cancelling the second releases it."""
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+    assert harness.admin_client().put(f"/admin/users/{user_id}/broker-account", json=_bind_body()).status_code == 200
+    client = harness.user_client(user_id)
+
+    def create(price: str) -> str:
+        response = client.post(
+            "/trade-intents",
+            json={"symbol": "2330", "strategy": "buy_price_alert", "quantityLots": 1, "targetPrice": price},
+            headers={"Idempotency-Key": str(uuid4())},
+        )
+        assert response.status_code == 201, response.text
+        return str(response.json()["data"]["id"])
+
+    first, second = create("100"), create("101")
+    provider = harness.built[0]
+    assert provider.active_subscriptions() == {"2330"}
+
+    assert client.post(f"/trade-intents/{first}/cancel", headers={"Idempotency-Key": str(uuid4())}).status_code == 200
+    assert provider.active_subscriptions() == {"2330"}  # the second intent still needs it
+
+    assert client.post(f"/trade-intents/{second}/cancel", headers={"Idempotency-Key": str(uuid4())}).status_code == 200
+    assert provider.active_subscriptions() == set()

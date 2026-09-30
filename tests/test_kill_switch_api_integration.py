@@ -22,9 +22,9 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import (
     get_active_user,
+    get_broker_session_pool,
     get_current_user,
     get_idempotency_key,
-    get_quote_provider,
     get_trading_session_service,
 )
 from app.core.config import get_settings
@@ -34,6 +34,7 @@ from app.db.models.core import Notification, Symbol
 from app.db.models.trade_intent_core import TradeIntentTrigger
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
+from app.services.broker_session_pool import BrokerSessionPool
 from app.services.quote.base import QuoteSnapshot
 from app.services.quote.in_memory import InMemoryQuoteProvider
 from tests.db_helpers import INTENT_TABLES
@@ -101,7 +102,8 @@ def quote_provider() -> InMemoryQuoteProvider:
 def _client(quote_provider: InMemoryQuoteProvider, principal: RequestUser) -> TestClient:
     session_with_clock = TradingSessionService(clock=lambda: SESSION_NOW_UTC)
     app = create_app()
-    app.dependency_overrides[get_quote_provider] = lambda: quote_provider
+    pool = BrokerSessionPool(get_settings(), shared=quote_provider)
+    app.dependency_overrides[get_broker_session_pool] = lambda: pool
     app.dependency_overrides[get_trading_session_service] = lambda: session_with_clock
     app.dependency_overrides[get_current_user] = lambda: principal
     app.dependency_overrides[get_active_user] = lambda: principal

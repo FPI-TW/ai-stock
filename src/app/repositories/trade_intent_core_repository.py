@@ -339,17 +339,22 @@ class TradeIntentCoreRepository:
         )
         return list(rows)
 
-    def system_list_active_by_symbols(self, symbols: list[str]) -> list[TradeIntentData]:
-        """All active intents whose symbol is in the list (owner-agnostic; robot #2 path)."""
+    def system_list_active_by_symbols(
+        self, symbols: list[str], *, owner_user_id: UUID | None = None
+    ) -> list[TradeIntentData]:
+        """Active intents whose symbol is in the list (robot #2 path). `owner_user_id`
+        narrows to one owner: in per-user quote mode the frame came from that owner's
+        own broker session and must not evaluate anyone else's intents."""
 
         if not symbols:
             return []
-        rows = self._db.execute(
-            _core_with_symbol_type().where(
-                TradeIntentCore.status == "active",
-                TradeIntentCore.symbol.in_(symbols),
-            )
-        ).all()
+        stmt = _core_with_symbol_type().where(
+            TradeIntentCore.status == "active",
+            TradeIntentCore.symbol.in_(symbols),
+        )
+        if owner_user_id is not None:
+            stmt = stmt.where(TradeIntentCore.owner_user_id == owner_user_id)
+        rows = self._db.execute(stmt).all()
         return [_to_domain(core, SecurityType(instrument_type)) for core, instrument_type in rows]
 
     def active_or_scheduled_symbols(self) -> set[str]:

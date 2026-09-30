@@ -12,17 +12,44 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-BrokerLoginFailureCode = Literal["login_rejected", "session_limit", "provider_unavailable", "cert_invalid", "unknown"]
+BrokerLoginFailureCode = Literal[
+    "login_rejected",
+    "session_limit",
+    "session_pool_full",
+    "provider_unavailable",
+    "cert_invalid",
+    "credentials_unreadable",
+    "unknown",
+]
 
 # The only text that may reach `broker_accounts.last_error`, the API and the logs.
 # SDK exception text can echo the identity number or password — never store it.
 LOGIN_FAILURE_MESSAGES: dict[BrokerLoginFailureCode, str] = {
     "login_rejected": "券商拒絕登入，請確認身分證字號、密碼與憑證",
     "session_limit": "券商連線數已達上限，請稍後再試",
+    "session_pool_full": "本系統同時連線數已達上限（BROKER_MAX_SESSIONS），有人解除綁定後會自動登入",
     "provider_unavailable": "券商服務暫時無法使用",
     "cert_invalid": "憑證檔或憑證密碼無效",
+    "credentials_unreadable": "券商金鑰無法解密（加密金鑰已輪替），請重新綁定",
     "unknown": "券商登入發生未預期錯誤",
 }
+
+# Failures the repair loop may retry on its own: the broker or the environment was
+# the problem. The rest (wrong password, bad cert, rotated key) cannot succeed
+# without the admin, and hammering a refused login risks the broker locking the
+# account.
+RETRYABLE_LOGIN_FAILURES: frozenset[BrokerLoginFailureCode] = frozenset(
+    {"session_limit", "session_pool_full", "provider_unavailable", "unknown"}
+)
+
+
+def login_failure_code_for(last_error: str | None) -> BrokerLoginFailureCode | None:
+    """The code a stored `last_error` message came from (the column stores only the
+    whitelisted message). None for an unknown text or no error."""
+    for code, message in LOGIN_FAILURE_MESSAGES.items():
+        if message == last_error:
+            return code
+    return None
 
 
 @dataclass(frozen=True, repr=False)
@@ -57,7 +84,13 @@ class BrokerAccountError(Exception):
 
 
 class BrokerAccountNotBoundError(BrokerAccountError):
-    """The user has no broker session (per-user mode) — cannot watch quotes for them."""
+    """The user has no broker binding at all (per-user mode) — the admin must bind them."""
+
+
+class BrokerSessionUnavailableError(BrokerAccountError):
+    """Bound, but no live session right now: the stored login failed at boot, was
+    refused, or dropped and the repair loop has not brought it back yet. Retryable;
+    `GET /me/broker-account` shows why."""
 
 
 class BrokerLoginFailedError(BrokerAccountError):
@@ -94,14 +127,17 @@ class BrokerSessionSetupError(BrokerAccountError):
         self.exception_type = exception_type
 
 
+BrokerCredentialKeyReason = Literal["missing", "undecryptable"]
+
+
 class BrokerCredentialKeyError(BrokerAccountError):
     """The at-rest encryption key is not configured (`missing`: the dev fallback is
-    refused for broker credentials). Operations, not admins. The decrypt-side reason
-    is added together with `get_credentials` in PR3."""
+    refused for broker credentials) or no longer opens a stored blob (`undecryptable`:
+    the key was rotated; the admin must re-bind). Operations, not admins."""
 
-    def __init__(self, reason: Literal["missing"]) -> None:
+    def __init__(self, reason: BrokerCredentialKeyReason) -> None:
         super().__init__(reason)
-        self.reason: Literal["missing"] = reason
+        self.reason: BrokerCredentialKeyReason = reason
 
 
 class BrokerBindingNotEnabledError(BrokerAccountError):

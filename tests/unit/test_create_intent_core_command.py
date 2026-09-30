@@ -7,21 +7,52 @@ tests/test_create_immediate_trigger_integration.py（integration）覆蓋。
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import cast
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 
-from app.commands.trade_intent_core import CreateTradeIntentCommand, CreateTradeIntentInput, IntentLimits
+from app.commands.trade_intent_core import (
+    CancelTradeIntentCommand,
+    CancelTradeIntentInput,
+    CreateTradeIntentCommand,
+    CreateTradeIntentInput,
+    IntentLimits,
+)
+from app.core.config import get_settings
+from app.domain.broker_account import BrokerAccountNotBoundError, BrokerSessionUnavailableError
 from app.domain.trade_intent import SymbolIntentLimitExceededError, UserIntentLimitExceededError
 from app.domain.trading_session import TradingSessionService
+from app.services.broker_session_pool import BrokerSessionPool
 from app.services.quote.base import QuoteProviderUnavailableError
 
 # Monday 10:00 Taipei (02:00 UTC) → 盤中，建單落 active
 MONDAY = datetime(2026, 5, 11, 2, 0, tzinfo=UTC)
 
 
-def _command(repo: MagicMock, *, limits: IntentLimits | None) -> CreateTradeIntentCommand:
+def _shared_pool(quote_provider: MagicMock) -> BrokerSessionPool:
+    """in_memory 模式：所有人共用同一個 provider，與 conftest 的預設一致。"""
+    return BrokerSessionPool(get_settings(), shared=quote_provider)
+
+
+def _per_user_pool() -> BrokerSessionPool:
+    return BrokerSessionPool(get_settings(), shared=None, provider_factory=lambda _creds: MagicMock())
+
+
+def _accounts(bound: bool) -> MagicMock:
+    accounts = MagicMock()
+    accounts.get_by_user_id.return_value = MagicMock() if bound else None
+    return accounts
+
+
+def _command(
+    repo: MagicMock,
+    *,
+    limits: IntentLimits | None,
+    pool: BrokerSessionPool | None = None,
+    accounts: MagicMock | None = None,
+) -> CreateTradeIntentCommand:
     symbol_service = MagicMock()
     symbol_service.get_tradable_symbol.return_value = MagicMock(instrument_type="stock")
     quote_provider = MagicMock()
@@ -30,7 +61,8 @@ def _command(repo: MagicMock, *, limits: IntentLimits | None) -> CreateTradeInte
         symbol_service,
         TradingSessionService(clock=lambda: MONDAY),
         repo,
-        quote_provider,
+        pool or _shared_pool(quote_provider),
+        accounts or _accounts(bound=False),
         MagicMock(),  # evaluator（因無報價而不會被呼叫）
         MagicMock(),  # db
         None,  # kill_switch
@@ -146,7 +178,8 @@ def test_provider_error_from_get_quotes_does_not_block_create() -> None:
         symbol_service,
         TradingSessionService(clock=lambda: MONDAY),
         repo,
-        quote_provider,
+        _shared_pool(quote_provider),
+        _accounts(bound=False),
         MagicMock(),  # evaluator（報價取不到 → 不會被呼叫）
         db,
         None,
@@ -158,3 +191,112 @@ def test_provider_error_from_get_quotes_does_not_block_create() -> None:
     repo.create.assert_called_once()
     db.commit.assert_called_once()
     db.rollback.assert_not_called()
+
+
+# --- per-user quote sessions（docs/architecture.md「交易意圖資料流」） -------------------------
+
+
+def test_unbound_owner_is_refused_after_limits_and_before_write() -> None:
+    """沒有本人 session 就沒有行情：409 BROKER_ACCOUNT_NOT_BOUND，不落列、不訂閱。
+    限額先於綁定檢查——超限的人先看到超限。"""
+    repo = MagicMock()
+    repo.count_active_or_scheduled_for_user.return_value = 0
+    repo.count_active_or_scheduled_for_user_symbol.return_value = 0
+    command = _command(repo, limits=IntentLimits(per_user=200, per_symbol=20), pool=_per_user_pool())
+
+    with pytest.raises(BrokerAccountNotBoundError):
+        command.execute(_input())
+    repo.create.assert_not_called()
+
+    repo.count_active_or_scheduled_for_user.return_value = 200
+    with pytest.raises(UserIntentLimitExceededError):
+        command.execute(_input())
+
+
+def test_bound_owner_whose_login_failed_is_told_the_session_is_unavailable_not_unbound() -> None:
+    """Review finding (PR #98): a stored binding whose login failed (or dropped) has
+    no live session; answering "not bound" contradicts GET /me/broker-account
+    (bound, status=login_failed) and sends the user to the wrong fix."""
+    repo = MagicMock()
+    command = _command(repo, limits=None, pool=_per_user_pool(), accounts=_accounts(bound=True))
+
+    with pytest.raises(BrokerSessionUnavailableError):
+        command.execute(_input())
+    repo.create.assert_not_called()
+
+
+def test_create_subscribes_on_the_owners_own_session() -> None:
+    pool = _per_user_pool()
+    owner = uuid4()
+    candidate = pool.prepare(owner, MagicMock())
+    pool.activate(candidate)
+    provider = cast(MagicMock, candidate.provider)
+    provider.active_subscriptions.return_value = set()
+    provider.get_quotes.return_value = []
+    repo = MagicMock()
+    repo.create.return_value = uuid4()
+
+    _command(repo, limits=None, pool=pool).execute(_input(owner_user_id=owner))
+
+    provider.subscribe.assert_called_once_with("2330")
+
+
+def _cancel(repo: MagicMock, pool: BrokerSessionPool) -> CancelTradeIntentCommand:
+    return CancelTradeIntentCommand(repo, pool, MagicMock())
+
+
+def test_cancel_in_per_user_mode_unsubscribes_when_the_owner_has_no_other_intent_on_the_symbol() -> None:
+    """跨 owner 計數會讓本人 session 永不退訂（別人還有這檔，但別人的單不在我的 session 上）。"""
+    pool = _per_user_pool()
+    owner = uuid4()
+    candidate = pool.prepare(owner, MagicMock())
+    pool.activate(candidate)
+    repo = MagicMock()
+    repo.cancel.return_value = MagicMock(symbol="2330", id=uuid4())
+    repo.count_active_or_scheduled_for_user_symbol.return_value = 0
+    repo.count_active_or_scheduled_for_symbol.return_value = 3  # other owners still watch it
+
+    _cancel(repo, pool).execute(CancelTradeIntentInput(intent_id=uuid4(), owner_user_id=owner))
+
+    repo.count_active_or_scheduled_for_user_symbol.assert_called_once_with(owner, "2330")
+    cast(MagicMock, candidate.provider).unsubscribe.assert_called_once_with("2330")
+
+
+def test_cancel_in_per_user_mode_keeps_the_subscription_while_the_owner_has_another_intent_on_it() -> None:
+    """Two 2330 intents; cancelling the first leaves one — the owner's session must
+    keep the symbol. The count is taken after the cancel is committed, so it is
+    exactly "what is still open", not "what was open"."""
+    pool = _per_user_pool()
+    owner = uuid4()
+    candidate = pool.prepare(owner, MagicMock())
+    pool.activate(candidate)
+    repo = MagicMock()
+    repo.cancel.return_value = MagicMock(symbol="2330", id=uuid4())
+    repo.count_active_or_scheduled_for_user_symbol.return_value = 1
+
+    _cancel(repo, pool).execute(CancelTradeIntentInput(intent_id=uuid4(), owner_user_id=owner))
+
+    cast(MagicMock, candidate.provider).unsubscribe.assert_not_called()
+
+
+def test_cancel_in_shared_mode_keeps_the_subscription_while_anyone_still_needs_it() -> None:
+    provider = MagicMock()
+    repo = MagicMock()
+    repo.cancel.return_value = MagicMock(symbol="2330", id=uuid4())
+    repo.count_active_or_scheduled_for_user_symbol.return_value = 0
+    repo.count_active_or_scheduled_for_symbol.return_value = 1
+
+    _cancel(repo, _shared_pool(provider)).execute(CancelTradeIntentInput(intent_id=uuid4(), owner_user_id=uuid4()))
+
+    provider.unsubscribe.assert_not_called()
+    repo.count_active_or_scheduled_for_user_symbol.assert_not_called()
+
+
+def test_cancel_without_a_session_still_cancels() -> None:
+    """解綁後殘留的取消請求：DB 取消照做，沒有 session 可退訂就跳過，不 500。"""
+    repo = MagicMock()
+    repo.cancel.return_value = MagicMock(symbol="2330", id=uuid4())
+
+    _cancel(repo, _per_user_pool()).execute(CancelTradeIntentInput(intent_id=uuid4(), owner_user_id=uuid4()))
+
+    repo.cancel.assert_called_once()

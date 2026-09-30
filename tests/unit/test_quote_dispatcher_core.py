@@ -95,13 +95,27 @@ def test_dispatch_triggers_when_evaluator_says_so(monkeypatch: pytest.MonkeyPatc
 
     _dispatcher(mock_session=mock_session, evaluator=evaluator).dispatch(_snapshot())
 
-    mock_repo.system_list_active_by_symbols.assert_called_once_with(["2330"])
+    mock_repo.system_list_active_by_symbols.assert_called_once_with(["2330"], owner_user_id=None)
     persist.assert_called_once()
     mock_repo.commit.assert_called_once()
     assert persist.call_args[0][1] is intent
     trigger_input = persist.call_args[0][2]
     assert trigger_input.trigger_price == Decimal("99")
     assert trigger_input.trigger_reference_price_type == "ask"
+
+
+def test_dispatch_scopes_the_listing_to_the_sessions_owner(
+    monkeypatch: pytest.MonkeyPatch, mock_session: MagicMock
+) -> None:
+    """per-user 模式：A 的 session 推來的價只能對 A 的單評估（同 symbol 會從 N 條 session 各來一次）。"""
+    owner = uuid4()
+    mock_repo = MagicMock()
+    mock_repo.system_list_active_by_symbols.return_value = []
+    monkeypatch.setattr("app.services.quote_dispatcher_core.TradeIntentCoreRepository", lambda db: mock_repo)
+
+    _dispatcher(mock_session=mock_session, evaluator=MagicMock()).dispatch(_snapshot(), owner_user_id=owner)
+
+    mock_repo.system_list_active_by_symbols.assert_called_once_with(["2330"], owner_user_id=owner)
 
 
 def test_dispatch_skips_when_no_active_intents(monkeypatch: pytest.MonkeyPatch, mock_session: MagicMock) -> None:

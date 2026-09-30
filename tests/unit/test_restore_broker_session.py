@@ -1,0 +1,489 @@
+"""`restore_broker_session`: the one login flow shared by the lifespan, account
+reactivation and the reconnect loop (docs/architecture.md「per-user 模式的生命週期」).
+
+prepare -> subscribe the owner's open symbols -> mark_login_ok + commit -> activate.
+Any failure before commit discards the candidate and records a safe failure code;
+the caller decides whether to continue (lifespan / loop) or to swallow (reactivate).
+"""
+
+import threading
+from collections.abc import Callable
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
+from uuid import uuid4
+
+import pytest
+from tests.unit.test_broker_session_pool import (
+    _CREDS,
+    FakeProvider,
+    _login_error,
+    _pool,
+    live_session,
+    live_user_ids,
+    token_free,
+)
+
+from app.commands.broker_account import restore_all_bound_users, restore_bound_user, restore_broker_session
+from app.domain.broker_account import (
+    BrokerAccountNotBoundError,
+    BrokerBindInProgressError,
+    BrokerLoginFailedError,
+    BrokerSessionLimitReachedError,
+    FubonCredentials,
+)
+from app.domain.trading_session import TradingSessionService
+from app.services.quote.base import QuoteProviderUnavailableError
+
+NOW = datetime(2026, 9, 30, 1, 0, tzinfo=UTC)
+
+
+def _repos(symbols: set[str] | None = None) -> tuple[MagicMock, MagicMock, MagicMock]:
+    db, accounts, core_intents = MagicMock(), MagicMock(), MagicMock()
+    core_intents.active_or_scheduled_symbols_by_owner.return_value = symbols or set()
+    accounts.get_by_user_id.return_value = MagicMock()  # the binding row exists
+    return db, accounts, core_intents
+
+
+def _users(*statuses: str) -> MagicMock:
+    """`get_by_id` answers with each status in turn (the last one repeats)."""
+    users = MagicMock()
+    answers = [MagicMock(status=status) for status in statuses]
+    users.get_by_id.side_effect = answers + [answers[-1]] * 10
+    return users
+
+
+def test_restore_logs_in_subscribes_marks_ok_then_activates() -> None:
+    pool, built = _pool()
+    db, accounts, core_intents = _repos({"2330", "2317"})
+    user_id = uuid4()
+
+    replaced = restore_broker_session(
+        db=db,
+        accounts=accounts,
+        core_intents=core_intents,
+        users=_users("active"),
+        pool=pool,
+        user_id=user_id,
+        credentials=_CREDS,
+        now=NOW,
+    )
+
+    assert replaced is None
+    assert live_session(pool, user_id) is built[0]
+    assert built[0].subscribed == {"2330", "2317"}
+    accounts.mark_login_ok.assert_called_once_with(user_id, now=NOW)
+    db.commit.assert_called_once()
+    accounts.mark_login_failed.assert_not_called()
+
+
+def test_restore_returns_the_replaced_session_for_the_caller_to_retire() -> None:
+    """Reconnect after a lost login: the dead session stays live until the new one
+    is committed and swapped in, then the caller logs it out outside any lock."""
+    pool, built = _pool()
+    db, accounts, core_intents = _repos()
+    user_id = uuid4()
+    pool.activate(pool.prepare(user_id, _CREDS))
+
+    replaced = restore_broker_session(
+        db=db,
+        accounts=accounts,
+        core_intents=core_intents,
+        users=_users("active"),
+        pool=pool,
+        user_id=user_id,
+        credentials=_CREDS,
+        now=NOW,
+    )
+
+    assert replaced is built[0]
+    assert not built[0].stopped
+    assert live_session(pool, user_id) is built[1]
+
+
+@pytest.mark.parametrize(
+    ("fail_with", "expected_code"),
+    [
+        (_login_error("login_rejected"), "login_rejected"),
+        (AttributeError("sdk drift A123456789"), "unknown"),
+    ],
+)
+def test_login_failure_is_recorded_and_raised(fail_with: Exception, expected_code: str) -> None:
+    pool, _ = _pool(fail_with=fail_with)
+    db, accounts, core_intents = _repos()
+    user_id = uuid4()
+
+    with pytest.raises(BrokerLoginFailedError) as info:
+        restore_broker_session(
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
+        )
+
+    assert info.value.code == expected_code
+    accounts.mark_login_failed.assert_called_once_with(user_id, expected_code, now=NOW)
+    db.commit.assert_called_once()
+    accounts.mark_login_ok.assert_not_called()
+    assert live_session(pool, user_id) is None
+    assert token_free(pool, user_id)
+
+
+def test_pool_capacity_is_recorded_as_this_systems_limit_not_the_brokers() -> None:
+    pool, _ = _pool(max_sessions=1)
+    pool.activate(pool.prepare(uuid4(), _CREDS))
+    db, accounts, core_intents = _repos()
+    user_id = uuid4()
+
+    with pytest.raises(BrokerSessionLimitReachedError):
+        restore_broker_session(
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
+        )
+
+    accounts.mark_login_failed.assert_called_once_with(user_id, "session_pool_full", now=NOW)
+
+
+def test_subscribe_failure_discards_the_candidate_and_keeps_the_old_session() -> None:
+    pool, built = _pool(subscribe_fail_with=QuoteProviderUnavailableError("fubon", "realtime_disconnected"))
+    db, accounts, core_intents = _repos({"2330"})
+    user_id = uuid4()
+    built_old = FakeProvider()
+    pool._sessions[user_id] = built_old  # an existing live session the failed restore must not touch
+
+    with pytest.raises(QuoteProviderUnavailableError):
+        restore_broker_session(
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
+        )
+
+    assert built[0].stopped  # candidate logged out
+    assert live_session(pool, user_id) is built_old
+    db.rollback.assert_called_once()
+    accounts.mark_login_failed.assert_called_once_with(user_id, "provider_unavailable", now=NOW)
+    accounts.mark_login_ok.assert_not_called()
+    assert token_free(pool, user_id)
+
+
+def test_commit_failure_discards_the_candidate_and_records_unknown() -> None:
+    pool, built = _pool()
+    db, accounts, core_intents = _repos()
+    db.commit.side_effect = [RuntimeError("db down"), None]  # second commit records the failure
+    user_id = uuid4()
+
+    with pytest.raises(RuntimeError, match="db down"):
+        restore_broker_session(
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
+        )
+
+    assert built[0].stopped
+    assert live_session(pool, user_id) is None
+    accounts.mark_login_failed.assert_called_once_with(user_id, "unknown", now=NOW)
+
+
+def test_recording_a_failure_that_itself_fails_rolls_the_session_back() -> None:
+    """Review finding (PR #98): a failed `mark_login_failed` flush / commit left the
+    Session in PendingRollbackError, and the reconnect loop shares one Session per
+    tick — every user after the first would then fail on their first query."""
+    pool, _ = _pool(fail_with=_login_error("login_rejected"))
+    db, accounts, core_intents = _repos()
+    db.commit.side_effect = RuntimeError("db down while recording")
+    user_id = uuid4()
+
+    with pytest.raises(BrokerLoginFailedError) as info:  # the broker's answer, not the DB's
+        restore_broker_session(
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
+        )
+
+    assert info.value.code == "login_rejected"
+    db.rollback.assert_called_once()
+    assert token_free(pool, user_id)
+
+
+def test_bind_in_progress_is_not_a_login_failure() -> None:
+    """An admin is re-binding this user right now: leave the row alone, try later."""
+    pool, _ = _pool()
+    db, accounts, core_intents = _repos()
+    user_id = uuid4()
+    claim = pool.claim(user_id)
+
+    with pytest.raises(BrokerBindInProgressError):
+        restore_broker_session(
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
+        )
+
+    accounts.mark_login_failed.assert_not_called()
+    db.commit.assert_not_called()
+    pool.release(claim)
+
+
+def test_user_disabled_between_the_snapshot_and_the_token_is_not_logged_in() -> None:
+    """The caller decided to restore while the user was active; by the time the
+    token is ours the admin has disabled (or unbound) them. The check runs under
+    the token, after prepare: the candidate is logged out, nothing is written."""
+    pool, built = _pool()
+    db, accounts, core_intents = _repos({"2330"})
+    user_id = uuid4()
+
+    with pytest.raises(BrokerAccountNotBoundError):
+        restore_broker_session(
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("disabled"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
+        )
+
+    assert built[0].stopped and built[0].subscribed == set()
+    assert live_session(pool, user_id) is None
+    accounts.mark_login_ok.assert_not_called()
+    accounts.mark_login_failed.assert_not_called()
+    db.commit.assert_not_called()
+    assert token_free(pool, user_id)
+
+
+def test_row_deleted_between_the_snapshot_and_the_token_is_not_logged_in() -> None:
+    pool, built = _pool()
+    db, accounts, core_intents = _repos()
+    accounts.get_by_user_id.return_value = None  # unbound meanwhile
+    user_id = uuid4()
+
+    with pytest.raises(BrokerAccountNotBoundError):
+        restore_broker_session(
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
+        )
+
+    assert built[0].stopped
+    assert live_session(pool, user_id) is None
+
+
+def test_restore_bound_user_skips_a_disabled_user_before_touching_the_broker() -> None:
+    pool, built = _pool()
+    db, accounts, core_intents = _repos()
+    accounts.get_credentials.return_value = _CREDS
+
+    outcome = restore_bound_user(
+        db=db,
+        accounts=accounts,
+        core_intents=core_intents,
+        users=_users("disabled"),
+        pool=pool,
+        user_id=uuid4(),
+        now=NOW,
+    )
+
+    assert outcome == "unbound"
+    assert built == []
+    accounts.get_credentials.assert_not_called()
+    accounts.mark_login_failed.assert_not_called()
+
+
+# --- startup: every binding at once -------------------------------------------------
+
+
+def _session_factory(sessions: list[MagicMock]) -> Callable[[], MagicMock]:
+    def factory() -> MagicMock:
+        db = MagicMock()
+        db.__enter__ = MagicMock(return_value=db)
+        db.__exit__ = MagicMock(return_value=False)
+        sessions.append(db)
+        return db
+
+    return factory
+
+
+def test_restore_all_logs_every_binding_in_at_the_same_time_each_on_its_own_session() -> None:
+    """Ten users × ~3 s each is a 30 s boot when done one after another; parallel
+    keeps it at one login. Each worker needs its own DB session (Session is not
+    thread-safe), so the factory is called once per user plus once for the listing."""
+    barrier = threading.Barrier(2)
+
+    class BarrierFake(FakeProvider):
+        def startup(self) -> None:
+            barrier.wait(timeout=5)  # a sequential loop never has two logins here at once
+            super().startup()
+
+    pool, built = _pool(provider_for=BarrierFake)
+    users = [uuid4(), uuid4()]
+    accounts = MagicMock()
+    accounts.list_all.return_value = [MagicMock(user_id=user_id) for user_id in users]
+    accounts.get_credentials.return_value = _CREDS
+    core_intents = MagicMock()
+    core_intents.active_or_scheduled_symbols_by_owner.return_value = {"2330"}
+    sessions: list[MagicMock] = []
+
+    restore_all_bound_users(
+        session_factory=_session_factory(sessions),
+        accounts_for=lambda _db: accounts,
+        core_intents_for=lambda _db: core_intents,
+        users_for=lambda _db: _users("active"),
+        pool=pool,
+        session_service=TradingSessionService(clock=lambda: NOW),
+        now=NOW,
+    )
+
+    assert live_user_ids(pool) == set(users)
+    assert all(p.subscribed == {"2330"} for p in built)
+    assert len(sessions) == 3  # one to list, one per login
+    for worker_session in sessions[1:]:
+        worker_session.commit.assert_called_once()
+    assert accounts.mark_login_ok.call_count == 2
+
+
+def test_restore_all_logs_in_the_oldest_bindings_first_and_marks_the_overflow_without_trying() -> None:
+    """Review finding (PR #98): with more restorable bindings than
+    BROKER_MAX_SESSIONS, which users got a session was decided by thread scheduling
+    and the rest were told the *broker* was full. Now: the listing order (oldest
+    binding first) is the login order, the overflow is never sent to the broker,
+    and its row names this system's limit."""
+    pool, built = _pool(max_sessions=2)
+    users = [uuid4(), uuid4(), uuid4()]
+    accounts = MagicMock()
+    accounts.list_all.return_value = [MagicMock(user_id=user_id) for user_id in users]
+    accounts.get_credentials.return_value = _CREDS
+    core_intents = MagicMock()
+    core_intents.active_or_scheduled_symbols_by_owner.return_value = set()
+    sessions: list[MagicMock] = []
+
+    restore_all_bound_users(
+        session_factory=_session_factory(sessions),
+        accounts_for=lambda _db: accounts,
+        core_intents_for=lambda _db: core_intents,
+        users_for=lambda _db: _users("active"),
+        pool=pool,
+        session_service=TradingSessionService(clock=lambda: NOW),
+        now=NOW,
+    )
+
+    assert live_user_ids(pool) == set(users[:2])
+    assert len(built) == 2
+    accounts.mark_login_failed.assert_called_once_with(users[2], "session_pool_full", now=NOW)
+    assert len(sessions) == 3  # listing + two logins; the overflow is recorded on the listing session
+
+
+def test_restore_all_does_not_let_a_disabled_user_consume_a_slot() -> None:
+    pool, built = _pool(max_sessions=1)
+    disabled, active = uuid4(), uuid4()
+    accounts = MagicMock()
+    accounts.list_all.return_value = [MagicMock(user_id=disabled), MagicMock(user_id=active)]
+    accounts.get_credentials.return_value = _CREDS
+    core_intents = MagicMock()
+    core_intents.active_or_scheduled_symbols_by_owner.return_value = set()
+    statuses = {disabled: "disabled", active: "active"}
+    users = MagicMock()
+    users.get_by_id.side_effect = lambda user_id: MagicMock(status=statuses[user_id])
+
+    restore_all_bound_users(
+        session_factory=_session_factory([]),
+        accounts_for=lambda _db: accounts,
+        core_intents_for=lambda _db: core_intents,
+        users_for=lambda _db: users,
+        pool=pool,
+        session_service=TradingSessionService(clock=lambda: NOW),
+        now=NOW,
+    )
+
+    assert live_user_ids(pool) == {active}
+    accounts.mark_login_failed.assert_not_called()
+
+
+def test_restore_all_with_nobody_bound_opens_no_worker() -> None:
+    pool, built = _pool()
+    accounts = MagicMock()
+    accounts.list_all.return_value = []
+    sessions: list[MagicMock] = []
+
+    restore_all_bound_users(
+        session_factory=_session_factory(sessions),
+        accounts_for=lambda _db: accounts,
+        core_intents_for=lambda _db: MagicMock(),
+        users_for=lambda _db: _users("active"),
+        pool=pool,
+        session_service=TradingSessionService(clock=lambda: NOW),
+        now=NOW,
+    )
+
+    assert built == [] and len(sessions) == 1
+    accounts.get_credentials.assert_not_called()
+
+
+def test_restore_all_expires_stale_day_intents_before_anyone_subscribes() -> None:
+    """Review finding (PR #98): shared mode ran the lifecycle before reconciling
+    subscriptions; per-user startup did not, so a session subscribed the symbols
+    of day intents from past trading days — and nothing ever unsubscribes them."""
+    pool, _ = _pool()
+    user_id = uuid4()
+    order: list[str] = []
+
+    def expire(*_args: object, **_kwargs: object) -> int:
+        order.append("expire")
+        return 0
+
+    def credentials(_user_id: object) -> FubonCredentials:
+        order.append("login")
+        return _CREDS
+
+    accounts = MagicMock()
+    accounts.list_all.return_value = [MagicMock(user_id=user_id)]
+    accounts.get_credentials.side_effect = credentials
+    core_intents = MagicMock()
+    core_intents.system_expire_day_intents_through.side_effect = expire
+    core_intents.active_or_scheduled_symbols_by_owner.return_value = set()
+
+    restore_all_bound_users(
+        session_factory=_session_factory([]),
+        accounts_for=lambda _db: accounts,
+        core_intents_for=lambda _db: core_intents,
+        users_for=lambda _db: _users("active"),
+        pool=pool,
+        session_service=TradingSessionService(clock=lambda: NOW),
+        now=NOW,
+    )
+
+    assert order == ["expire", "login"]

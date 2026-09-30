@@ -1,14 +1,16 @@
 from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_quote_provider
+from app.api.deps import get_active_user, get_current_user, get_quote_provider
 from app.core.config import get_settings
+from app.core.security import RequestUser
 from app.main import create_app
 from app.services.quote.base import QuoteListener, QuoteSnapshot
 
@@ -119,8 +121,12 @@ def test_current_price_rejects_symbol_before_provider_check(client_factory: Call
 
 def test_current_price_requires_current_price_capability(client_factory: Callable[[], TestClient]) -> None:
     # The default in_memory provider has no `get_current_price`; the gate is the
-    # capability, not the provider name.
-    response = client_factory().get("/quotes/current-price/2330")
+    # capability, not the provider name. Logged in: the provider is the caller's session.
+    principal = RequestUser(user_id=uuid4(), role="user")
+    app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: principal
+    app.dependency_overrides[get_active_user] = lambda: principal
+    response = TestClient(app).get("/quotes/current-price/2330")
 
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     body = response.json()
@@ -129,3 +135,16 @@ def test_current_price_requires_current_price_capability(client_factory: Callabl
         "requiredCapability": "current_price",
         "currentProvider": "in_memory",
     }
+
+
+def test_current_price_requires_a_logged_in_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The provider is the caller's own broker session now, so there is no anonymous
+    quote lookup: without a Bearer token the pool has nobody to look up."""
+    monkeypatch.setenv("QUOTE_PROVIDER", "in_memory")
+    get_settings.cache_clear()
+    client = TestClient(create_app(), raise_server_exceptions=False)
+
+    response = client.get("/quotes/current-price/2330")
+
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert response.json()["error"]["code"] == "UNAUTHENTICATED"

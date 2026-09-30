@@ -4,17 +4,16 @@ Registered conditionally from `main.py` when `LOCAL_MODE=true`. The endpoints
 here are operational tooling for demo / integration tests, not part of the
 user-facing API surface.
 
-Deployment assumption: the FastAPI app is bound to 127.0.0.1 (developer
-machine or Docker compose loopback). No auth gate sits in front of these
-routes — anyone able to reach the port can trigger active intents. If
-LOCAL_MODE is ever exposed beyond loopback (internal demo host, shared
-staging, etc.) this router must be gated behind an auth header before
-deployment. See PR #13 review issue #4.
+Every route here requires a logged-in, active user (router-level
+`get_active_user`): the quote source is the caller's own broker session, and
+anonymous callers must not be able to trigger intents. LOCAL_MODE is still
+expected to stay on loopback; the gate is defence in depth, not a reason to
+expose it.
 """
 
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.api.deps import (
     IntentLifecycleCommandDep,
@@ -24,6 +23,7 @@ from app.api.deps import (
     TradingSessionServiceDep,
     TriggerIntentCommandDep,
     TwapSliceWorkerCommandDep,
+    get_active_user,
 )
 from app.commands.trigger_intent import (
     IntentNotActiveError,
@@ -42,7 +42,7 @@ from app.services.quote.base import QuoteUnavailableError
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_active_user)])
 
 
 @router.post("/evaluate-quotes", response_model=EvaluateQuotesResponse)

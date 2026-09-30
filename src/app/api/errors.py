@@ -43,6 +43,7 @@ from app.domain.broker_account import (
     BrokerLoginFailedError,
     BrokerSessionLimitReachedError,
     BrokerSessionSetupError,
+    BrokerSessionUnavailableError,
 )
 from app.domain.notification import NotificationNotFoundError
 from app.domain.price import InvalidAmountError, InvalidPriceError, InvalidTickSizeError, InvalidTypeError
@@ -190,6 +191,7 @@ class ErrorCode(StrEnum):
     ACCOUNT_NOT_ACTIVE = "ACCOUNT_NOT_ACTIVE"
     # Broker account binding (per-user sessions)
     BROKER_ACCOUNT_NOT_BOUND = "BROKER_ACCOUNT_NOT_BOUND"
+    BROKER_SESSION_UNAVAILABLE = "BROKER_SESSION_UNAVAILABLE"
     BROKER_LOGIN_FAILED = "BROKER_LOGIN_FAILED"
     BROKER_SESSION_LIMIT_REACHED = "BROKER_SESSION_LIMIT_REACHED"
     BROKER_BIND_IN_PROGRESS = "BROKER_BIND_IN_PROGRESS"
@@ -249,6 +251,9 @@ DEFAULT_MESSAGES: dict[ErrorCode, str] = {
     ErrorCode.ACCOUNT_NOT_DISABLED: "帳號未處於停用狀態，無法復權",
     ErrorCode.ACCOUNT_NOT_ACTIVE: "帳號未處於啟用狀態",
     ErrorCode.BROKER_ACCOUNT_NOT_BOUND: "尚未綁定券商帳號，請聯絡管理員",
+    ErrorCode.BROKER_SESSION_UNAVAILABLE: (
+        "券商連線目前無法使用（登入失敗或斷線），請稍後再試；若持續發生請聯絡管理員重新綁定"
+    ),
     ErrorCode.BROKER_LOGIN_FAILED: "券商登入失敗",
     ErrorCode.BROKER_SESSION_LIMIT_REACHED: "券商連線數已達本系統上限",
     ErrorCode.BROKER_BIND_IN_PROGRESS: "此使用者的券商綁定正在處理中，請稍後再試",
@@ -448,6 +453,10 @@ def register_exception_handlers(app: FastAPI) -> None:
             )
         if isinstance(exc, BrokerAccountNotBoundError):
             return build_error_response(request, status.HTTP_409_CONFLICT, ErrorCode.BROKER_ACCOUNT_NOT_BOUND)
+        if isinstance(exc, BrokerSessionUnavailableError):
+            return build_error_response(
+                request, status.HTTP_503_SERVICE_UNAVAILABLE, ErrorCode.BROKER_SESSION_UNAVAILABLE
+            )
         return build_error_response(request, status.HTTP_500_INTERNAL_SERVER_ERROR, ErrorCode.INTERNAL_ERROR)
 
     @app.exception_handler(SymbolError)

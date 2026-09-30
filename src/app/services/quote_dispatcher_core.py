@@ -15,6 +15,7 @@
 
 import logging
 from collections.abc import Callable
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -57,13 +58,16 @@ class TradeIntentCoreDispatcher:
         self._session_service = session_service
         self._kill_switch = kill_switch
 
-    def dispatch(self, snapshot: QuoteSnapshot) -> None:
+    def dispatch(self, snapshot: QuoteSnapshot, *, owner_user_id: UUID | None = None) -> None:
+        """`owner_user_id` is the owner of the broker session that delivered the frame
+        (per-user quote mode; the pool binds it per session). None = shared provider,
+        evaluate every owner's intents on this symbol."""
         try:
-            self._dispatch_inner(snapshot)
+            self._dispatch_inner(snapshot, owner_user_id)
         except Exception:
             logger.exception("core quote dispatch failed on %s", snapshot.symbol)
 
-    def _dispatch_inner(self, snapshot: QuoteSnapshot) -> None:
+    def _dispatch_inner(self, snapshot: QuoteSnapshot, owner_user_id: UUID | None) -> None:
         if self._kill_switch is not None and self._kill_switch.is_halted():
             return
         now = self._session_service.now_taipei()
@@ -73,7 +77,7 @@ class TradeIntentCoreDispatcher:
             # 才會進 system_list_active_by_symbols。若只靠 API 路徑跑，沒人打 API 的日子
             # 開盤後單子會一直停在 scheduled、整天不觸發。
             IntentLifecycleCommand(repo, self._session_service).run()
-            intents = repo.system_list_active_by_symbols([snapshot.symbol])
+            intents = repo.system_list_active_by_symbols([snapshot.symbol], owner_user_id=owner_user_id)
             if not intents:
                 return
 

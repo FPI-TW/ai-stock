@@ -21,9 +21,9 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import (
     get_active_user,
+    get_broker_session_pool,
     get_current_user,
     get_idempotency_key,
-    get_quote_provider,
     get_trading_session_service,
 )
 from app.core.config import get_settings
@@ -33,6 +33,7 @@ from app.db.models.trade_intent_core import TradeIntentTrigger
 from app.domain.trading_session import TradingSessionService
 from app.main import create_app
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
+from app.services.broker_session_pool import BrokerSessionPool
 from app.services.quote.base import QuoteSnapshot, QuoteUnavailableError
 from app.services.quote.in_memory import InMemoryQuoteProvider
 from tests.db_helpers import INTENT_TABLES
@@ -126,7 +127,8 @@ class CurrentPriceOnlyQuoteProvider(InMemoryQuoteProvider):
 def _build_client(quote_provider: InMemoryQuoteProvider, now_utc: datetime) -> Generator[TestClient]:
     session_with_clock = TradingSessionService(clock=lambda: now_utc)
     app = create_app()
-    app.dependency_overrides[get_quote_provider] = lambda: quote_provider
+    pool = BrokerSessionPool(get_settings(), shared=quote_provider)
+    app.dependency_overrides[get_broker_session_pool] = lambda: pool
     app.dependency_overrides[get_trading_session_service] = lambda: session_with_clock
     principal = RequestUser(user_id=OWNER_USER_ID, role="user")
     app.dependency_overrides[get_current_user] = lambda: principal

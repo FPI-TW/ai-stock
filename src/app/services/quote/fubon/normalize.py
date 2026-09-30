@@ -4,7 +4,7 @@ Pure functions only — no `fubon_neo` import — so the contract can be unit-te
 without the SDK. Both the websocket `aggregates` channel and the REST
 `intraday/quote` endpoint share the same dict shape.
 
-Rules (docs/orders/per-user-broker-sessions.md, PR1):
+Rules (docs/vendor/fubon/fubon-neo-verified-behavior.md):
 - `last_price` comes from `lastTrade.price`; `lastPrice` includes pre-open trial
   matching and must not be used for triggers.
 - Top of book is `bids[0]` / `asks[0]`.

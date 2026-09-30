@@ -12,6 +12,7 @@ import pytest
 
 from app.core.config import Settings, get_settings
 from app.domain.broker_account import (
+    BrokerAccountNotBoundError,
     BrokerBindingNotEnabledError,
     BrokerBindInProgressError,
     BrokerLoginFailedError,
@@ -370,3 +371,98 @@ def test_unbind_claim_does_not_reserve_a_slot() -> None:
         pool.prepare(uuid4(), _CREDS)
     pool.stop(x_claim)
     pool.activate(pool.prepare(uuid4(), _CREDS))
+
+
+# --- PR3 readers and the owner-scoped quote listener --------------------------------
+
+
+def test_get_and_require_read_the_live_session() -> None:
+    pool, built = _pool()
+    user_id = uuid4()
+
+    assert pool.per_user
+    assert pool.get(user_id) is None
+    with pytest.raises(BrokerAccountNotBoundError):
+        pool.require(user_id)
+
+    pool.activate(pool.prepare(user_id, _CREDS))
+
+    assert pool.get(user_id) is built[0]
+    assert pool.require(user_id) is built[0]
+    assert pool.live_sessions() == [(user_id, built[0])]
+
+
+def test_shared_mode_serves_the_shared_provider_to_every_user() -> None:
+    shared = FakeProvider()
+    pool = BrokerSessionPool(_settings(), shared=shared)
+
+    assert not pool.per_user
+    assert pool.get(uuid4()) is shared
+    assert pool.require(uuid4()) is shared
+    assert pool.live_sessions() == []  # the shared provider is not a per-user session
+
+
+def _recording_listener() -> tuple[list[tuple[str, UUID | None]], Callable[..., None]]:
+    received: list[tuple[str, UUID | None]] = []
+
+    def listener(snapshot: QuoteSnapshot, *, owner_user_id: UUID | None) -> None:
+        received.append((snapshot.symbol, owner_user_id))
+
+    return received, listener
+
+
+def test_activate_attaches_the_listener_scoped_to_the_sessions_owner() -> None:
+    """Every session pushes the same symbol; the dispatcher must only see the owner
+    whose session delivered the frame."""
+    pool, built = _pool()
+    received, listener = _recording_listener()
+    pool.set_quote_listener(listener)
+    first, second = uuid4(), uuid4()
+
+    pool.activate(pool.prepare(first, _CREDS))
+    pool.activate(pool.prepare(second, _CREDS))
+    for provider in built:
+        for attached in provider.listeners:
+            attached(_snapshot())
+
+    assert received == [("2330", first), ("2330", second)]
+
+
+def test_listener_must_be_set_before_any_session_is_live() -> None:
+    """The lifespan attaches the dispatcher before logging anyone in; a session
+    that went live earlier would silently never be evaluated, so the pool refuses."""
+    pool, built = _pool()
+    pool.activate(pool.prepare(uuid4(), _CREDS))
+    _, listener = _recording_listener()
+
+    with pytest.raises(RuntimeError, match="before any broker session is live"):
+        pool.set_quote_listener(listener)
+    assert built[0].listeners == []
+
+
+def test_shared_mode_listener_dispatches_without_an_owner() -> None:
+    shared = FakeProvider()
+    pool = BrokerSessionPool(_settings(), shared=shared)
+    received, listener = _recording_listener()
+
+    pool.set_quote_listener(listener)
+    for attached in shared.listeners:
+        attached(_snapshot())
+
+    assert received == [("2330", None)]
+
+
+def test_free_slots_counts_live_sessions_and_first_bind_candidates() -> None:
+    pool, _ = _pool(max_sessions=2)
+    assert pool.free_slots() == 2
+    first = uuid4()
+    pool.activate(pool.prepare(first, _CREDS))
+    assert pool.free_slots() == 1
+    rebind = pool.prepare(first, _CREDS)  # replacing needs no extra slot
+    assert pool.free_slots() == 1
+    pool.discard(rebind)
+    pending = pool.prepare(uuid4(), _CREDS)
+    assert pool.free_slots() == 0
+    pool.discard(pending)
+    assert pool.free_slots() == 1
+    assert BrokerSessionPool(_settings(), shared=FakeProvider()).free_slots() == 0  # nothing per-user to fill

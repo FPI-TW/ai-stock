@@ -124,7 +124,7 @@ def test_lifespan_subscribes_active_intents_on_startup(db_session: Session) -> N
 
     app = create_app()
     with TestClient(app):
-        provider = app.state.quote_provider
+        provider = app.state.broker_sessions.shared_provider
         assert isinstance(provider, InMemoryQuoteProvider)
         assert provider.active_subscriptions() == {"2330"}
 
@@ -157,7 +157,7 @@ def test_lifespan_subscribes_core_track_intents_on_startup(db_session: Session) 
 
     app = create_app()
     with TestClient(app):
-        provider = app.state.quote_provider
+        provider = app.state.broker_sessions.shared_provider
         assert provider.active_subscriptions() == {"2330"}
 
 
@@ -167,7 +167,7 @@ def test_lifespan_ignores_terminal_core_track_intents(db_session: Session) -> No
 
     app = create_app()
     with TestClient(app):
-        provider = app.state.quote_provider
+        provider = app.state.broker_sessions.shared_provider
         assert provider.active_subscriptions() == set()
 
 
@@ -178,7 +178,7 @@ def test_lifespan_ignores_terminal_intents(db_session: Session) -> None:
 
     app = create_app()
     with TestClient(app):
-        provider = app.state.quote_provider
+        provider = app.state.broker_sessions.shared_provider
         assert provider.active_subscriptions() == set()
 
 
@@ -195,7 +195,7 @@ def test_cancel_releases_subscription_when_no_peers_remain(db_session: Session) 
     app.dependency_overrides[get_idempotency_key] = lambda: str(uuid4())
 
     with TestClient(app) as client:
-        provider = app.state.quote_provider
+        provider = app.state.broker_sessions.shared_provider
         assert provider.active_subscriptions() == {"2330"}
 
         response = client.post(f"/trade-intents/{intent_id}/cancel")
@@ -217,7 +217,7 @@ def test_cancel_keeps_subscription_when_other_intent_still_active(db_session: Se
     app.dependency_overrides[get_idempotency_key] = lambda: str(uuid4())
 
     with TestClient(app) as client:
-        provider = app.state.quote_provider
+        provider = app.state.broker_sessions.shared_provider
         assert provider.active_subscriptions() == {"2330"}
 
         response = client.post(f"/trade-intents/{intent_a}/cancel")

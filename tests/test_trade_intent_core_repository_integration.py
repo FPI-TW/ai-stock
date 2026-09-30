@@ -268,6 +268,19 @@ def test_system_list_active(repo: TradeIntentCoreRepository) -> None:
 
 
 @pytest.mark.integration
+def test_system_list_active_by_symbols_scoped_to_owner(repo: TradeIntentCoreRepository) -> None:
+    """per-user 行情：A 的 session 推價時只評估 A 的單；owner_user_id=None 維持 owner-agnostic。"""
+    owner_a, owner_b = uuid4(), uuid4()
+    a_id = _create_price_alert(repo, owner_user_id=owner_a, target_price="600.0000")
+    _create_price_alert(repo, owner_user_id=owner_b, target_price="610.0000")
+
+    scoped = repo.system_list_active_by_symbols(["2330"], owner_user_id=owner_a)
+    assert [r.id for r in scoped] == [a_id]
+    assert len(repo.system_list_active_by_symbols(["2330"], owner_user_id=None)) == 2
+    assert repo.system_list_active_by_symbols(["2330"], owner_user_id=uuid4()) == []
+
+
+@pytest.mark.integration
 def test_system_update_trailing_baseline(repo: TradeIntentCoreRepository) -> None:
     owner = uuid4()
     ensure_user(repo._db, owner)
