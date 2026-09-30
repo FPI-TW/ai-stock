@@ -34,7 +34,6 @@ from app.domain.broker_account import (
     BrokerAccountData,
     BrokerAccountError,
     BrokerAccountNotBoundError,
-    BrokerBindInProgressError,
     BrokerCredentialKeyError,
     BrokerLoginFailedError,
     BrokerLoginFailureCode,
@@ -306,8 +305,6 @@ def restore_broker_session(
     """
     try:
         candidate = pool.prepare(user_id, credentials)
-    except BrokerBindInProgressError:
-        raise
     except BrokerLoginFailedError as exc:
         _record_login_failure(db, accounts, user_id, exc.code, now)
         raise
