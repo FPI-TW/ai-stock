@@ -21,7 +21,7 @@ from app.commands.trade_intent_core import (
     IntentLimits,
 )
 from app.core.config import get_settings
-from app.domain.broker_account import BrokerAccountNotBoundError
+from app.domain.broker_account import BrokerAccountNotBoundError, BrokerSessionUnavailableError
 from app.domain.trade_intent import SymbolIntentLimitExceededError, UserIntentLimitExceededError
 from app.domain.trading_session import TradingSessionService
 from app.services.broker_session_pool import BrokerSessionPool
@@ -40,8 +40,18 @@ def _per_user_pool() -> BrokerSessionPool:
     return BrokerSessionPool(get_settings(), shared=None, provider_factory=lambda _creds: MagicMock())
 
 
+def _accounts(bound: bool) -> MagicMock:
+    accounts = MagicMock()
+    accounts.get_by_user_id.return_value = MagicMock() if bound else None
+    return accounts
+
+
 def _command(
-    repo: MagicMock, *, limits: IntentLimits | None, pool: BrokerSessionPool | None = None
+    repo: MagicMock,
+    *,
+    limits: IntentLimits | None,
+    pool: BrokerSessionPool | None = None,
+    accounts: MagicMock | None = None,
 ) -> CreateTradeIntentCommand:
     symbol_service = MagicMock()
     symbol_service.get_tradable_symbol.return_value = MagicMock(instrument_type="stock")
@@ -52,6 +62,7 @@ def _command(
         TradingSessionService(clock=lambda: MONDAY),
         repo,
         pool or _shared_pool(quote_provider),
+        accounts or _accounts(bound=False),
         MagicMock(),  # evaluator（因無報價而不會被呼叫）
         MagicMock(),  # db
         None,  # kill_switch
@@ -168,6 +179,7 @@ def test_provider_error_from_get_quotes_does_not_block_create() -> None:
         TradingSessionService(clock=lambda: MONDAY),
         repo,
         _shared_pool(quote_provider),
+        _accounts(bound=False),
         MagicMock(),  # evaluator（報價取不到 → 不會被呼叫）
         db,
         None,
@@ -199,6 +211,18 @@ def test_unbound_owner_is_refused_after_limits_and_before_write() -> None:
     repo.count_active_or_scheduled_for_user.return_value = 200
     with pytest.raises(UserIntentLimitExceededError):
         command.execute(_input())
+
+
+def test_bound_owner_whose_login_failed_is_told_the_session_is_unavailable_not_unbound() -> None:
+    """Review finding (PR #98): a stored binding whose login failed (or dropped) has
+    no live session; answering "not bound" contradicts GET /me/broker-account
+    (bound, status=login_failed) and sends the user to the wrong fix."""
+    repo = MagicMock()
+    command = _command(repo, limits=None, pool=_per_user_pool(), accounts=_accounts(bound=True))
+
+    with pytest.raises(BrokerSessionUnavailableError):
+        command.execute(_input())
+    repo.create.assert_not_called()
 
 
 def test_create_subscribes_on_the_owners_own_session() -> None:

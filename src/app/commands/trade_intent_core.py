@@ -17,6 +17,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.commands.broker_account import require_broker_session
 from app.commands.trigger_intent_core import (
     TriggerCoreInput,
     apply_trailing_baseline_update,
@@ -33,6 +34,7 @@ from app.domain.trade_intent import (
 )
 from app.domain.trading_session import TradingSessionService
 from app.domain.trigger_event import quote_snapshot_to_jsonb
+from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.services.broker_session_pool import BrokerSessionPool
 from app.services.kill_switch import KillSwitchProvider
@@ -92,8 +94,9 @@ class CreateTradeIntentCommand:
 
     報價取不到不擋建單（§15）：委託以 active 落地，之後由 robot #2 補觸發。
 
-    行情來源是 `pool.require(owner)`——per-user 模式取本人的券商 session（未綁定 → 409
-    `BROKER_ACCOUNT_NOT_BOUND`，在限額之後、寫入之前擋下）；shared 模式為共用 provider。
+    行情來源是 `require_broker_session(pool, accounts, owner)`——per-user 模式取本人的券商
+    session（未綁定 → 409 `BROKER_ACCOUNT_NOT_BOUND`；已綁定但登入失敗／斷線 → 503
+    `BROKER_SESSION_UNAVAILABLE`；都在限額之後、寫入之前擋下）；shared 模式為共用 provider。
     注入 pool 而非 provider，因為 Telegram 路徑沒有 request user，owner 在 command 內才解析。
     """
 
@@ -103,6 +106,7 @@ class CreateTradeIntentCommand:
         session_service: TradingSessionService,
         intent_repo: TradeIntentCoreRepository,
         pool: BrokerSessionPool,
+        accounts: BrokerAccountRepository,
         evaluator: QuoteEvaluator,
         db: Session,
         kill_switch: KillSwitchProvider | None = None,
@@ -112,6 +116,7 @@ class CreateTradeIntentCommand:
         self._session_service = session_service
         self._intent_repo = intent_repo
         self._pool = pool
+        self._accounts = accounts
         self._evaluator = evaluator
         self._db = db
         self._kill_switch = kill_switch
@@ -167,7 +172,7 @@ class CreateTradeIntentCommand:
                     )
 
             # 5. 本人的行情 session；沒有就沒有行情，單子永遠不會觸發 → 不建
-            quote_provider = self._pool.require(inp.owner_user_id)
+            quote_provider = require_broker_session(self._pool, self._accounts, inp.owner_user_id)
 
             # 6. 寫入（核心 + 衛星，同 tx）
             intent_id = self._intent_repo.create(

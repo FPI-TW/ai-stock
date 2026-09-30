@@ -84,7 +84,13 @@ class BrokerAccountError(Exception):
 
 
 class BrokerAccountNotBoundError(BrokerAccountError):
-    """The user has no broker session (per-user mode) — cannot watch quotes for them."""
+    """The user has no broker binding at all (per-user mode) — the admin must bind them."""
+
+
+class BrokerSessionUnavailableError(BrokerAccountError):
+    """Bound, but no live session right now: the stored login failed at boot, was
+    refused, or dropped and the repair loop has not brought it back yet. Retryable;
+    `GET /me/broker-account` shows why."""
 
 
 class BrokerLoginFailedError(BrokerAccountError):

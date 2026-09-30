@@ -16,7 +16,7 @@ from app.commands.account import (
     ResendInvitationCommand,
 )
 from app.commands.auth import LoginCommand, LogoutCommand, RefreshCommand
-from app.commands.broker_account import BindBrokerAccountCommand, UnbindBrokerAccountCommand
+from app.commands.broker_account import BindBrokerAccountCommand, UnbindBrokerAccountCommand, require_broker_session
 from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.commands.kill_switch import SetKillSwitchCommand
 from app.commands.notification import MarkNotificationReadCommand
@@ -216,14 +216,24 @@ def get_broker_session_pool(request: Request) -> BrokerSessionPool:
 BrokerSessionPoolDep = Annotated[BrokerSessionPool, Depends(get_broker_session_pool)]
 
 
-def get_quote_provider(user: ActiveUserDep, pool: BrokerSessionPoolDep) -> QuoteProvider:
+def get_broker_account_repository(db: DatabaseDep, settings: SettingsDep) -> BrokerAccountRepository:
+    return BrokerAccountRepository(db, encryption_key=settings.broker_credential_key)
+
+
+BrokerAccountRepoDep = Annotated[BrokerAccountRepository, Depends(get_broker_account_repository)]
+
+
+def get_quote_provider(
+    user: ActiveUserDep, pool: BrokerSessionPoolDep, accounts: BrokerAccountRepoDep
+) -> QuoteProvider:
     """The caller's own quote source: their broker session in per-user mode (409
-    `BROKER_ACCOUNT_NOT_BOUND` when they have none), the shared provider otherwise.
-    Endpoints on it (`current-price`, `/dev/*`, TWAP) therefore need a logged-in user.
-    Tests substitute this dep or `get_broker_session_pool` via `app.dependency_overrides`.
+    `BROKER_ACCOUNT_NOT_BOUND` without a binding, 503 `BROKER_SESSION_UNAVAILABLE`
+    when bound but not logged in), the shared provider otherwise. Endpoints on it
+    (`current-price`, `/dev/*`, TWAP) therefore need a logged-in user. Tests
+    substitute this dep or `get_broker_session_pool` via `app.dependency_overrides`.
     """
 
-    return pool.require(user.user_id)
+    return require_broker_session(pool, accounts, user.user_id)
 
 
 QuoteProviderDep = Annotated[QuoteProvider, Depends(get_quote_provider)]
@@ -316,6 +326,7 @@ def get_create_trade_intent_command(
     session_service: TradingSessionServiceDep,
     intent_repo: TradeIntentCoreRepoDep,
     pool: BrokerSessionPoolDep,
+    accounts: BrokerAccountRepoDep,
     evaluator: QuoteEvaluatorDep,
     db: DatabaseDep,
     kill_switch: KillSwitchProviderDep,
@@ -328,6 +339,7 @@ def get_create_trade_intent_command(
         session_service,
         intent_repo,
         pool,
+        accounts,
         evaluator,
         db,
         kill_switch,
@@ -471,13 +483,6 @@ def get_audit_writer(db: DatabaseDep) -> AuditEventWriter:
 
 
 AuditWriterDep = Annotated[AuditEventWriter, Depends(get_audit_writer)]
-
-
-def get_broker_account_repository(db: DatabaseDep, settings: SettingsDep) -> BrokerAccountRepository:
-    return BrokerAccountRepository(db, encryption_key=settings.broker_credential_key)
-
-
-BrokerAccountRepoDep = Annotated[BrokerAccountRepository, Depends(get_broker_account_repository)]
 
 
 def get_bind_broker_account_command(

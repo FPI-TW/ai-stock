@@ -40,6 +40,7 @@ from app.domain.broker_account import (
     BrokerLoginFailureCode,
     BrokerSessionLimitReachedError,
     BrokerSessionSetupError,
+    BrokerSessionUnavailableError,
     FubonCredentials,
 )
 from app.domain.trading_session import TradingSessionService
@@ -237,6 +238,20 @@ class UnbindBrokerAccountCommand:
                     logger.warning("rollback after failed unbind raised %s user_id=%s", type(exc).__name__, user.id)
         # Row is gone; the session goes last so a DB failure never leaves a rowless live session.
         self._pool.stop(claim)
+
+
+def require_broker_session(pool: BrokerSessionPool, accounts: BrokerAccountRepository, user_id: UUID) -> QuoteProvider:
+    """The user's quote source, or the error that names the right fix: no binding
+    row -> `BrokerAccountNotBoundError` (409, admin binds); a row but no live
+    session -> `BrokerSessionUnavailableError` (503, wait for the repair loop or
+    re-bind; `GET /me/broker-account` shows the failure). Shared mode always has
+    a provider."""
+    provider = pool.get(user_id)
+    if provider is not None:
+        return provider
+    if accounts.get_by_user_id(user_id) is None:
+        raise BrokerAccountNotBoundError()
+    raise BrokerSessionUnavailableError()
 
 
 def _record_login_failure(

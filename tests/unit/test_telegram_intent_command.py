@@ -17,7 +17,7 @@ from app.commands.telegram_intent import (
 )
 from app.commands.trade_intent_core import CreateTradeIntentInput
 from app.core.config import Settings
-from app.domain.broker_account import BrokerAccountNotBoundError
+from app.domain.broker_account import BrokerAccountNotBoundError, BrokerSessionUnavailableError
 from app.domain.telegram_intent import TelegramIntentDecision, TelegramIntentInteractionData, TelegramIntentLlmError
 
 OWNER_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -383,6 +383,29 @@ def test_confirm_without_a_broker_binding_tells_the_user_and_keeps_the_draft() -
     # Not confirmed and not cancelled: the create command's rollback also undoes the
     # `confirming` claim (same request session), so the real row is back to pending.
     assert interactions.pending.status not in {"confirmed", "cancelled", "expired"}
+    assert interactions.confirmed is False
+
+
+def test_confirm_while_the_broker_session_is_down_says_so_and_keeps_the_draft() -> None:
+    pending = _interaction()
+    interactions = _Interactions(pending)
+
+    class _Down(_Create):
+        def execute(self, inp: object) -> SimpleNamespace:
+            raise BrokerSessionUnavailableError()
+
+    command = _command(interactions, TelegramIntentDecision(decision="unsupported"), _Down(interactions))
+
+    reply = command.handle_callback(
+        HandleTelegramCallbackInput(
+            chat_id="configured-group",
+            data=f"tg_intent:confirm:{pending.id}",
+            message_id=pending.bot_message_id,
+        )
+    )
+
+    assert reply is not None
+    assert reply.text == "券商連線目前無法使用，請稍後再試；若持續發生請聯絡管理員重新綁定。"
     assert interactions.confirmed is False
 
 

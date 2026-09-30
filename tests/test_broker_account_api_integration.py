@@ -827,6 +827,16 @@ def test_lifespan_logs_every_bound_user_in_and_one_failure_does_not_stop_the_res
         assert bad_row is not None and bad_row.status == "login_failed"
         assert bad_row.last_error == "券商拒絕登入，請確認身分證字號、密碼與憑證"
         assert "B222222222" not in (bad_row.last_error or "")
+        # Bound but no session: "unavailable", not "not bound" (which would contradict /me).
+        refused = harness.user_client(bad).post(
+            "/trade-intents",
+            json={"symbol": "2330", "strategy": "buy_price_alert", "quantityLots": 1, "targetPrice": "100"},
+            headers={"Idempotency-Key": str(uuid4())},
+        )
+        assert refused.status_code == 503, refused.text
+        assert refused.json()["error"]["code"] == "BROKER_SESSION_UNAVAILABLE"
+        assert harness.user_client(bad).get("/quotes/current-price/2330").status_code == 503
+        assert harness.user_client(bad).get("/me/broker-account").json()["status"] == "login_failed"
 
     assert all(p.stopped for p in harness.built if p.started)
 

@@ -58,7 +58,7 @@ Access token 過期時以 refresh 取得新 session。refresh token rotation 偵
 ### Symbols 與行情
 
 - `GET /symbols?q=&limit=`、`GET /symbols/{symbol}`
-- `GET /quotes/current-price/{symbol}`：測試查價能力，走呼叫者本人的行情 session（per-user 模式未綁定券商回 409 `BROKER_ACCOUNT_NOT_BOUND`），需該 provider 支援即時查價（`shioaji_demo`、`fubon`），否則回 503 `QUOTE_PROVIDER_UNAVAILABLE`；`source` 由 provider 自報；`quoteTime` 是行情 frame 時間；`lastTradeTime` 是最後成交時間，語意依 provider 而定——富邦回報真實成交時間（尚無成交時為 `null`），永豐的 REST 快照沒有成交時間欄位，填的是快照自身時間、不會是 `null`。不是通用市場資料 API。
+- `GET /quotes/current-price/{symbol}`：測試查價能力，走呼叫者本人的行情 session（per-user 模式未綁定券商回 409 `BROKER_ACCOUNT_NOT_BOUND`，已綁定但沒有 session 回 503 `BROKER_SESSION_UNAVAILABLE`），需該 provider 支援即時查價（`shioaji_demo`、`fubon`），否則回 503 `QUOTE_PROVIDER_UNAVAILABLE`；`source` 由 provider 自報；`quoteTime` 是行情 frame 時間；`lastTradeTime` 是最後成交時間，語意依 provider 而定——富邦回報真實成交時間（尚無成交時為 `null`），永豐的 REST 快照沒有成交時間欄位，填的是快照自身時間、不會是 `null`。不是通用市場資料 API。
 
 ### Trade intents
 
@@ -75,7 +75,7 @@ Access token 過期時以 refresh 取得新 session。refresh token rotation 偵
 
 新 client 應使用 per-strategy typed endpoints；legacy `POST /trade-intents` 目前仍可用，但不應成為新整合的預設。
 
-所有建單（含 TWAP confirm）的行情都來自 owner 本人的券商 session：`QUOTE_PROVIDER=fubon` 且尚未綁定券商時回 409 `BROKER_ACCOUNT_NOT_BOUND`，不落列；限額檢查先於綁定檢查。取消時只在本人沒有其他同標的有效委託才退訂本人的 session。
+所有建單（含 TWAP confirm）的行情都來自 owner 本人的券商 session：`QUOTE_PROVIDER=fubon` 且尚未綁定券商時回 409 `BROKER_ACCOUNT_NOT_BOUND`；已綁定但目前沒有 session（存放的金鑰登入失敗、或斷線尚未接回，`GET /me/broker-account` 會顯示原因）回 503 `BROKER_SESSION_UNAVAILABLE`，可稍後重試；兩者都不落列，限額檢查先於這兩項。取消時只在本人沒有其他同標的有效委託才退訂本人的 session。
 
 ### Notifications
 
@@ -86,7 +86,7 @@ Access token 過期時以 refresh 取得新 session。refresh token rotation 偵
 
 ### Telegram
 
-- `POST /telegram/webhook`：僅供 Telegram 呼叫，驗證 `X-Telegram-Bot-Api-Secret-Token` 與 chat allowlist。owner（`TELEGRAM_OWNER_EMAIL`）尚未綁定券商時，確認建單回覆「尚未綁定券商帳號，請聯絡管理員綁定後再確認。」，草稿維持待確認，綁定後同一顆按鈕可再按。
+- `POST /telegram/webhook`：僅供 Telegram 呼叫，驗證 `X-Telegram-Bot-Api-Secret-Token` 與 chat allowlist。owner（`TELEGRAM_OWNER_EMAIL`）尚未綁定券商時，確認建單回覆「尚未綁定券商帳號，請聯絡管理員綁定後再確認。」；已綁定但 session 不可用時回覆「券商連線目前無法使用，請稍後再試；若持續發生請聯絡管理員重新綁定。」；兩者草稿都維持待確認，同一顆按鈕可再按。
 
 群組文字只支援 `limit_buy_order`、`limit_sell_order`、`market_buy_order`、`market_sell_order`。LLM 產生 draft 後，使用者以 inline button 確認或取消；確認會呼叫相同的 core create command。
 
