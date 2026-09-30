@@ -169,7 +169,12 @@ class FubonQuoteProvider(QuoteProvider):
             self._require_started()
             if len(self._subscribed) >= self._max:
                 raise FubonSubscriptionLimitExceeded(symbol=symbol, current=len(self._subscribed), limit=self._max)
-            if not self._connecting:  # else reconnect_realtime() resends the whole set
+            # A socket that is down (the broker closes it after ~14:05; a mid-session
+            # drop until the repair loop's next tick) is the same case as one still
+            # connecting: record the symbol, `reconnect_realtime()` sends the whole
+            # owned set. Sending now would raise and turn an after-hours create for
+            # a scheduled intent into a 503.
+            if not self._connecting and self._client.realtime_connected:
                 self._client.subscribe(symbol)
             self._subscribed.add(symbol)
 
@@ -177,10 +182,11 @@ class FubonQuoteProvider(QuoteProvider):
         with self._lock:
             if symbol not in self._subscribed:
                 return
-            try:
-                self._client.unsubscribe(symbol)
-            except QuoteProviderError:
-                logger.warning("fubon unsubscribe failed for %s; clearing local state anyway", symbol)
+            if self._client.realtime_connected:
+                try:
+                    self._client.unsubscribe(symbol)
+                except QuoteProviderError:
+                    logger.warning("fubon unsubscribe failed for %s; clearing local state anyway", symbol)
             self._subscribed.discard(symbol)
             self._snapshots.pop(symbol, None)
 

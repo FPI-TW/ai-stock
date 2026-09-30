@@ -379,6 +379,39 @@ def test_reconnect_realtime_reconnects_then_resubscribes_owned_set() -> None:
     assert provider.realtime_connected is True
 
 
+def test_subscribe_while_realtime_is_down_is_recorded_and_sent_on_reconnect() -> None:
+    """Review finding (PR #98): the broker closes the market-data socket ~14:05 and
+    the repair loop only runs on trading days 08:30–13:35, so from the close until
+    the next open every create for a new symbol used to hit a dead socket and
+    answer 503. A closed socket is the same situation as "connecting": remember
+    the symbol, let `reconnect_realtime()` send the whole owned set."""
+    provider, client = _started()
+    provider.subscribe("2330")
+    client.realtime_connected = False
+    client.calls.clear()
+
+    provider.subscribe("2317")  # after-hours create for a scheduled intent: must not raise
+
+    assert provider.active_subscriptions() == {"2330", "2317"}
+    assert client.calls == []  # nothing sent to a closed socket
+
+    provider.reconnect_realtime()
+
+    assert client.calls == ["connect", "sub:2317", "sub:2330"]
+
+
+def test_unsubscribe_while_realtime_is_down_only_clears_local_state() -> None:
+    provider, client = _started()
+    provider.subscribe("2330")
+    client.realtime_connected = False
+    client.calls.clear()
+
+    provider.unsubscribe("2330")
+
+    assert provider.active_subscriptions() == set()
+    assert client.calls == []
+
+
 def test_get_quotes_refuses_cache_while_realtime_is_disconnected() -> None:
     # The book window is 10 minutes wide, so a cached snapshot outlives a short
     # disconnect. While the socket is down a standing book and one that moved
