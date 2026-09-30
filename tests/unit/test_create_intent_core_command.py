@@ -238,6 +238,23 @@ def test_cancel_in_per_user_mode_unsubscribes_when_the_owner_has_no_other_intent
     cast(MagicMock, candidate.provider).unsubscribe.assert_called_once_with("2330")
 
 
+def test_cancel_in_per_user_mode_keeps_the_subscription_while_the_owner_has_another_intent_on_it() -> None:
+    """Two 2330 intents; cancelling the first leaves one — the owner's session must
+    keep the symbol. The count is taken after the cancel is committed, so it is
+    exactly "what is still open", not "what was open"."""
+    pool = _per_user_pool()
+    owner = uuid4()
+    candidate = pool.prepare(owner, MagicMock())
+    pool.activate(candidate)
+    repo = MagicMock()
+    repo.cancel.return_value = MagicMock(symbol="2330", id=uuid4())
+    repo.count_active_or_scheduled_for_user_symbol.return_value = 1
+
+    _cancel(repo, pool).execute(CancelTradeIntentInput(intent_id=uuid4(), owner_user_id=owner))
+
+    cast(MagicMock, candidate.provider).unsubscribe.assert_not_called()
+
+
 def test_cancel_in_shared_mode_keeps_the_subscription_while_anyone_still_needs_it() -> None:
     provider = MagicMock()
     repo = MagicMock()

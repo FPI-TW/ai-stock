@@ -872,3 +872,32 @@ def test_create_intent_needs_the_callers_own_session(engine: Engine) -> None:
     with Session(engine) as session:
         owners = session.execute(select(TradeIntentCore.owner_user_id)).scalars().all()
     assert unbound not in owners
+
+
+@pytest.mark.integration
+def test_unsubscribe_only_when_the_owners_last_intent_on_the_symbol_is_gone(engine: Engine) -> None:
+    """Two open 2330 intents on one user's own session: cancelling the first keeps
+    the subscription, cancelling the second releases it."""
+    harness = _Harness(engine)
+    user_id = _seed_user(engine)
+    assert harness.admin_client().put(f"/admin/users/{user_id}/broker-account", json=_bind_body()).status_code == 200
+    client = harness.user_client(user_id)
+
+    def create(price: str) -> str:
+        response = client.post(
+            "/trade-intents",
+            json={"symbol": "2330", "strategy": "buy_price_alert", "quantityLots": 1, "targetPrice": price},
+            headers={"Idempotency-Key": str(uuid4())},
+        )
+        assert response.status_code == 201, response.text
+        return str(response.json()["data"]["id"])
+
+    first, second = create("100"), create("101")
+    provider = harness.built[0]
+    assert provider.active_subscriptions() == {"2330"}
+
+    assert client.post(f"/trade-intents/{first}/cancel", headers={"Idempotency-Key": str(uuid4())}).status_code == 200
+    assert provider.active_subscriptions() == {"2330"}  # the second intent still needs it
+
+    assert client.post(f"/trade-intents/{second}/cancel", headers={"Idempotency-Key": str(uuid4())}).status_code == 200
+    assert provider.active_subscriptions() == set()
