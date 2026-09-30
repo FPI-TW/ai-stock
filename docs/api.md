@@ -4,7 +4,7 @@ API 預設 base URL 為 `http://127.0.0.1:8100`。完整 request／response sche
 
 ## 共通契約
 
-- 除登入、邀請接受、密碼重設、health、symbol 查詢與 Telegram webhook 外，業務 API 需帶 `Authorization: Bearer <accessToken>`。行情來源是呼叫者本人的券商 session，所以 `GET /quotes/current-price` 與 `/dev/*` 也需登入。
+- 除登入、邀請接受、密碼重設、health、symbol 查詢與 Telegram webhook 外，業務 API 需帶 `Authorization: Bearer <accessToken>`。行情來源是呼叫者本人的券商 session，所以 `GET /quotes/current-price` 也需登入；`/dev/*` 整個 router 明確要求已登入且啟用的使用者。
 - mutating intent API 需帶 `Idempotency-Key`；相同 key + 相同 payload 重放原結果，相同 key + 不同 payload 回衝突。
 - response 使用 camelCase；列表採 cursor pagination，常用欄位為 `cursor`、`pageSize` 與 `nextCursor`。
 - 每個 response 都會回傳設定指定的 request ID header，預設 `X-Request-Id`。
