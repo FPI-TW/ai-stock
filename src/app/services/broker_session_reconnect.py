@@ -46,6 +46,7 @@ from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.repositories.user_repository import UserRepository
 from app.services.broker_session_pool import BrokerSessionPool
+from app.services.quote.fubon.provider import FubonQuoteProvider
 
 logger = logging.getLogger(__name__)
 
@@ -100,12 +101,15 @@ class BrokerSessionReconnectLoop:
             users = self._users_for(db)
             for account in accounts.list_all():
                 provider = live.get(account.user_id)
-                # Duck-typed: only the Fubon provider has these flags; a provider
-                # without them (test fakes, a future broker) is treated as healthy.
-                if provider is not None and getattr(provider, "login_alive", True):
-                    if not getattr(provider, "realtime_connected", True):
+                # Per-user mode holds exactly one provider type (product.md: one
+                # broker, use the concrete client); anything else is a wiring bug.
+                if provider is not None and not isinstance(provider, FubonQuoteProvider):
+                    logger.error("cannot repair %s user_id=%s", type(provider).__name__, account.user_id)
+                    continue
+                if provider is not None and provider.login_alive:
+                    if not provider.realtime_connected:
                         try:
-                            provider.reconnect_realtime()  # type: ignore[attr-defined]
+                            provider.reconnect_realtime()
                         except Exception as exc:
                             logger.warning(
                                 "realtime reconnect failed %s user_id=%s", type(exc).__name__, account.user_id

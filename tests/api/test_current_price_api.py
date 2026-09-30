@@ -122,11 +122,11 @@ def test_current_price_rejects_symbol_before_provider_check(client_factory: Call
 def test_current_price_requires_current_price_capability(client_factory: Callable[[], TestClient]) -> None:
     # The default in_memory provider has no `get_current_price`; the gate is the
     # capability, not the provider name. Logged in: the provider is the caller's session.
-    client = client_factory()
     principal = RequestUser(user_id=uuid4(), role="user")
-    client.app.dependency_overrides[get_current_user] = lambda: principal  # type: ignore[attr-defined]
-    client.app.dependency_overrides[get_active_user] = lambda: principal  # type: ignore[attr-defined]
-    response = client.get("/quotes/current-price/2330")
+    app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: principal
+    app.dependency_overrides[get_active_user] = lambda: principal
+    response = TestClient(app).get("/quotes/current-price/2330")
 
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     body = response.json()

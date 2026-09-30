@@ -5,7 +5,7 @@ depend on. Encryption / upsert / delete are covered by the bind API tests."""
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
@@ -61,7 +61,7 @@ def db(engine: Engine) -> Generator[Session]:
         session.close()
 
 
-def _bind(db: Session, repo: BrokerAccountRepository) -> "uuid4":  # type: ignore[valid-type]
+def _bind(db: Session, repo: BrokerAccountRepository) -> UUID:
     user_id = ensure_user(db, uuid4())
     repo.upsert(
         user_id,

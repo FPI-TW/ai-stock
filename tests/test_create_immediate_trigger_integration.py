@@ -127,7 +127,7 @@ class CurrentPriceOnlyQuoteProvider(InMemoryQuoteProvider):
 def _build_client(quote_provider: InMemoryQuoteProvider, now_utc: datetime) -> Generator[TestClient]:
     session_with_clock = TradingSessionService(clock=lambda: now_utc)
     app = create_app()
-    pool = BrokerSessionPool(get_settings(), shared=quote_provider)  # type: ignore[arg-type]
+    pool = BrokerSessionPool(get_settings(), shared=quote_provider)
     app.dependency_overrides[get_broker_session_pool] = lambda: pool
     app.dependency_overrides[get_trading_session_service] = lambda: session_with_clock
     principal = RequestUser(user_id=OWNER_USER_ID, role="user")
