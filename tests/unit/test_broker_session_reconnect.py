@@ -236,6 +236,32 @@ def test_relogin_is_refused_while_the_admin_holds_the_users_token() -> None:
     pool.release(claim)
 
 
+def test_one_users_failed_failure_record_does_not_stop_the_others_in_the_tick() -> None:
+    """Two lost logins share the tick's Session. Recording the first user's login
+    failure blows up on commit; the Session is rolled back so the second user is
+    still restored in the same tick."""
+    # live A, live B, A's candidate fails, B's candidate succeeds
+    pool, clients = _pool([None, None, _login_error("provider_unavailable"), None])
+    user_a, user_b = uuid4(), uuid4()
+    pool.activate(pool.prepare(user_a, _CREDS))
+    pool.activate(pool.prepare(user_b, _CREDS))
+    clients[0].login_alive = False
+    clients[1].login_alive = False
+    db = MagicMock()
+    db.__enter__ = MagicMock(return_value=db)
+    db.__exit__ = MagicMock(return_value=False)
+    db.commit.side_effect = [RuntimeError("db down while recording"), None]
+    loop, accounts = _loop(
+        pool, accounts_rows=[_account(user_a), _account(user_b)], session_factory=MagicMock(return_value=db)
+    )
+
+    loop.run_once()
+
+    db.rollback.assert_called_once()
+    assert clients[3].login_alive  # B got its fresh session
+    accounts.mark_login_ok.assert_called_once_with(user_b, now=IN_SESSION.astimezone(TAIPEI))
+
+
 def test_tick_survives_a_broken_database() -> None:
     pool, clients, user_id = _live()
     clients[0].login_alive = False

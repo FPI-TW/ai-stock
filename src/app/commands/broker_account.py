@@ -241,12 +241,17 @@ def _record_login_failure(
     db: Session, accounts: BrokerAccountRepository, user_id: UUID, code: BrokerLoginFailureCode, now: datetime
 ) -> None:
     """Best effort: the row is what the admin sees, but a DB that cannot take the
-    write must not hide the original failure from the caller."""
+    write must not hide the original failure from the caller. The session is
+    rolled back so it stays usable — the reconnect loop shares one per tick."""
     try:
         accounts.mark_login_failed(user_id, code, now=now)
         db.commit()
     except Exception as exc:
         logger.warning("could not record broker login failure %s user_id=%s", type(exc).__name__, user_id)
+        try:
+            db.rollback()
+        except Exception as rollback_exc:
+            logger.warning("rollback after failed record raised %s user_id=%s", type(rollback_exc).__name__, user_id)
 
 
 def _restorable(users: UserRepository, accounts: BrokerAccountRepository, user_id: UUID) -> bool:

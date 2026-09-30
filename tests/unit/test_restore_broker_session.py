@@ -201,6 +201,32 @@ def test_commit_failure_discards_the_candidate_and_records_unknown() -> None:
     accounts.mark_login_failed.assert_called_once_with(user_id, "unknown", now=NOW)
 
 
+def test_recording_a_failure_that_itself_fails_rolls_the_session_back() -> None:
+    """Review finding (PR #98): a failed `mark_login_failed` flush / commit left the
+    Session in PendingRollbackError, and the reconnect loop shares one Session per
+    tick — every user after the first would then fail on their first query."""
+    pool, _ = _pool(fail_with=_login_error("login_rejected"))
+    db, accounts, core_intents = _repos()
+    db.commit.side_effect = RuntimeError("db down while recording")
+    user_id = uuid4()
+
+    with pytest.raises(BrokerLoginFailedError) as info:  # the broker's answer, not the DB's
+        restore_broker_session(
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
+        )
+
+    assert info.value.code == "login_rejected"
+    db.rollback.assert_called_once()
+    assert token_free(pool, user_id)
+
+
 def test_bind_in_progress_is_not_a_login_failure() -> None:
     """An admin is re-binding this user right now: leave the row alone, try later."""
     pool, _ = _pool()
