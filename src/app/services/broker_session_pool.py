@@ -177,14 +177,15 @@ class BrokerSessionPool:
         )
 
     def set_quote_listener(self, listener: OwnerScopedQuoteListener) -> None:
-        """Attach the dispatcher to every session, present and future, scoped to
-        the session's owner. Called once by the lifespan."""
+        """Attach the dispatcher: to the shared provider now, or to every per-user
+        session as it goes live (`activate`), scoped to that session's owner.
+        Called once by the lifespan before any user is logged in — a session that
+        went live earlier would never be listened to, so that order is enforced."""
+        if self._sessions:
+            raise RuntimeError("set_quote_listener must run before any broker session is live")
         self._listener = listener
         if self._shared is not None:
             self._shared.add_quote_listener(partial(listener, owner_user_id=None))
-            return
-        for user_id, provider in self.live_sessions():
-            provider.add_quote_listener(partial(listener, owner_user_id=user_id))
 
     # --- two-phase replace ----------------------------------------------------
 

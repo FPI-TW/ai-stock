@@ -428,17 +428,16 @@ def test_activate_attaches_the_listener_scoped_to_the_sessions_owner() -> None:
     assert received == [("2330", first), ("2330", second)]
 
 
-def test_listener_set_after_a_session_went_live_still_reaches_it() -> None:
+def test_listener_must_be_set_before_any_session_is_live() -> None:
+    """The lifespan attaches the dispatcher before logging anyone in; a session
+    that went live earlier would silently never be evaluated, so the pool refuses."""
     pool, built = _pool()
-    user_id = uuid4()
-    pool.activate(pool.prepare(user_id, _CREDS))
-    received, listener = _recording_listener()
+    pool.activate(pool.prepare(uuid4(), _CREDS))
+    _, listener = _recording_listener()
 
-    pool.set_quote_listener(listener)
-    for attached in built[0].listeners:
-        attached(_snapshot())
-
-    assert received == [("2330", user_id)]
+    with pytest.raises(RuntimeError, match="before any broker session is live"):
+        pool.set_quote_listener(listener)
+    assert built[0].listeners == []
 
 
 def test_shared_mode_listener_dispatches_without_an_owner() -> None:
