@@ -44,6 +44,7 @@ from datetime import time
 from sqlalchemy.orm import Session
 
 from app.commands.broker_account import restore_bound_user
+from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.domain.broker_account import RETRYABLE_LOGIN_FAILURES, BrokerAccountData, login_failure_code_for
 from app.domain.trading_session import TradingSessionService
 from app.repositories.broker_account_repository import BrokerAccountRepository
@@ -109,6 +110,7 @@ class BrokerSessionReconnectLoop:
             return
         live = dict(self._pool.live_sessions())
         free_slots = self._pool.free_slots()
+        lifecycle_ran = False
         with self._session_factory() as db:
             accounts = self._accounts_for(db)
             core_intents = self._core_intents_for(db)
@@ -138,6 +140,12 @@ class BrokerSessionReconnectLoop:
                     if free_slots <= 0:
                         continue
                     free_slots -= 1
+                if not lifecycle_ran:
+                    # A fresh session subscribes its owner's open symbols; expire
+                    # yesterday's day intents first (once per tick) so it does not
+                    # subscribe symbols nothing will ever unsubscribe.
+                    IntentLifecycleCommand(core_intents, self._session_service).run()
+                    lifecycle_ran = True
                 outcome = restore_bound_user(
                     db=db,
                     accounts=accounts,

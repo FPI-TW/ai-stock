@@ -29,7 +29,9 @@ from app.domain.broker_account import (
     BrokerBindInProgressError,
     BrokerLoginFailedError,
     BrokerSessionLimitReachedError,
+    FubonCredentials,
 )
+from app.domain.trading_session import TradingSessionService
 from app.services.quote.base import QuoteProviderUnavailableError
 
 NOW = datetime(2026, 9, 30, 1, 0, tzinfo=UTC)
@@ -362,6 +364,7 @@ def test_restore_all_logs_every_binding_in_at_the_same_time_each_on_its_own_sess
         core_intents_for=lambda _db: core_intents,
         users_for=lambda _db: _users("active"),
         pool=pool,
+        session_service=TradingSessionService(clock=lambda: NOW),
         now=NOW,
     )
 
@@ -394,6 +397,7 @@ def test_restore_all_logs_in_the_oldest_bindings_first_and_marks_the_overflow_wi
         core_intents_for=lambda _db: core_intents,
         users_for=lambda _db: _users("active"),
         pool=pool,
+        session_service=TradingSessionService(clock=lambda: NOW),
         now=NOW,
     )
 
@@ -421,6 +425,7 @@ def test_restore_all_does_not_let_a_disabled_user_consume_a_slot() -> None:
         core_intents_for=lambda _db: core_intents,
         users_for=lambda _db: users,
         pool=pool,
+        session_service=TradingSessionService(clock=lambda: NOW),
         now=NOW,
     )
 
@@ -440,8 +445,45 @@ def test_restore_all_with_nobody_bound_opens_no_worker() -> None:
         core_intents_for=lambda _db: MagicMock(),
         users_for=lambda _db: _users("active"),
         pool=pool,
+        session_service=TradingSessionService(clock=lambda: NOW),
         now=NOW,
     )
 
     assert built == [] and len(sessions) == 1
     accounts.get_credentials.assert_not_called()
+
+
+def test_restore_all_expires_stale_day_intents_before_anyone_subscribes() -> None:
+    """Review finding (PR #98): shared mode ran the lifecycle before reconciling
+    subscriptions; per-user startup did not, so a session subscribed the symbols
+    of day intents from past trading days — and nothing ever unsubscribes them."""
+    pool, _ = _pool()
+    user_id = uuid4()
+    order: list[str] = []
+
+    def expire(*_args: object, **_kwargs: object) -> int:
+        order.append("expire")
+        return 0
+
+    def credentials(_user_id: object) -> FubonCredentials:
+        order.append("login")
+        return _CREDS
+
+    accounts = MagicMock()
+    accounts.list_all.return_value = [MagicMock(user_id=user_id)]
+    accounts.get_credentials.side_effect = credentials
+    core_intents = MagicMock()
+    core_intents.system_expire_day_intents_through.side_effect = expire
+    core_intents.active_or_scheduled_symbols_by_owner.return_value = set()
+
+    restore_all_bound_users(
+        session_factory=_session_factory([]),
+        accounts_for=lambda _db: accounts,
+        core_intents_for=lambda _db: core_intents,
+        users_for=lambda _db: _users("active"),
+        pool=pool,
+        session_service=TradingSessionService(clock=lambda: NOW),
+        now=NOW,
+    )
+
+    assert order == ["expire", "login"]

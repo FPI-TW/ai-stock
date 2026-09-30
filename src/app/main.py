@@ -115,6 +115,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     core_intents_for=TradeIntentCoreRepository,
                     users_for=UserRepository,
                     pool=pool,
+                    session_service=session_service,
                     now=datetime.now(UTC),
                 )
                 logger.info("broker sessions restored", extra={"live_sessions": len(pool.live_sessions())})

@@ -9,6 +9,7 @@ flags the loop reads (`login_alive`, `realtime_connected`) are the provider's ow
 import asyncio
 import threading
 from datetime import datetime
+from typing import cast
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -358,6 +359,39 @@ def test_binding_without_a_session_waits_for_a_free_slot_instead_of_hammering_th
     assert live_session(pool, waiting) is not None
     assert clients[2].login_alive
     accounts.mark_login_ok.assert_called_once_with(waiting, now=IN_SESSION.astimezone(TAIPEI))
+
+
+def test_relogin_expires_stale_day_intents_before_subscribing() -> None:
+    pool, clients, user_id = _live()
+    clients[0].login_alive = False
+    loop, accounts = _loop(pool)
+    core_intents = cast(MagicMock, loop._core_intents_for(MagicMock()))  # the tick's repo mock
+    order: list[str] = []
+
+    def expire(*_args: object, **_kwargs: object) -> int:
+        order.append("expire")
+        return 0
+
+    def credentials(_user_id: UUID) -> FubonCredentials:
+        order.append("login")
+        return _CREDS
+
+    core_intents.system_expire_day_intents_through.side_effect = expire
+    accounts.get_credentials.side_effect = credentials
+
+    loop.run_once()
+
+    assert order == ["expire", "login"]
+
+
+def test_healthy_tick_does_not_run_the_lifecycle() -> None:
+    pool, _, _ = _live()
+    loop, _ = _loop(pool)
+    core_intents = cast(MagicMock, loop._core_intents_for(MagicMock()))
+
+    loop.run_once()
+
+    core_intents.system_expire_day_intents_through.assert_not_called()
 
 
 def test_a_provider_that_is_not_fubon_is_reported_not_guessed_healthy() -> None:

@@ -27,6 +27,7 @@ from uuid import UUID
 from cryptography.hazmat.primitives.serialization import pkcs12
 from sqlalchemy.orm import Session
 
+from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.core.config import BrokerName
 from app.domain.auth import AccountError, AccountNotActiveError, UserNotFoundError
 from app.domain.broker_account import (
@@ -41,6 +42,7 @@ from app.domain.broker_account import (
     BrokerSessionSetupError,
     FubonCredentials,
 )
+from app.domain.trading_session import TradingSessionService
 from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
@@ -386,6 +388,7 @@ def restore_all_bound_users(
     core_intents_for: Callable[[Session], TradeIntentCoreRepository],
     users_for: Callable[[Session], UserRepository],
     pool: BrokerSessionPool,
+    session_service: TradingSessionService,
     now: datetime,
 ) -> None:
     """Startup: one login per restorable binding, all at once. Nobody bound is a
@@ -403,6 +406,9 @@ def restore_all_bound_users(
     its own through `session_factory`; the pool itself is thread-safe.
     """
     with session_factory() as db:
+        # Expire day intents from past trading days first: each session subscribes
+        # its owner's open symbols, and nothing unsubscribes an expired one later.
+        IntentLifecycleCommand(core_intents_for(db), session_service).run()
         accounts, users = accounts_for(db), users_for(db)
         restorable = [a.user_id for a in accounts.list_all() if _restorable(users, accounts, a.user_id)]
         to_login, overflow = restorable[: pool.free_slots()], restorable[pool.free_slots() :]

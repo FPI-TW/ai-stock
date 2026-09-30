@@ -30,6 +30,7 @@ from app.db.models.broker_account import BrokerAccount
 from app.db.models.core import Symbol, TradeIntent
 from app.db.models.trade_intent_core import TradeIntentCore, TradeIntentPriceParams
 from app.domain.broker_account import FubonCredentials
+from app.domain.trading_session import TradingSessionService
 from app.main import create_app
 from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.services.broker_session_pool import BrokerSessionPool, BrokerStopClaim
@@ -120,7 +121,7 @@ def _seed_legacy_intent(engine: Engine, owner_id: UUID) -> UUID:
     return intent_id
 
 
-def _seed_core_intent(engine: Engine, owner_id: UUID) -> UUID:
+def _seed_core_intent(engine: Engine, owner_id: UUID, *, trading_date: date = date(2026, 1, 1)) -> UUID:
     intent_id = uuid4()
     with Session(engine) as session:
         session.add(
@@ -132,7 +133,7 @@ def _seed_core_intent(engine: Engine, owner_id: UUID) -> UUID:
                 execution_mode="notify_only",
                 quantity_lots=1,
                 trigger_reference_price_type="ask",
-                trading_date=date(2026, 1, 1),
+                trading_date=trading_date,
                 time_in_force="day",
                 status="active",
                 dedup_key=f"100.0000:{intent_id}",
@@ -764,6 +765,11 @@ def test_bind_refuses_the_dev_fallback_key_even_in_local_mode(engine: Engine, mo
 # --- PR3: per-user startup and the create path ---------------------------------------
 
 
+def _current_trading_date() -> date:
+    service = TradingSessionService()
+    return service.get_day_intent_trading_date(service.now_taipei())
+
+
 def _clear_bindings(engine: Engine) -> None:
     """Lifespan tests boot from `broker_accounts` as a whole; rows left by the bind
     tests above would eat `BROKER_MAX_SESSIONS` before the users under test."""
@@ -794,11 +800,13 @@ def test_lifespan_logs_every_bound_user_in_and_one_failure_does_not_stop_the_res
     monkeypatch.setenv("QUOTE_PROVIDER", "fubon")
     get_settings.cache_clear()
     _clear_bindings(engine)
-    harness = _Harness(engine)
-    good, bad = _seed_user(engine), _seed_user(engine)
-    _seed_core_intent(engine, good)
+    harness = _Harness(engine, max_sessions=3)
+    good, bad, stale = _seed_user(engine), _seed_user(engine), _seed_user(engine)
+    _seed_core_intent(engine, good, trading_date=_current_trading_date())
+    _seed_core_intent(engine, stale)  # a day intent from a past trading day: expired at boot, never subscribed
     _store_binding(engine, good, personal_id="A111111111")
     _store_binding(engine, bad, personal_id="B222222222")
+    _store_binding(engine, stale, personal_id="C333333333")
     harness.fail_with = _login_error("login_rejected")
     harness.fail_for_personal_id = "B222222222"
 
@@ -806,6 +814,8 @@ def test_lifespan_logs_every_bound_user_in_and_one_failure_does_not_stop_the_res
         assert client.get("/health").status_code == 200
         live = live_session(harness.pool, good)
         assert live is not None and live.active_subscriptions() == {"2330"}
+        stale_live = live_session(harness.pool, stale)
+        assert stale_live is not None and stale_live.active_subscriptions() == set()
         assert live_session(harness.pool, bad) is None
         good_row, bad_row = _row(engine, good), _row(engine, bad)
         assert good_row is not None and good_row.status == "active" and good_row.last_error is None
