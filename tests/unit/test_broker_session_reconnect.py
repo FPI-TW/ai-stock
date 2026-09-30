@@ -7,6 +7,7 @@ flags the loop reads (`login_alive`, `realtime_connected`) are the provider's ow
 """
 
 import asyncio
+import threading
 from datetime import datetime
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
@@ -387,3 +388,32 @@ def test_run_forever_ticks_then_sleeps(monkeypatch: pytest.MonkeyPatch) -> None:
         asyncio.run(loop.run_forever())
 
     assert calls == ["tick", "sleep 30"]
+
+
+def test_cancelling_run_forever_waits_for_the_tick_already_running_in_its_thread() -> None:
+    """Review finding (PR #98): `task.cancel()` cannot interrupt a login running
+    in `asyncio.to_thread`. If shutdown went on to `pool.stop_all()` while that
+    thread was still logging in, the candidate would `activate` into an emptied
+    pool and the process would exit with a live, never-logged-out broker session.
+    The loop must let the in-flight tick finish before it reports cancelled."""
+    pool, _, _ = _live()
+    loop, _ = _loop(pool)
+    started, release = threading.Event(), threading.Event()
+
+    def slow_tick() -> None:
+        started.set()
+        assert release.wait(timeout=5)
+
+    loop.run_once = slow_tick  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        task = asyncio.create_task(loop.run_forever())
+        await asyncio.to_thread(started.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0.05)
+        assert not task.done(), "cancelled before the running tick finished"
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())

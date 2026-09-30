@@ -30,8 +30,10 @@ can never be brought back for an account that was disabled while the loop was
 looking at it.
 
 Runs `run_once` in a worker thread (`asyncio.to_thread`): the SDK's `connect()`
-busy-spins for up to ~5 s and must not sit on the event loop. Never raises out
-of a tick. Produces no health state and no notifications — repair only.
+busy-spins for up to ~5 s and must not sit on the event loop. Cancelling
+`run_forever` waits for the tick in flight (a login cannot be interrupted) so the
+lifespan's `pool.stop_all()` always runs after it. Never raises out of a tick.
+Produces no health state and no notifications — repair only.
 """
 
 import asyncio
@@ -87,7 +89,16 @@ class BrokerSessionReconnectLoop:
 
     async def run_forever(self) -> None:
         while True:
-            await asyncio.to_thread(self.run_once)
+            # A tick may be mid-login in its thread and cannot be interrupted. On
+            # cancellation (shutdown) wait for it: the lifespan runs `pool.stop_all()`
+            # right after awaiting this task, and a candidate that activated *after*
+            # that would be a live broker session nobody ever logs out.
+            tick = asyncio.ensure_future(asyncio.to_thread(self.run_once))
+            try:
+                await asyncio.shield(tick)
+            except asyncio.CancelledError:
+                await tick
+                raise
             await asyncio.sleep(self._interval_seconds)
 
     def _tick(self) -> None:
