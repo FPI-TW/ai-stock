@@ -17,6 +17,7 @@ from app.commands.telegram_intent import (
 )
 from app.commands.trade_intent_core import CreateTradeIntentInput
 from app.core.config import Settings
+from app.domain.broker_account import BrokerAccountNotBoundError
 from app.domain.telegram_intent import TelegramIntentDecision, TelegramIntentInteractionData, TelegramIntentLlmError
 
 OWNER_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -354,6 +355,35 @@ def test_cancel_transitions_pending_without_creating_core_intent() -> None:
     assert interactions.pending is not None
     assert interactions.pending.status == "cancelled"
     assert create.input is None
+
+
+def test_confirm_without_a_broker_binding_tells_the_user_and_keeps_the_draft() -> None:
+    """per-user 行情：owner 沒綁券商就沒有 session，建單被 409 擋下。回覆要說清楚找誰，
+    草稿留著，管理員綁完再按一次確認即可。"""
+    pending = _interaction()
+    interactions = _Interactions(pending)
+
+    class _Unbound(_Create):
+        def execute(self, inp: object) -> SimpleNamespace:
+            raise BrokerAccountNotBoundError()
+
+    command = _command(interactions, TelegramIntentDecision(decision="unsupported"), _Unbound(interactions))
+
+    reply = command.handle_callback(
+        HandleTelegramCallbackInput(
+            chat_id="configured-group",
+            data=f"tg_intent:confirm:{pending.id}",
+            message_id=pending.bot_message_id,
+        )
+    )
+
+    assert reply is not None
+    assert reply.text == "尚未綁定券商帳號，請聯絡管理員綁定後再確認。"
+    assert interactions.pending is not None
+    # Not confirmed and not cancelled: the create command's rollback also undoes the
+    # `confirming` claim (same request session), so the real row is back to pending.
+    assert interactions.pending.status not in {"confirmed", "cancelled", "expired"}
+    assert interactions.confirmed is False
 
 
 def test_confirming_message_reuses_existing_bot_message() -> None:

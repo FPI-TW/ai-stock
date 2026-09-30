@@ -10,6 +10,7 @@ from uuid import UUID
 
 from app.commands.trade_intent_core import CreateTradeIntentCommand, CreateTradeIntentInput
 from app.core.config import Settings
+from app.domain.broker_account import BrokerAccountNotBoundError
 from app.domain.price import PriceRequest, PriceService, SecurityType
 from app.domain.symbol_errors import SymbolError
 from app.domain.telegram_intent import (
@@ -43,6 +44,7 @@ FIELD_ERROR_REPLY = "欄位格式不符合規則，請重新輸入標的、張�
 UNSUPPORTED_REPLY = "目前只支援限價買進、限價賣出、市價買進、市價賣出。"
 USER_PAGE_ERROR_REPLY = "無法建立提醒，請確認標的是可交易的台股或 ETF。"
 DUPLICATE_INTENT_REPLY = "已有相同提醒，請到使用者頁面查看或取消後再建立。"
+NOT_BOUND_REPLY = "尚未綁定券商帳號，請聯絡管理員綁定後再確認。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +221,10 @@ class TelegramIntentCommand:
         except DuplicateIntentError:
             self._interactions.mark_status(interaction.id, "cancelled", chat_id=inp.chat_id)
             return TelegramReply(chat_id=inp.chat_id, text=DUPLICATE_INTENT_REPLY, interaction_id=interaction.id)
+        except BrokerAccountNotBoundError:
+            # No broker session, no quotes. The draft stays pending: once the admin
+            # binds the account, the same confirm button works.
+            return TelegramReply(chat_id=inp.chat_id, text=NOT_BOUND_REPLY, interaction_id=interaction.id)
         except Exception:
             # The core command rolls its own transaction back.  Keep the draft
             # pending so the user can retry after a transient broker/DB failure.

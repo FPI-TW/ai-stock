@@ -14,6 +14,15 @@
 
 `notifications`、`symbols`、`users`、auth、quotes 與其他跨軌資源不是舊軌，不能連帶刪除。
 
+### 舊軌 TWAP 在 per-user 行情模式下沒有參考價
+
+`QUOTE_PROVIDER=fubon` 沒有系統券商 session，舊軌 `QuoteEvaluationDispatcher` 不掛，`TwapSliceScheduler` 注入空的 `InMemoryQuoteProvider`：slice 照時間通知、沒有參考價，TWAP confirm 也只在 owner 已綁定時才能訂閱。TWAP cutover 到新軌後改以 `pool.get(owner)` 取價一併解除。
+
+## per-user 行情的已知低效
+
+- 每筆 quote 每條 session 都會先跑一次 `IntentLifecycleCommand` 的 UPDATE，再依 owner 過濾 intent；N 位使用者同時看同一檔就是 N 次生命週期掃描。單機個位數使用者可接受，人數上升時改為只在 dispatcher 內定時跑一次。
+- dispatcher 觸發後不退訂該 symbol（只有 cancel 會退訂）；已觸發的單留下的訂閱要等該使用者下次取消同標的、或重啟時 reconcile 才清掉。
+
 ## 備份與災難復原未驗證
 
 Repository 有 EC2／RDS 部署流程，但沒有版本化的 RDS backup／PITR policy、restore drill 紀錄與可重複執行的復原 runbook。任何 RPO／RTO 數字目前都不是已驗證承諾。

@@ -20,18 +20,20 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.api.deps import (
     enforce_mutation_rate_limit,
     get_active_user,
+    get_broker_session_pool,
     get_core_intent_limits,
     get_current_user,
     get_db,
     get_idempotency_key,
     get_idempotency_manager,
-    get_quote_provider,
     get_symbol_service,
     get_trade_intent_core_repository,
 )
+from app.core.config import get_settings
 from app.core.security import RequestUser
 from app.domain.trade_intent import TradeIntentData
 from app.main import create_app
+from app.services.broker_session_pool import BrokerSessionPool
 from app.services.quote.shioaji_demo.provider import ShioajiQuoteProvider
 
 
@@ -106,7 +108,8 @@ def client(
     mock_intent_repo: MagicMock,
 ) -> Generator[TestClient]:
     app = create_app()
-    app.dependency_overrides[get_quote_provider] = lambda: shioaji_provider
+    pool = BrokerSessionPool(get_settings(), shared=shioaji_provider)
+    app.dependency_overrides[get_broker_session_pool] = lambda: pool
     app.dependency_overrides[get_symbol_service] = lambda: mock_symbol_service
     app.dependency_overrides[get_trade_intent_core_repository] = lambda: mock_intent_repo
     app.dependency_overrides[get_db] = lambda: MagicMock()

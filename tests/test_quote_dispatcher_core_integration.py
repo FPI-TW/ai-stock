@@ -167,3 +167,21 @@ def test_robot2_does_not_trigger_when_ask_above_target(int_engine_clean: Engine)
         assert (
             s.execute(select(TradeIntentTrigger).where(TradeIntentTrigger.trade_intent_id == intent_id)).first() is None
         )
+
+
+@pytest.mark.integration
+def test_frame_from_one_owners_session_triggers_only_that_owners_intents(int_engine_clean: Engine) -> None:
+    """per-user 行情：兩個 owner 同 symbol 各有 active 單，A 的 session 推價只觸發 A 的單。"""
+    owner_a, owner_b = uuid4(), uuid4()
+    a_id = _create_active_buy_alert(int_engine_clean, owner_a)
+    b_id = _create_active_buy_alert(int_engine_clean, owner_b)
+
+    _dispatcher(int_engine_clean).dispatch(_snapshot("599"), owner_user_id=owner_a)
+
+    with Session(int_engine_clean) as s:
+        statuses = {
+            row.id: row.status
+            for row in s.execute(select(TradeIntentCore).where(TradeIntentCore.id.in_([a_id, b_id]))).scalars()
+        }
+    assert statuses[a_id] == "triggered"
+    assert statuses[b_id] == "active"

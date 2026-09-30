@@ -1,10 +1,12 @@
 import logging
 from asyncio import CancelledError, Task, create_task
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
 from app.api.errors import register_exception_handlers
 from app.api.routes.admin import router as admin_router
@@ -17,18 +19,21 @@ from app.api.routes.notifications import router as notifications_router
 from app.api.routes.quotes import router as quotes_router
 from app.api.routes.symbols import router as symbols_router
 from app.api.routes.telegram import router as telegram_router
+from app.commands.broker_account import restore_all_bound_users
 from app.commands.intent_lifecycle import IntentLifecycleCommand
 from app.core.config import get_settings
 from app.core.ids import RequestIdMiddleware
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.domain.quote_evaluation import QuoteEvaluator
 from app.domain.trading_session import TradingSessionService
+from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.services.broker_session_pool import BrokerSessionPool
+from app.services.broker_session_reconnect import BrokerSessionReconnectLoop
 from app.services.idempotency_cleanup import IdempotencyCleanupScheduler
 from app.services.kill_switch import KillSwitchProvider
-from app.services.quote import build_quote_provider
+from app.services.quote import InMemoryQuoteProvider, QuoteProvider, build_quote_provider
 from app.services.quote_dispatcher import QuoteEvaluationDispatcher
 from app.services.quote_dispatcher_core import TradeIntentCoreDispatcher
 from app.services.twap_scheduler import TwapSliceScheduler
@@ -38,94 +43,97 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Bring the quote provider online and reconcile subscriptions on startup.
+    """Bring the quote source online, wire quotes to evaluation, start the loops.
 
-    The provider itself is already built in `create_app()` (so DI works without
-    waiting for the lifespan to fire — important for tests that don't use
-    `with TestClient(app)`). This lifespan covers the side-effectful parts:
+    Two modes, decided by `QUOTE_PROVIDER` when `create_app()` built the pool:
 
-    1. `provider.startup()` — broker session setup; no-op for `InMemoryQuoteProvider`.
-    2. Initial reconcile — read every active/scheduled intent from DB and
-       `subscribe()` its symbol. Skipped when no DATABASE_URL is configured
-       (e.g. lightweight unit-test runs).
-    3. `provider.shutdown()` on exit — broker logout, clear local state.
+    - **shared** (`in_memory` / the demo provider): one provider for everyone. Start it,
+      reconcile both tracks' subscriptions from the DB, attach both dispatchers.
+    - **per-user** (`fubon`): no system login. Log every stored binding in from
+      `broker_accounts` (one user failing never stops the rest; nobody bound is a
+      valid state — the admin binds the first user after boot), attach the core
+      dispatcher scoped per owner, and run the reconnect loop that repairs dropped
+      sockets / logins during trading hours. The legacy track has no session to
+      read from: its dispatcher is not attached and the TWAP scheduler gets an empty
+      provider (slices notify on time, without a reference price) until TWAP moves
+      to the core track — see docs/technical-debt.md.
+
+    Skipped entirely without DATABASE_URL (lightweight unit-test runs).
 
     SINGLE-PROCESS ONLY — do NOT run this under multiple uvicorn workers.
-    Everything below (broker login, quote subscriptions, and the TWAP /
-    idempotency-cleanup / quote-evaluation schedulers) runs once per worker
-    process. With N workers you get N broker logins competing for the same
-    account (many brokers evict the previous session on re-login, so workers
-    repeatedly log each other out) and N copies of every background loop. The
-    DB-mutating paths are row-lock safe (`SELECT ... FOR UPDATE`), so this would
-    not double-trigger intents — but the broker connection is not protected and
-    breaks. To scale horizontally, first split the broker/scheduler work into a
-    single dedicated process, or gate it behind a Postgres advisory lock
-    (leader election); only then raise `--workers`.
+    Everything below (broker logins, quote subscriptions, and the TWAP /
+    idempotency-cleanup / reconnect loops) runs once per worker process. With N
+    workers you get N logins per user competing for the same broker account (many
+    brokers evict the previous session on re-login, so workers repeatedly log each
+    other out) and N copies of every background loop. The DB-mutating paths are
+    row-lock safe (`SELECT ... FOR UPDATE`), so this would not double-trigger
+    intents — but the broker connections are not protected and break. To scale
+    horizontally, first split the broker/scheduler work into a single dedicated
+    process, or gate it behind a Postgres advisory lock (leader election); only
+    then raise `--workers`.
     """
 
     settings = get_settings()
-    provider = app.state.quote_provider
-    provider.startup()
+    pool: BrokerSessionPool = app.state.broker_sessions
+    shared = pool.shared_provider
+    if shared is not None:
+        shared.startup()
 
-    twap_scheduler_task: Task[None] | None = None
-    idempotency_cleanup_task: Task[None] | None = None
-    # provider.startup() already holds a broker login; any failure below
-    # must still reach provider.shutdown() or that login leaks at the broker.
+    tasks: list[Task[None]] = []
+    # A shared startup() already holds a broker login; any failure below must
+    # still reach shutdown() or that login leaks at the broker.
     try:
         if settings.database_url:
             from app.db.session import get_session_factory
 
             session_factory = get_session_factory()
             session_service = TradingSessionService()
-            with session_factory() as db:
-                intent_repo = IntentRepository(db)
-                IntentLifecycleCommand(intent_repo, session_service).run()
-                for symbol in intent_repo.active_or_scheduled_symbols():
-                    provider.subscribe(symbol)
-                # 模式丙：新軌（trade_intent_core）的 symbol 也要訂閱，否則 robot #2 收不到
-                # 報價。subscribe 對重複 symbol 為 idempotent，新舊軌共用同一訂閱集。
-                core_repo = TradeIntentCoreRepository(db)
-                IntentLifecycleCommand(core_repo, session_service).run()
-                for symbol in core_repo.active_or_scheduled_symbols():
-                    provider.subscribe(symbol)
-            logger.info(
-                "quote provider startup reconcile complete",
-                extra={"active_subscriptions": sorted(provider.active_subscriptions())},
-            )
 
-            # Wire incoming quotes to the evaluator: every snapshot the provider
-            # observes (via broker callback or `push_quote`) now drives evaluation
-            # of that symbol's active intents on a fresh short-lived session.
-            # Without DATABASE_URL we have no intents to evaluate, so the listener
-            # is only useful when the DB is configured.
-            dispatcher = QuoteEvaluationDispatcher(
-                session_factory=session_factory,
-                evaluator=QuoteEvaluator(session_service),
-                session_service=session_service,
-                kill_switch=app.state.kill_switch_provider,
-            )
-            provider.add_quote_listener(dispatcher.dispatch)
-
-            # 模式丙 robot #2：新軌的報價→觸發 dispatcher，作為第二個 listener 並行掛上。
-            # 每筆報價兩台各掃各表（舊 trade_intents / 新 trade_intent_core），一張單只存在
-            # 一張表 → 不會重複觸發。共用 evaluator / kill switch。
+            # Wire incoming quotes to the evaluator: every snapshot a session observes
+            # drives evaluation of that symbol's active intents on a fresh short-lived
+            # session, scoped to the session's owner in per-user mode.
             core_dispatcher = TradeIntentCoreDispatcher(
                 session_factory=session_factory,
                 evaluator=QuoteEvaluator(session_service),
                 session_service=session_service,
                 kill_switch=app.state.kill_switch_provider,
             )
-            provider.add_quote_listener(core_dispatcher.dispatch)
+            pool.set_quote_listener(core_dispatcher.dispatch)
+
+            if shared is not None:
+                _start_shared_provider(app, shared, session_factory, session_service)
+                twap_quote_provider: QuoteProvider = shared
+            else:
+                with session_factory() as db:
+                    restore_all_bound_users(
+                        db=db,
+                        accounts=BrokerAccountRepository(db, encryption_key=settings.broker_credential_key),
+                        core_intents=TradeIntentCoreRepository(db),
+                        pool=pool,
+                        now=datetime.now(UTC),
+                    )
+                logger.info("broker sessions restored", extra={"live_sessions": len(pool.live_sessions())})
+                # ponytail: legacy TWAP has no per-user session; empty provider until TWAP cutover.
+                twap_quote_provider = InMemoryQuoteProvider()
+                reconnect = BrokerSessionReconnectLoop(
+                    pool=pool,
+                    session_factory=session_factory,
+                    accounts_for=lambda db: BrokerAccountRepository(db, encryption_key=settings.broker_credential_key),
+                    core_intents_for=TradeIntentCoreRepository,
+                    session_service=session_service,
+                )
+                tasks.append(create_task(reconnect.run_forever()))
+                logger.info("broker session reconnect loop started")
 
             if settings.twap_worker_enabled:
                 scheduler = TwapSliceScheduler(
                     session_factory=session_factory,
-                    quote_provider=provider,
+                    quote_provider=twap_quote_provider,
                     session_service=session_service,
                     interval_seconds=settings.twap_worker_interval_seconds,
                     kill_switch=app.state.kill_switch_provider,
                 )
-                twap_scheduler_task = create_task(scheduler.run_forever())
+                tasks.append(create_task(scheduler.run_forever()))
                 logger.info(
                     "twap slice scheduler started",
                     extra={"interval_seconds": settings.twap_worker_interval_seconds},
@@ -136,7 +144,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     session_factory=session_factory,
                     interval_seconds=settings.idempotency_cleanup_interval_seconds,
                 )
-                idempotency_cleanup_task = create_task(cleanup.run_forever())
+                tasks.append(create_task(cleanup.run_forever()))
                 logger.info(
                     "idempotency cleanup scheduler started",
                     extra={"interval_seconds": settings.idempotency_cleanup_interval_seconds},
@@ -144,30 +152,60 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         yield
     finally:
-        for task in (twap_scheduler_task, idempotency_cleanup_task):
-            if task is not None:
-                task.cancel()
-                try:
-                    await task
-                except CancelledError:
-                    pass
-        app.state.broker_sessions.stop_all()
-        provider.shutdown()
+        for task in tasks:
+            task.cancel()
+            try:
+                await task
+            except CancelledError:
+                pass
+        pool.stop_all()
+        if shared is not None:
+            shared.shutdown()
+
+
+def _start_shared_provider(
+    app: FastAPI,
+    provider: QuoteProvider,
+    session_factory: Callable[[], Session],
+    session_service: TradingSessionService,
+) -> None:
+    """Shared mode as it always was: reconcile both tracks' subscriptions and attach
+    the legacy dispatcher (the core one is attached through the pool)."""
+    with session_factory() as db:
+        intent_repo = IntentRepository(db)
+        IntentLifecycleCommand(intent_repo, session_service).run()
+        for symbol in intent_repo.active_or_scheduled_symbols():
+            provider.subscribe(symbol)
+        # 模式丙：新軌（trade_intent_core）的 symbol 也要訂閱，否則 robot #2 收不到
+        # 報價。subscribe 對重複 symbol 為 idempotent，新舊軌共用同一訂閱集。
+        core_repo = TradeIntentCoreRepository(db)
+        IntentLifecycleCommand(core_repo, session_service).run()
+        for symbol in core_repo.active_or_scheduled_symbols():
+            provider.subscribe(symbol)
+    logger.info(
+        "quote provider startup reconcile complete",
+        extra={"active_subscriptions": sorted(provider.active_subscriptions())},
+    )
+    # 舊軌 dispatcher：每筆報價兩台各掃各表（舊 trade_intents / 新 trade_intent_core），
+    # 一張單只存在一張表 → 不會重複觸發。共用 evaluator / kill switch。
+    dispatcher = QuoteEvaluationDispatcher(
+        session_factory=session_factory,
+        evaluator=QuoteEvaluator(session_service),
+        session_service=session_service,
+        kill_switch=app.state.kill_switch_provider,
+    )
+    provider.add_quote_listener(dispatcher.dispatch)
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
     app.state.request_id_header = settings.request_id_header
-    app.state.quote_provider = build_quote_provider(settings)
-    # per-user broker sessions (docs/orders/per-user-broker-sessions.md). Shared
-    # providers (in_memory and the demo provider) serve every user through the pool
-    # unchanged; `fubon` is per-user and only becomes startable once PR3 wires
-    # the lifespan to log bound users in from `broker_accounts`.
-    app.state.broker_sessions = BrokerSessionPool(
-        settings,
-        shared=None if settings.quote_provider == "fubon" else app.state.quote_provider,
-    )
+    # Every quote source hangs off the pool: shared providers (in_memory and the
+    # demo provider) serve every user through it; `fubon` is per-user, one session
+    # per bound user logged in by the lifespan from `broker_accounts`.
+    shared = None if settings.quote_provider == "fubon" else build_quote_provider(settings)
+    app.state.broker_sessions = BrokerSessionPool(settings, shared=shared)
     # Kill-switch read cache (L2). Needs a session factory, so it only comes online
     # when a DATABASE_URL is configured; DB-less unit/api wiring leaves it None and
     # the create / dispatch paths treat "no provider" as "not halted".

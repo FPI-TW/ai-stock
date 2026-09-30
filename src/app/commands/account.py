@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.commands.auth import IssuedSession, issue_session
+from app.commands.broker_account import restore_bound_user
 from app.core.config import Settings
 from app.core.passwords import hash_password, is_password_strong_enough
 from app.core.rate_limiter import RateLimiter
@@ -33,12 +34,14 @@ from app.domain.auth import (
     WeakPasswordError,
     normalize_email,
 )
+from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.invitation_repository import InvitationRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.repositories.user_repository import UserRepository
 from app.services.audit import AuditEventWriter
+from app.services.broker_session_pool import BrokerSessionPool
 from app.services.mailer import Mailer, MailMessage
 
 logger = logging.getLogger(__name__)
@@ -315,7 +318,8 @@ class AcceptInvitationCommand:
 
 class DisableUserCommand:
     """Admin disables a user and cascades: cancel their open intents, revoke every
-    refresh token, flip status to disabled. (Notification-delivery stop is P2.)"""
+    refresh token, flip status to disabled, log their broker session out (the
+    binding row stays; reactivation logs back in). (Notification-delivery stop is P2.)"""
 
     def __init__(
         self,
@@ -325,6 +329,7 @@ class DisableUserCommand:
         core_intents: TradeIntentCoreRepository,
         refresh_tokens: RefreshTokenRepository,
         audit: AuditEventWriter,
+        pool: BrokerSessionPool,
     ) -> None:
         self._db = db
         self._users = users
@@ -332,13 +337,16 @@ class DisableUserCommand:
         self._core_intents = core_intents
         self._refresh = refresh_tokens
         self._audit = audit
+        self._pool = pool
 
     def execute(self, inp: DisableUserInput) -> None:
+        user = self._users.get_by_id(inp.target_user_id)
+        if user is None:
+            raise UserNotFoundError()
+        # Same shape as unbind: hold the user's session token for the whole disable
+        # so a bind in flight cannot go live for an account that is now disabled.
+        claim = self._pool.claim(user.id)
         try:
-            user = self._users.get_by_id(inp.target_user_id)
-            if user is None:
-                raise UserNotFoundError()
-
             self._users.disable(user.id, now=inp.now)
             # 兩軌都要取消：cutover 後新單落 trade_intent_core，但舊表仍是 TWAP 的唯一
             # 寫入路徑（PR4 才切）——只取消一邊，被停用帳號的殘單會繼續觸發、繼續發通知。
@@ -359,27 +367,34 @@ class DisableUserCommand:
                 now=inp.now,
             )
             self._db.commit()
-        except (AuthError, AccountError):
-            raise
         except Exception:
+            self._pool.release(claim)
             self._db.rollback()
             raise
+        self._pool.stop(claim)
 
 
 class ReactivateUserCommand:
     """Admin re-enables a disabled user: flip status back to active. Old intents are
     NOT restored (spec §13) and revoked sessions stay revoked — the user logs in afresh.
-    Only a currently-disabled account can be reactivated."""
+    Only a currently-disabled account can be reactivated. A stored broker binding is
+    logged back in afterwards; that login failing never fails the reactivation."""
 
     def __init__(
         self,
         db: Session,
         users: UserRepository,
         audit: AuditEventWriter,
+        accounts: BrokerAccountRepository,
+        core_intents: TradeIntentCoreRepository,
+        pool: BrokerSessionPool,
     ) -> None:
         self._db = db
         self._users = users
         self._audit = audit
+        self._accounts = accounts
+        self._core_intents = core_intents
+        self._pool = pool
 
     def execute(self, inp: ReactivateUserInput) -> None:
         try:
@@ -404,6 +419,20 @@ class ReactivateUserCommand:
         except Exception:
             self._db.rollback()
             raise
+        if not self._pool.per_user:
+            return
+        try:
+            restore_bound_user(
+                db=self._db,
+                accounts=self._accounts,
+                core_intents=self._core_intents,
+                pool=self._pool,
+                user_id=user.id,
+                now=inp.now,
+            )
+        except Exception as exc:
+            # Reactivated already; the row (or a restart) tells the admin about the session.
+            logger.warning("broker session restore after reactivate raised %s user_id=%s", type(exc).__name__, user.id)
 
 
 class ResendInvitationCommand:

@@ -1,10 +1,10 @@
 """Reads / writes on `broker_accounts`. No method commits — the caller owns the tx.
 
 This is the only module that touches `credentials_encrypted`: `upsert` encrypts
-it, so the Fernet key and the JSON layout of the blob never leak into commands or
-the pool. Decryption (`get_credentials`) and the login-status writers
-(`mark_login_ok` / `mark_login_failed`) arrive with their callers — the PR3
-lifespan login loop — rather than as unused surface here.
+it and `get_credentials` decrypts it, so the Fernet key and the JSON layout of
+the blob never leak into commands or the pool. `mark_login_ok` /
+`mark_login_failed` are the login loops' (startup, reactivate, reconnect) only
+writes; `last_error` never holds anything but the whitelisted message.
 """
 
 import base64
@@ -13,12 +13,19 @@ from datetime import datetime
 from typing import Any, cast
 from uuid import UUID, uuid4
 
+from cryptography.fernet import InvalidToken
 from sqlalchemy import CursorResult, delete, select
 from sqlalchemy.orm import Session
 
-from app.core.mfa_crypto import encrypt_secret
+from app.core.mfa_crypto import decrypt_secret, encrypt_secret
 from app.db.models.broker_account import BrokerAccount
-from app.domain.broker_account import BrokerAccountData, BrokerCredentialKeyError, FubonCredentials
+from app.domain.broker_account import (
+    LOGIN_FAILURE_MESSAGES,
+    BrokerAccountData,
+    BrokerCredentialKeyError,
+    BrokerLoginFailureCode,
+    FubonCredentials,
+)
 
 
 def _to_domain(row: BrokerAccount) -> BrokerAccountData:
@@ -48,9 +55,55 @@ class BrokerAccountRepository:
             raise BrokerCredentialKeyError("missing")
         return self._key
 
+    def _row(self, user_id: UUID) -> BrokerAccount | None:
+        return self._db.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalar_one_or_none()
+
     def get_by_user_id(self, user_id: UUID) -> BrokerAccountData | None:
-        row = self._db.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalar_one_or_none()
+        row = self._row(user_id)
         return _to_domain(row) if row is not None else None
+
+    def list_all(self) -> list[BrokerAccountData]:
+        """Every binding, oldest first — the startup login order. Needs no key."""
+        rows = self._db.execute(select(BrokerAccount).order_by(BrokerAccount.created_at)).scalars().all()
+        return [_to_domain(row) for row in rows]
+
+    def get_credentials(self, user_id: UUID) -> FubonCredentials | None:
+        """Decrypt one user's login material; None when unbound. A blob the current
+        key cannot open (rotated key) is `BrokerCredentialKeyError("undecryptable")`."""
+        row = self._row(user_id)
+        if row is None:
+            return None
+        try:
+            payload = json.loads(decrypt_secret(self._require_key(), row.credentials_encrypted))
+        except InvalidToken as exc:
+            raise BrokerCredentialKeyError("undecryptable") from exc
+        return FubonCredentials(
+            personal_id=payload["personal_id"],
+            password=payload["password"],
+            cert_pfx=base64.b64decode(payload["cert_pfx_base64"]),
+            cert_password=payload["cert_password"],
+        )
+
+    def mark_login_ok(self, user_id: UUID, *, now: datetime) -> None:
+        row = self._row(user_id)
+        if row is None:
+            return
+        row.status = "active"
+        row.last_login_at = now
+        row.last_error = None
+        row.updated_at = now
+        self._db.flush()
+
+    def mark_login_failed(self, user_id: UUID, code: BrokerLoginFailureCode, *, now: datetime) -> None:
+        """Only the whitelisted message for `code` is stored; `last_login_at` keeps
+        the last *successful* login."""
+        row = self._row(user_id)
+        if row is None:
+            return
+        row.status = "login_failed"
+        row.last_error = LOGIN_FAILURE_MESSAGES[code]
+        row.updated_at = now
+        self._db.flush()
 
     def upsert(
         self,
@@ -80,7 +133,7 @@ class BrokerAccountRepository:
                 }
             ),
         )
-        existing = self._db.execute(select(BrokerAccount).where(BrokerAccount.user_id == user_id)).scalar_one_or_none()
+        existing = self._row(user_id)
         if existing is None:
             row = BrokerAccount(
                 id=uuid4(),

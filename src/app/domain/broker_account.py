@@ -12,7 +12,9 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-BrokerLoginFailureCode = Literal["login_rejected", "session_limit", "provider_unavailable", "cert_invalid", "unknown"]
+BrokerLoginFailureCode = Literal[
+    "login_rejected", "session_limit", "provider_unavailable", "cert_invalid", "credentials_unreadable", "unknown"
+]
 
 # The only text that may reach `broker_accounts.last_error`, the API and the logs.
 # SDK exception text can echo the identity number or password — never store it.
@@ -21,6 +23,7 @@ LOGIN_FAILURE_MESSAGES: dict[BrokerLoginFailureCode, str] = {
     "session_limit": "券商連線數已達上限，請稍後再試",
     "provider_unavailable": "券商服務暫時無法使用",
     "cert_invalid": "憑證檔或憑證密碼無效",
+    "credentials_unreadable": "券商金鑰無法解密（加密金鑰已輪替），請重新綁定",
     "unknown": "券商登入發生未預期錯誤",
 }
 
@@ -94,14 +97,17 @@ class BrokerSessionSetupError(BrokerAccountError):
         self.exception_type = exception_type
 
 
+BrokerCredentialKeyReason = Literal["missing", "undecryptable"]
+
+
 class BrokerCredentialKeyError(BrokerAccountError):
     """The at-rest encryption key is not configured (`missing`: the dev fallback is
-    refused for broker credentials). Operations, not admins. The decrypt-side reason
-    is added together with `get_credentials` in PR3."""
+    refused for broker credentials) or no longer opens a stored blob (`undecryptable`:
+    the key was rotated; the admin must re-bind). Operations, not admins."""
 
-    def __init__(self, reason: Literal["missing"]) -> None:
+    def __init__(self, reason: BrokerCredentialKeyReason) -> None:
         super().__init__(reason)
-        self.reason: Literal["missing"] = reason
+        self.reason: BrokerCredentialKeyReason = reason
 
 
 class BrokerBindingNotEnabledError(BrokerAccountError):

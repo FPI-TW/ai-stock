@@ -204,21 +204,26 @@ def get_intent_lifecycle_command(
 IntentLifecycleCommandDep = Annotated[IntentLifecycleCommand, Depends(get_intent_lifecycle_command)]
 
 
-def get_quote_provider(request: Request) -> QuoteProvider:
-    """Return the process-wide quote provider stored on app.state.
+def get_broker_session_pool(request: Request) -> BrokerSessionPool:
+    """The process-wide per-user broker session pool built in `create_app()`."""
 
-    `create_app()` instantiates the provider via the factory and stores it here
-    so every request shares the same in-memory subscription / snapshot state.
-    Tests substitute this dep with a `MagicMock` via `app.dependency_overrides`.
+    pool = getattr(request.app.state, "broker_sessions", None)
+    if pool is None:
+        raise RuntimeError("broker_sessions is not initialised on app.state; check that create_app() ran.")
+    return pool
+
+
+BrokerSessionPoolDep = Annotated[BrokerSessionPool, Depends(get_broker_session_pool)]
+
+
+def get_quote_provider(user: ActiveUserDep, pool: BrokerSessionPoolDep) -> QuoteProvider:
+    """The caller's own quote source: their broker session in per-user mode (409
+    `BROKER_ACCOUNT_NOT_BOUND` when they have none), the shared provider otherwise.
+    Endpoints on it (`current-price`, `/dev/*`, TWAP) therefore need a logged-in user.
+    Tests substitute this dep or `get_broker_session_pool` via `app.dependency_overrides`.
     """
 
-    provider = getattr(request.app.state, "quote_provider", None)
-    if provider is None:
-        raise RuntimeError(
-            "quote_provider is not initialised on app.state; "
-            "check that create_app() ran and that QUOTE_PROVIDER is set."
-        )
-    return provider
+    return pool.require(user.user_id)
 
 
 QuoteProviderDep = Annotated[QuoteProvider, Depends(get_quote_provider)]
@@ -237,17 +242,6 @@ def get_kill_switch_provider(request: Request) -> KillSwitchProvider | None:
 
 KillSwitchProviderDep = Annotated[KillSwitchProvider | None, Depends(get_kill_switch_provider)]
 
-
-def get_broker_session_pool(request: Request) -> BrokerSessionPool:
-    """The process-wide per-user broker session pool built in `create_app()`."""
-
-    pool = getattr(request.app.state, "broker_sessions", None)
-    if pool is None:
-        raise RuntimeError("broker_sessions is not initialised on app.state; check that create_app() ran.")
-    return pool
-
-
-BrokerSessionPoolDep = Annotated[BrokerSessionPool, Depends(get_broker_session_pool)]
 
 CURRENT_PRICE_ALLOWED_SYMBOLS: frozenset[str] = frozenset({"2330", "2317", "0050", "00878"})
 
@@ -321,17 +315,19 @@ def get_create_trade_intent_command(
     symbol_service: SymbolServiceDep,
     session_service: TradingSessionServiceDep,
     intent_repo: TradeIntentCoreRepoDep,
-    quote_provider: QuoteProviderDep,
+    pool: BrokerSessionPoolDep,
     evaluator: QuoteEvaluatorDep,
     db: DatabaseDep,
     kill_switch: KillSwitchProviderDep,
     limits: CoreIntentLimitsDep,
 ) -> CreateTradeIntentCommand:
+    # The pool, not a provider: the Telegram path resolves the owner inside the
+    # command, and the session must be that owner's, not the HTTP caller's.
     return CreateTradeIntentCommand(
         symbol_service,
         session_service,
         intent_repo,
-        quote_provider,
+        pool,
         evaluator,
         db,
         kill_switch,
@@ -344,10 +340,10 @@ CreateTradeIntentCommandDep = Annotated[CreateTradeIntentCommand, Depends(get_cr
 
 def get_cancel_trade_intent_command(
     intent_repo: TradeIntentCoreRepoDep,
-    quote_provider: QuoteProviderDep,
+    pool: BrokerSessionPoolDep,
     db: DatabaseDep,
 ) -> CancelTradeIntentCommand:
-    return CancelTradeIntentCommand(intent_repo, quote_provider, db)
+    return CancelTradeIntentCommand(intent_repo, pool, db)
 
 
 CancelTradeIntentCommandDep = Annotated[CancelTradeIntentCommand, Depends(get_cancel_trade_intent_command)]
@@ -685,8 +681,9 @@ def get_disable_user_command(
     core_intents: TradeIntentCoreRepoDep,
     refresh_tokens: RefreshTokenRepoDep,
     audit: AuditWriterDep,
+    pool: BrokerSessionPoolDep,
 ) -> DisableUserCommand:
-    return DisableUserCommand(db, users, intents, core_intents, refresh_tokens, audit)
+    return DisableUserCommand(db, users, intents, core_intents, refresh_tokens, audit, pool)
 
 
 DisableUserCommandDep = Annotated[DisableUserCommand, Depends(get_disable_user_command)]
@@ -696,8 +693,11 @@ def get_reactivate_user_command(
     db: DatabaseDep,
     users: UserRepoDep,
     audit: AuditWriterDep,
+    accounts: BrokerAccountRepoDep,
+    core_intents: TradeIntentCoreRepoDep,
+    pool: BrokerSessionPoolDep,
 ) -> ReactivateUserCommand:
-    return ReactivateUserCommand(db, users, audit)
+    return ReactivateUserCommand(db, users, audit, accounts, core_intents, pool)
 
 
 ReactivateUserCommandDep = Annotated[ReactivateUserCommand, Depends(get_reactivate_user_command)]

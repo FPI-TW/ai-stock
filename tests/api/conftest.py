@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.api.deps import (
     enforce_mutation_rate_limit,
     get_active_user,
+    get_broker_session_pool,
     get_core_intent_limits,
     get_current_user,
     get_db,
@@ -16,12 +17,13 @@ from app.api.deps import (
     get_intent_limits,
     get_intent_repository,
     get_kill_switch_provider,
-    get_quote_provider,
     get_symbol_service,
     get_trade_intent_core_repository,
 )
+from app.core.config import get_settings
 from app.core.security import RequestUser
 from app.main import create_app
+from app.services.broker_session_pool import BrokerSessionPool
 from app.services.quote.in_memory import InMemoryQuoteProvider
 
 # Matches LOCAL_USER_ID seeded by conftest; owner-scoped api tests authenticate as this user.
@@ -70,7 +72,10 @@ def client(
     # T1 cutover：create/list/get/cancel 已改吃新軌 repo；舊軌 dep 仍留給 TWAP endpoint。
     # 同一顆 mock 餵兩軌，既有斷言不必分辨呼叫落在哪個 repo。
     app.dependency_overrides[get_trade_intent_core_repository] = lambda: mock_intent_repository
-    app.dependency_overrides[get_quote_provider] = lambda: in_memory_quote_provider
+    # Quotes come from the caller's session in the pool; a shared-mode pool over the
+    # in-memory provider is what `QUOTE_PROVIDER=in_memory` builds in production.
+    pool = BrokerSessionPool(get_settings(), shared=in_memory_quote_provider)
+    app.dependency_overrides[get_broker_session_pool] = lambda: pool
     app.dependency_overrides[get_db] = lambda: MagicMock()
     # The kill-switch provider opens its own real session (via get_session_factory),
     # which would bypass the mocked get_db above and hit a real DB. These api tests

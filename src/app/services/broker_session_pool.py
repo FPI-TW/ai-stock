@@ -9,10 +9,12 @@ construction:
   `BrokerBindingNotEnabledError` (409, not retryable) because there is no
   per-user login to verify.
 
-This PR ships only the members the bind / unbind commands and the lifespan call.
-Readers (`get` / `require` for the create-intent path) and the owner-scoped quote
-listener arrive with the wiring that uses them (PR3), so their shape is decided
-by a real caller rather than guessed here.
+Readers: `get` / `require` hand the create-intent and current-price paths the
+caller's own session (the shared provider in shared mode). `set_quote_listener`
+takes the core dispatcher's `dispatch(snapshot, *, owner_user_id)`; every session
+that goes live gets it attached scoped to its owner, so a symbol N users watch is
+evaluated once per owner against that owner's intents only (shared mode passes
+`owner_user_id=None` and scans everyone, as before).
 
 Replacing a user's session is a two-phase swap so a failed re-bind never takes
 the working session down:
@@ -44,10 +46,13 @@ import traceback
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
+from typing import Protocol
 from uuid import UUID
 
 from app.core.config import Settings
 from app.domain.broker_account import (
+    BrokerAccountNotBoundError,
     BrokerBindingNotEnabledError,
     BrokerBindInProgressError,
     BrokerLoginFailedError,
@@ -56,10 +61,16 @@ from app.domain.broker_account import (
     BrokerSessionSetupError,
     FubonCredentials,
 )
-from app.services.quote.base import BrokerLoginError, QuoteProvider, QuoteProviderError
+from app.services.quote.base import BrokerLoginError, QuoteProvider, QuoteProviderError, QuoteSnapshot
 from app.services.quote.factory import build_quote_provider
 
 logger = logging.getLogger(__name__)
+
+
+class OwnerScopedQuoteListener(Protocol):
+    """`TradeIntentCoreDispatcher.dispatch`: `owner_user_id=None` means "every owner"."""
+
+    def __call__(self, snapshot: QuoteSnapshot, *, owner_user_id: UUID | None) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +127,47 @@ class BrokerSessionPool:
         # user_id -> whoever holds this user's single in-flight operation token: a
         # placeholder while logging in, then the candidate; or an unbind's claim.
         self._pending: dict[UUID, object] = {}
+        self._listener: OwnerScopedQuoteListener | None = None
+
+    # --- readers ----------------------------------------------------------------
+
+    @property
+    def per_user(self) -> bool:
+        return self._shared is None
+
+    @property
+    def shared_provider(self) -> QuoteProvider | None:
+        """The one provider everyone shares (None in per-user mode). Its startup /
+        shutdown belong to the lifespan, not to the pool."""
+        return self._shared
+
+    def get(self, user_id: UUID) -> QuoteProvider | None:
+        """The session serving `user_id`'s quotes, or None when they have none."""
+        if self._shared is not None:
+            return self._shared
+        with self._lock:
+            return self._sessions.get(user_id)
+
+    def require(self, user_id: UUID) -> QuoteProvider:
+        provider = self.get(user_id)
+        if provider is None:
+            raise BrokerAccountNotBoundError()
+        return provider
+
+    def live_sessions(self) -> list[tuple[UUID, QuoteProvider]]:
+        """Snapshot of the per-user sessions (empty in shared mode)."""
+        with self._lock:
+            return list(self._sessions.items())
+
+    def set_quote_listener(self, listener: OwnerScopedQuoteListener) -> None:
+        """Attach the dispatcher to every session, present and future, scoped to
+        the session's owner. Called once by the lifespan."""
+        self._listener = listener
+        if self._shared is not None:
+            self._shared.add_quote_listener(partial(listener, owner_user_id=None))
+            return
+        for user_id, provider in self.live_sessions():
+            provider.add_quote_listener(partial(listener, owner_user_id=user_id))
 
     # --- two-phase replace ----------------------------------------------------
 
@@ -182,6 +234,10 @@ class BrokerSessionPool:
     def activate(self, candidate: PreparedBrokerSession) -> QuoteProvider | None:
         """Atomically make `candidate` the user's live session. No network, no DB.
         Returns the replaced provider (retire it outside the lock) or None."""
+        if self._listener is not None:
+            # Before the swap so no frame is lost between "live" and "listened to".
+            # Outside the lock: the provider takes its own lock to add a listener.
+            candidate.provider.add_quote_listener(partial(self._listener, owner_user_id=candidate.user_id))
         with self._lock:
             if self._pending.get(candidate.user_id) is not candidate:
                 raise BrokerBindInProgressError()

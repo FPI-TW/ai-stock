@@ -6,6 +6,12 @@ session (on re-bind) is only replaced after the row and audit are committed.
 Unbind cancels the user's open intents (no session, no quotes, they would never
 fire), deletes the row, commits, and only then logs the session out.
 
+`restore_broker_session` is the same login-then-activate shape without an admin
+in the loop: the lifespan runs it for every stored binding, account reactivation
+for the one user, and the reconnect loop for a session whose login the broker
+dropped. It records the outcome on the row (`mark_login_ok` / `mark_login_failed`)
+and raises on failure so each caller decides what a failure means for it.
+
 Nothing here ever logs or stores `str(exc)` from the broker path: DB, API and
 logs see only `BrokerLoginFailureCode` and its whitelisted message.
 """
@@ -13,6 +19,7 @@ logs see only `BrokerLoginFailureCode` and its whitelisted message.
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from cryptography.hazmat.primitives.serialization import pkcs12
@@ -23,7 +30,12 @@ from app.domain.auth import AccountError, AccountNotActiveError, UserNotFoundErr
 from app.domain.broker_account import (
     BrokerAccountData,
     BrokerAccountError,
+    BrokerBindInProgressError,
+    BrokerCredentialKeyError,
     BrokerLoginFailedError,
+    BrokerLoginFailureCode,
+    BrokerSessionLimitReachedError,
+    BrokerSessionSetupError,
     FubonCredentials,
 )
 from app.repositories.broker_account_repository import BrokerAccountRepository
@@ -31,8 +43,8 @@ from app.repositories.intent_repository import IntentRepository
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
 from app.repositories.user_repository import UserRepository
 from app.services.audit import AuditEventWriter
-from app.services.broker_session_pool import BrokerSessionPool
-from app.services.quote.base import QuoteProvider
+from app.services.broker_session_pool import BrokerSessionPool, retire_broker_session
+from app.services.quote.base import QuoteProvider, QuoteProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -220,3 +232,130 @@ class UnbindBrokerAccountCommand:
                     logger.warning("rollback after failed unbind raised %s user_id=%s", type(exc).__name__, user.id)
         # Row is gone; the session goes last so a DB failure never leaves a rowless live session.
         self._pool.stop(claim)
+
+
+def _record_login_failure(
+    db: Session, accounts: BrokerAccountRepository, user_id: UUID, code: BrokerLoginFailureCode, now: datetime
+) -> None:
+    """Best effort: the row is what the admin sees, but a DB that cannot take the
+    write must not hide the original failure from the caller."""
+    try:
+        accounts.mark_login_failed(user_id, code, now=now)
+        db.commit()
+    except Exception as exc:
+        logger.warning("could not record broker login failure %s user_id=%s", type(exc).__name__, user_id)
+
+
+def restore_broker_session(
+    *,
+    db: Session,
+    accounts: BrokerAccountRepository,
+    core_intents: TradeIntentCoreRepository,
+    pool: BrokerSessionPool,
+    user_id: UUID,
+    credentials: FubonCredentials,
+    now: datetime,
+) -> QuoteProvider | None:
+    """Log `user_id` in from stored credentials and make that session live.
+
+    prepare -> subscribe the user's open symbols -> `mark_login_ok` + commit ->
+    `activate`. Returns the session it replaced (retire it outside any lock) or
+    None. On failure the candidate is logged out, the row is marked
+    `login_failed` with a safe code, and the exception propagates. A bind in
+    progress for this user is not a failure: nothing is recorded.
+    """
+    try:
+        candidate = pool.prepare(user_id, credentials)
+    except BrokerBindInProgressError:
+        raise
+    except BrokerLoginFailedError as exc:
+        _record_login_failure(db, accounts, user_id, exc.code, now)
+        raise
+    except BrokerSessionLimitReachedError:
+        _record_login_failure(db, accounts, user_id, "session_limit", now)
+        raise
+    except BrokerSessionSetupError as exc:
+        _record_login_failure(db, accounts, user_id, "unknown", now)
+        raise BrokerLoginFailedError("unknown") from exc
+
+    try:
+        for symbol in sorted(core_intents.active_or_scheduled_symbols_by_owner(user_id)):
+            candidate.provider.subscribe(symbol)
+        accounts.mark_login_ok(user_id, now=now)
+        db.commit()
+    except Exception as exc:
+        pool.discard(candidate)
+        try:
+            db.rollback()
+        except Exception as rollback_exc:
+            logger.warning("rollback after failed restore raised %s user_id=%s", type(rollback_exc).__name__, user_id)
+        code: BrokerLoginFailureCode = "provider_unavailable" if isinstance(exc, QuoteProviderError) else "unknown"
+        logger.warning("broker session restore failed %s user_id=%s code=%s", type(exc).__name__, user_id, code)
+        _record_login_failure(db, accounts, user_id, code, now)
+        raise
+
+    try:
+        return pool.activate(candidate)
+    except Exception:
+        pool.discard(candidate)
+        raise
+
+
+BoundUserRestoreOutcome = Literal["live", "failed", "unbound"]
+
+
+def restore_bound_user(
+    *,
+    db: Session,
+    accounts: BrokerAccountRepository,
+    core_intents: TradeIntentCoreRepository,
+    pool: BrokerSessionPool,
+    user_id: UUID,
+    now: datetime,
+) -> BoundUserRestoreOutcome:
+    """Stored binding -> live session, for callers that must carry on regardless
+    (startup, reactivation, the reconnect loop). Broker and setup failures are
+    recorded on the row and reported as `failed`; a blob the current key cannot
+    open is `credentials_unreadable` (admin re-binds). A replaced session is
+    retired here. Only a database that cannot be read at all propagates."""
+    try:
+        credentials = accounts.get_credentials(user_id)
+    except BrokerCredentialKeyError as exc:
+        logger.warning("broker credentials unreadable reason=%s user_id=%s", exc.reason, user_id)
+        _record_login_failure(db, accounts, user_id, "credentials_unreadable", now)
+        return "failed"
+    if credentials is None:
+        return "unbound"
+    try:
+        replaced = restore_broker_session(
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            pool=pool,
+            user_id=user_id,
+            credentials=credentials,
+            now=now,
+        )
+    except Exception as exc:
+        logger.warning("broker session restore failed %s user_id=%s", type(exc).__name__, user_id)
+        return "failed"
+    if replaced is not None:
+        retire_broker_session(replaced, user_id)
+    return "live"
+
+
+def restore_all_bound_users(
+    *,
+    db: Session,
+    accounts: BrokerAccountRepository,
+    core_intents: TradeIntentCoreRepository,
+    pool: BrokerSessionPool,
+    now: datetime,
+) -> None:
+    """Startup: one login per stored binding. Nobody bound is a valid state (the
+    admin binds the first user after boot); one user failing never stops the rest."""
+    for account in accounts.list_all():
+        outcome = restore_bound_user(
+            db=db, accounts=accounts, core_intents=core_intents, pool=pool, user_id=account.user_id, now=now
+        )
+        logger.info("broker session startup user_id=%s outcome=%s", account.user_id, outcome)
