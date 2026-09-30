@@ -29,6 +29,7 @@ from app.domain.trading_session import TradingSessionService
 from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.repositories.intent_repository import IntentRepository
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
+from app.repositories.user_repository import UserRepository
 from app.services.broker_session_pool import BrokerSessionPool
 from app.services.broker_session_reconnect import BrokerSessionReconnectLoop
 from app.services.idempotency_cleanup import IdempotencyCleanupScheduler
@@ -112,6 +113,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     session_factory=session_factory,
                     accounts_for=accounts_for,
                     core_intents_for=TradeIntentCoreRepository,
+                    users_for=UserRepository,
                     pool=pool,
                     now=datetime.now(UTC),
                 )
@@ -123,6 +125,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     session_factory=session_factory,
                     accounts_for=accounts_for,
                     core_intents_for=TradeIntentCoreRepository,
+                    users_for=UserRepository,
                     session_service=session_service,
                 )
                 tasks.append(create_task(reconnect.run_forever()))

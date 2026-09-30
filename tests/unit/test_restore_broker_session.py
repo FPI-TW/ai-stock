@@ -23,8 +23,9 @@ from tests.unit.test_broker_session_pool import (
     token_free,
 )
 
-from app.commands.broker_account import restore_all_bound_users, restore_broker_session
+from app.commands.broker_account import restore_all_bound_users, restore_bound_user, restore_broker_session
 from app.domain.broker_account import (
+    BrokerAccountNotBoundError,
     BrokerBindInProgressError,
     BrokerLoginFailedError,
     BrokerSessionLimitReachedError,
@@ -37,7 +38,16 @@ NOW = datetime(2026, 9, 30, 1, 0, tzinfo=UTC)
 def _repos(symbols: set[str] | None = None) -> tuple[MagicMock, MagicMock, MagicMock]:
     db, accounts, core_intents = MagicMock(), MagicMock(), MagicMock()
     core_intents.active_or_scheduled_symbols_by_owner.return_value = symbols or set()
+    accounts.get_by_user_id.return_value = MagicMock()  # the binding row exists
     return db, accounts, core_intents
+
+
+def _users(*statuses: str) -> MagicMock:
+    """`get_by_id` answers with each status in turn (the last one repeats)."""
+    users = MagicMock()
+    answers = [MagicMock(status=status) for status in statuses]
+    users.get_by_id.side_effect = answers + [answers[-1]] * 10
+    return users
 
 
 def test_restore_logs_in_subscribes_marks_ok_then_activates() -> None:
@@ -46,7 +56,14 @@ def test_restore_logs_in_subscribes_marks_ok_then_activates() -> None:
     user_id = uuid4()
 
     replaced = restore_broker_session(
-        db=db, accounts=accounts, core_intents=core_intents, pool=pool, user_id=user_id, credentials=_CREDS, now=NOW
+        db=db,
+        accounts=accounts,
+        core_intents=core_intents,
+        users=_users("active"),
+        pool=pool,
+        user_id=user_id,
+        credentials=_CREDS,
+        now=NOW,
     )
 
     assert replaced is None
@@ -66,7 +83,14 @@ def test_restore_returns_the_replaced_session_for_the_caller_to_retire() -> None
     pool.activate(pool.prepare(user_id, _CREDS))
 
     replaced = restore_broker_session(
-        db=db, accounts=accounts, core_intents=core_intents, pool=pool, user_id=user_id, credentials=_CREDS, now=NOW
+        db=db,
+        accounts=accounts,
+        core_intents=core_intents,
+        users=_users("active"),
+        pool=pool,
+        user_id=user_id,
+        credentials=_CREDS,
+        now=NOW,
     )
 
     assert replaced is built[0]
@@ -88,7 +112,14 @@ def test_login_failure_is_recorded_and_raised(fail_with: Exception, expected_cod
 
     with pytest.raises(BrokerLoginFailedError) as info:
         restore_broker_session(
-            db=db, accounts=accounts, core_intents=core_intents, pool=pool, user_id=user_id, credentials=_CREDS, now=NOW
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
         )
 
     assert info.value.code == expected_code
@@ -107,7 +138,14 @@ def test_pool_capacity_is_recorded_as_session_limit() -> None:
 
     with pytest.raises(BrokerSessionLimitReachedError):
         restore_broker_session(
-            db=db, accounts=accounts, core_intents=core_intents, pool=pool, user_id=user_id, credentials=_CREDS, now=NOW
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
         )
 
     accounts.mark_login_failed.assert_called_once_with(user_id, "session_limit", now=NOW)
@@ -122,7 +160,14 @@ def test_subscribe_failure_discards_the_candidate_and_keeps_the_old_session() ->
 
     with pytest.raises(QuoteProviderUnavailableError):
         restore_broker_session(
-            db=db, accounts=accounts, core_intents=core_intents, pool=pool, user_id=user_id, credentials=_CREDS, now=NOW
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
         )
 
     assert built[0].stopped  # candidate logged out
@@ -141,7 +186,14 @@ def test_commit_failure_discards_the_candidate_and_records_unknown() -> None:
 
     with pytest.raises(RuntimeError, match="db down"):
         restore_broker_session(
-            db=db, accounts=accounts, core_intents=core_intents, pool=pool, user_id=user_id, credentials=_CREDS, now=NOW
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
         )
 
     assert built[0].stopped
@@ -158,12 +210,90 @@ def test_bind_in_progress_is_not_a_login_failure() -> None:
 
     with pytest.raises(BrokerBindInProgressError):
         restore_broker_session(
-            db=db, accounts=accounts, core_intents=core_intents, pool=pool, user_id=user_id, credentials=_CREDS, now=NOW
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
         )
 
     accounts.mark_login_failed.assert_not_called()
     db.commit.assert_not_called()
     pool.release(claim)
+
+
+def test_user_disabled_between_the_snapshot_and_the_token_is_not_logged_in() -> None:
+    """The caller decided to restore while the user was active; by the time the
+    token is ours the admin has disabled (or unbound) them. The check runs under
+    the token, after prepare: the candidate is logged out, nothing is written."""
+    pool, built = _pool()
+    db, accounts, core_intents = _repos({"2330"})
+    user_id = uuid4()
+
+    with pytest.raises(BrokerAccountNotBoundError):
+        restore_broker_session(
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("disabled"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
+        )
+
+    assert built[0].stopped and built[0].subscribed == set()
+    assert live_session(pool, user_id) is None
+    accounts.mark_login_ok.assert_not_called()
+    accounts.mark_login_failed.assert_not_called()
+    db.commit.assert_not_called()
+    assert token_free(pool, user_id)
+
+
+def test_row_deleted_between_the_snapshot_and_the_token_is_not_logged_in() -> None:
+    pool, built = _pool()
+    db, accounts, core_intents = _repos()
+    accounts.get_by_user_id.return_value = None  # unbound meanwhile
+    user_id = uuid4()
+
+    with pytest.raises(BrokerAccountNotBoundError):
+        restore_broker_session(
+            db=db,
+            accounts=accounts,
+            core_intents=core_intents,
+            users=_users("active"),
+            pool=pool,
+            user_id=user_id,
+            credentials=_CREDS,
+            now=NOW,
+        )
+
+    assert built[0].stopped
+    assert live_session(pool, user_id) is None
+
+
+def test_restore_bound_user_skips_a_disabled_user_before_touching_the_broker() -> None:
+    pool, built = _pool()
+    db, accounts, core_intents = _repos()
+    accounts.get_credentials.return_value = _CREDS
+
+    outcome = restore_bound_user(
+        db=db,
+        accounts=accounts,
+        core_intents=core_intents,
+        users=_users("disabled"),
+        pool=pool,
+        user_id=uuid4(),
+        now=NOW,
+    )
+
+    assert outcome == "unbound"
+    assert built == []
+    accounts.get_credentials.assert_not_called()
+    accounts.mark_login_failed.assert_not_called()
 
 
 # --- startup: every binding at once -------------------------------------------------
@@ -204,6 +334,7 @@ def test_restore_all_logs_every_binding_in_at_the_same_time_each_on_its_own_sess
         session_factory=_session_factory(sessions),
         accounts_for=lambda _db: accounts,
         core_intents_for=lambda _db: core_intents,
+        users_for=lambda _db: _users("active"),
         pool=pool,
         now=NOW,
     )
@@ -226,6 +357,7 @@ def test_restore_all_with_nobody_bound_opens_no_worker() -> None:
         session_factory=_session_factory(sessions),
         accounts_for=lambda _db: accounts,
         core_intents_for=lambda _db: MagicMock(),
+        users_for=lambda _db: _users("active"),
         pool=pool,
         now=NOW,
     )

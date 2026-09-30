@@ -764,6 +764,14 @@ def test_bind_refuses_the_dev_fallback_key_even_in_local_mode(engine: Engine, mo
 # --- PR3: per-user startup and the create path ---------------------------------------
 
 
+def _clear_bindings(engine: Engine) -> None:
+    """Lifespan tests boot from `broker_accounts` as a whole; rows left by the bind
+    tests above would eat `BROKER_MAX_SESSIONS` before the users under test."""
+    with Session(engine) as session:
+        session.execute(text("DELETE FROM broker_accounts"))
+        session.commit()
+
+
 def _store_binding(engine: Engine, user_id: UUID, *, personal_id: str) -> None:
     with Session(engine) as session:
         BrokerAccountRepository(session, encryption_key=TEST_CREDENTIAL_KEY).upsert(
@@ -785,6 +793,7 @@ def test_lifespan_logs_every_bound_user_in_and_one_failure_does_not_stop_the_res
 ) -> None:
     monkeypatch.setenv("QUOTE_PROVIDER", "fubon")
     get_settings.cache_clear()
+    _clear_bindings(engine)
     harness = _Harness(engine)
     good, bad = _seed_user(engine), _seed_user(engine)
     _seed_core_intent(engine, good)
@@ -813,13 +822,28 @@ def test_lifespan_logs_every_bound_user_in_and_one_failure_does_not_stop_the_res
 
 
 @pytest.mark.integration
+def test_lifespan_skips_bindings_of_disabled_users(engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disable keeps the binding row (reactivate logs back in), so startup must
+    look at the user, not just the row."""
+    monkeypatch.setenv("QUOTE_PROVIDER", "fubon")
+    get_settings.cache_clear()
+    _clear_bindings(engine)
+    harness = _Harness(engine)
+    disabled = _seed_user(engine, status="disabled")
+    _store_binding(engine, disabled, personal_id="C333333333")
+
+    with TestClient(harness.app):
+        assert live_session(harness.pool, disabled) is None
+        assert all(p.broker_account_no and "C333333333" not in p.broker_account_no for p in harness.built)
+    assert harness.built == []
+
+
+@pytest.mark.integration
 def test_lifespan_without_any_binding_boots_with_no_session(engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("QUOTE_PROVIDER", "fubon")
     get_settings.cache_clear()
+    _clear_bindings(engine)
     harness = _Harness(engine)
-    with Session(engine) as session:
-        session.execute(text("DELETE FROM broker_accounts"))
-        session.commit()
 
     with TestClient(harness.app) as client:
         assert client.get("/health").status_code == 200

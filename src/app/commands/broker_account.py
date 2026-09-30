@@ -32,6 +32,7 @@ from app.domain.auth import AccountError, AccountNotActiveError, UserNotFoundErr
 from app.domain.broker_account import (
     BrokerAccountData,
     BrokerAccountError,
+    BrokerAccountNotBoundError,
     BrokerBindInProgressError,
     BrokerCredentialKeyError,
     BrokerLoginFailedError,
@@ -248,11 +249,19 @@ def _record_login_failure(
         logger.warning("could not record broker login failure %s user_id=%s", type(exc).__name__, user_id)
 
 
+def _restorable(users: UserRepository, accounts: BrokerAccountRepository, user_id: UUID) -> bool:
+    """Active user with a binding row. Disable keeps the row (reactivate logs back
+    in), so the user's status is part of the answer, not just the row."""
+    user = users.get_by_id(user_id)
+    return user is not None and user.status == "active" and accounts.get_by_user_id(user_id) is not None
+
+
 def restore_broker_session(
     *,
     db: Session,
     accounts: BrokerAccountRepository,
     core_intents: TradeIntentCoreRepository,
+    users: UserRepository,
     pool: BrokerSessionPool,
     user_id: UUID,
     credentials: FubonCredentials,
@@ -265,6 +274,13 @@ def restore_broker_session(
     None. On failure the candidate is logged out, the row is marked
     `login_failed` with a safe code, and the exception propagates. A bind in
     progress for this user is not a failure: nothing is recorded.
+
+    Once the user's token is ours (after prepare) the user is re-checked: an
+    admin may have disabled or unbound them between the caller's decision and
+    now (disable / unbind take the same token, then commit, then stop the
+    session — so whoever holds the token after that sees the committed state).
+    Then the candidate is discarded and `BrokerAccountNotBoundError` raised
+    without touching the row.
     """
     try:
         candidate = pool.prepare(user_id, credentials)
@@ -279,6 +295,10 @@ def restore_broker_session(
     except BrokerSessionSetupError as exc:
         _record_login_failure(db, accounts, user_id, "unknown", now)
         raise BrokerLoginFailedError("unknown") from exc
+
+    if not _restorable(users, accounts, user_id):
+        pool.discard(candidate)
+        raise BrokerAccountNotBoundError()
 
     try:
         for symbol in sorted(core_intents.active_or_scheduled_symbols_by_owner(user_id)):
@@ -311,6 +331,7 @@ def restore_bound_user(
     db: Session,
     accounts: BrokerAccountRepository,
     core_intents: TradeIntentCoreRepository,
+    users: UserRepository,
     pool: BrokerSessionPool,
     user_id: UUID,
     now: datetime,
@@ -318,8 +339,12 @@ def restore_bound_user(
     """Stored binding -> live session, for callers that must carry on regardless
     (startup, reactivation, the reconnect loop). Broker and setup failures are
     recorded on the row and reported as `failed`; a blob the current key cannot
-    open is `credentials_unreadable` (admin re-binds). A replaced session is
-    retired here. Only a database that cannot be read at all propagates."""
+    open is `credentials_unreadable` (admin re-binds). A disabled user or a
+    missing row is `unbound` — checked before the broker is touched and again
+    under the token. A replaced session is retired here. Only a database that
+    cannot be read at all propagates."""
+    if not _restorable(users, accounts, user_id):
+        return "unbound"
     try:
         credentials = accounts.get_credentials(user_id)
     except BrokerCredentialKeyError as exc:
@@ -333,11 +358,14 @@ def restore_bound_user(
             db=db,
             accounts=accounts,
             core_intents=core_intents,
+            users=users,
             pool=pool,
             user_id=user_id,
             credentials=credentials,
             now=now,
         )
+    except BrokerAccountNotBoundError:
+        return "unbound"
     except Exception as exc:
         logger.warning("broker session restore failed %s user_id=%s", type(exc).__name__, user_id)
         return "failed"
@@ -351,6 +379,7 @@ def restore_all_bound_users(
     session_factory: Callable[[], Session],
     accounts_for: Callable[[Session], BrokerAccountRepository],
     core_intents_for: Callable[[Session], TradeIntentCoreRepository],
+    users_for: Callable[[Session], UserRepository],
     pool: BrokerSessionPool,
     now: datetime,
 ) -> None:
@@ -372,7 +401,13 @@ def restore_all_bound_users(
     def restore_one(user_id: UUID) -> BoundUserRestoreOutcome:
         with session_factory() as db:
             return restore_bound_user(
-                db=db, accounts=accounts_for(db), core_intents=core_intents_for(db), pool=pool, user_id=user_id, now=now
+                db=db,
+                accounts=accounts_for(db),
+                core_intents=core_intents_for(db),
+                users=users_for(db),
+                pool=pool,
+                user_id=user_id,
+                now=now,
             )
 
     with ThreadPoolExecutor(max_workers=len(user_ids), thread_name_prefix="broker-login") as workers:

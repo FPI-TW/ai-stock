@@ -45,11 +45,14 @@ def _loop(
     accounts.get_credentials.return_value = credentials
     core_intents = MagicMock()
     core_intents.active_or_scheduled_symbols_by_owner.return_value = {"2330"}
+    users = MagicMock()
+    users.get_by_id.return_value = MagicMock(status="active")
     loop = BrokerSessionReconnectLoop(
         pool=pool,
         session_factory=lambda: db,
         accounts_for=lambda _db: accounts,
         core_intents_for=lambda _db: core_intents,
+        users_for=lambda _db: users,
         session_service=TradingSessionService(clock=lambda: now),
         interval_seconds=30,
     )
@@ -104,10 +107,9 @@ def test_lost_login_is_replaced_by_a_fresh_session_and_the_old_one_retired() -> 
     assert live_session(pool, user_id) is built[1]
     assert built[1].subscribed == {"2330"}
     accounts.get_credentials.assert_called_once_with(user_id)
-    assert loop.pending_user_ids() == set()
 
 
-def test_failed_relogin_stays_pending_and_is_retried_next_tick() -> None:
+def test_failed_relogin_is_retried_next_tick_while_the_dead_session_stays() -> None:
     outcomes = iter([None, _login_error("provider_unavailable"), None])  # live, failed candidate, good candidate
     pool, built = _pool(provider_for=lambda: ReconnectableFake(fail_with=next(outcomes)))
     user_id = uuid4()
@@ -116,14 +118,12 @@ def test_failed_relogin_stays_pending_and_is_retried_next_tick() -> None:
     loop, accounts = _loop(pool)
 
     loop.run_once()
-    assert loop.pending_user_ids() == {user_id}
     assert live_session(pool, user_id) is built[0]  # dead session kept until a replacement exists
     accounts.mark_login_failed.assert_called_once_with(
         user_id, "provider_unavailable", now=IN_SESSION.astimezone(TAIPEI)
     )
 
     loop.run_once()
-    assert loop.pending_user_ids() == set()
     assert live_session(pool, user_id) is built[2]
     assert built[0].stopped
     accounts.mark_login_ok.assert_called_once()
@@ -137,8 +137,58 @@ def test_unbound_row_disappeared_drops_the_pending_user() -> None:
 
     loop.run_once()
 
-    assert loop.pending_user_ids() == set()
     assert live_session(pool, user_id) is built[0]  # left as is: no credentials to retry with
+    assert len(built) == 1
+
+
+def test_a_session_the_admin_stopped_is_never_logged_back_in() -> None:
+    """Race the question is about: the loop saw the login die, then the admin
+    disabled the account (claim -> commit -> stop) before the loop's next tick. The
+    binding row is kept on disable, so a loop that remembered the user would log a
+    disabled account straight back in. It must only repair sessions that exist."""
+    pool, built, user_id = _live()
+    built[0].login_alive = False  # type: ignore[attr-defined]
+    loop, accounts = _loop(pool, now=PRE_OPEN)
+    loop.run_once()  # outside the window: the loss is observed, nothing done yet
+    pool.stop(pool.claim(user_id))  # the admin disables the account
+
+    loop, accounts = _loop(pool)
+    loop.run_once()
+
+    assert live_session(pool, user_id) is None
+    assert len(built) == 1
+    accounts.get_credentials.assert_not_called()
+
+
+def test_a_session_the_admin_rebound_meanwhile_is_left_alone() -> None:
+    """The admin re-bound the user between ticks: the live session is fresh, so no
+    second login (which would replace the admin's session with another one)."""
+    pool, built, user_id = _live()
+    built[0].login_alive = False  # type: ignore[attr-defined]
+    replaced = pool.activate(pool.prepare(user_id, _CREDS))  # admin's re-bind, healthy
+    assert replaced is built[0]
+    loop, accounts = _loop(pool)
+
+    loop.run_once()
+
+    assert live_session(pool, user_id) is built[1]
+    assert len(built) == 2
+    accounts.get_credentials.assert_not_called()
+
+
+def test_relogin_is_refused_while_the_admin_holds_the_users_token() -> None:
+    """Bind / disable in flight: the token is theirs; the loop backs off to the next tick."""
+    pool, built, user_id = _live()
+    built[0].login_alive = False  # type: ignore[attr-defined]
+    claim = pool.claim(user_id)
+    loop, accounts = _loop(pool)
+
+    loop.run_once()
+
+    assert live_session(pool, user_id) is built[0]
+    assert len(built) == 1
+    accounts.mark_login_failed.assert_not_called()
+    pool.release(claim)
 
 
 def test_tick_survives_a_broken_database() -> None:
@@ -149,7 +199,7 @@ def test_tick_survives_a_broken_database() -> None:
 
     loop.run_once()  # must not raise
 
-    assert loop.pending_user_ids() == {user_id}  # still pending: retried next tick
+    assert live_session(pool, user_id) is built[0]  # still dead: retried next tick
 
 
 def test_run_forever_ticks_then_sleeps(monkeypatch: pytest.MonkeyPatch) -> None:

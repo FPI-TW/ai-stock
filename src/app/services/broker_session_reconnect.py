@@ -8,9 +8,15 @@ them, every `interval_seconds`, and only on a trading day between 08:30 and
 
 - socket down, login alive  -> `provider.reconnect_realtime()` (login stays,
   the provider resubscribes what it owns).
-- login gone                -> the user goes into `_pending`; each tick tries
-  `restore_bound_user` once (fresh login from the stored credentials, swap,
-  retire the dead session). Failure keeps them pending, no backoff.
+- login gone                -> `restore_bound_user` once per tick (fresh login
+  from the stored credentials, swap, retire the dead session). Failure leaves
+  the dead session in place, so the next tick tries again; no backoff.
+
+Nothing is remembered between ticks: every tick starts from the sessions that
+are live *now*. A session the admin stopped (disable / unbind) or replaced
+(re-bind) is simply not there to repair, and `restore_bound_user` re-checks the
+user under the per-user token, so a login can never be brought back for an
+account that was disabled while the loop was looking at it.
 
 Runs `run_once` in a worker thread (`asyncio.to_thread`): the SDK's `connect()`
 busy-spins for up to ~5 s and must not sit on the event loop. Never raises out
@@ -29,6 +35,7 @@ from app.commands.broker_account import restore_bound_user
 from app.domain.trading_session import TradingSessionService
 from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
+from app.repositories.user_repository import UserRepository
 from app.services.broker_session_pool import BrokerSessionPool
 
 logger = logging.getLogger(__name__)
@@ -48,6 +55,7 @@ class BrokerSessionReconnectLoop:
         session_factory: SessionFactory,
         accounts_for: Callable[[Session], BrokerAccountRepository],
         core_intents_for: Callable[[Session], TradeIntentCoreRepository],
+        users_for: Callable[[Session], UserRepository],
         session_service: TradingSessionService,
         interval_seconds: float = 30.0,
     ) -> None:
@@ -55,12 +63,9 @@ class BrokerSessionReconnectLoop:
         self._session_factory = session_factory
         self._accounts_for = accounts_for
         self._core_intents_for = core_intents_for
+        self._users_for = users_for
         self._session_service = session_service
         self._interval_seconds = interval_seconds
-        self._pending: set[UUID] = set()
-
-    def pending_user_ids(self) -> set[UUID]:
-        return set(self._pending)
 
     def run_once(self) -> None:
         try:
@@ -79,29 +84,36 @@ class BrokerSessionReconnectLoop:
             self._session_service.is_trading_day(now.date()) and REPAIR_WINDOW_START <= now.time() < REPAIR_WINDOW_END
         ):
             return
+        login_lost: list[UUID] = []
         for user_id, provider in self._pool.live_sessions():
             # Duck-typed: only the Fubon provider has these; a provider without
             # them (test fakes, a future broker) is treated as healthy.
             if not getattr(provider, "login_alive", True):
-                self._pending.add(user_id)
+                login_lost.append(user_id)
             elif not getattr(provider, "realtime_connected", True):
                 try:
                     provider.reconnect_realtime()  # type: ignore[attr-defined]
                 except Exception as exc:
                     logger.warning("realtime reconnect failed %s user_id=%s", type(exc).__name__, user_id)
-        if self._pending:
-            self._relogin_pending(now)
+        if login_lost:
+            self._relogin(login_lost, now)
 
-    def _relogin_pending(self, now: datetime) -> None:
+    def _relogin(self, user_ids: list[UUID], now: datetime) -> None:
         with self._session_factory() as db:
             accounts = self._accounts_for(db)
             core_intents = self._core_intents_for(db)
-            for user_id in sorted(self._pending, key=str):
+            users = self._users_for(db)
+            for user_id in user_ids:
                 outcome = restore_bound_user(
-                    db=db, accounts=accounts, core_intents=core_intents, pool=self._pool, user_id=user_id, now=now
+                    db=db,
+                    accounts=accounts,
+                    core_intents=core_intents,
+                    users=users,
+                    pool=self._pool,
+                    user_id=user_id,
+                    now=now,
                 )
                 if outcome == "failed":
                     logger.warning("broker re-login failed user_id=%s; retrying next tick", user_id)
-                    continue
-                self._pending.discard(user_id)  # live again, or unbound meanwhile
-                logger.info("broker session re-login user_id=%s outcome=%s", user_id, outcome)
+                else:
+                    logger.info("broker session re-login user_id=%s outcome=%s", user_id, outcome)

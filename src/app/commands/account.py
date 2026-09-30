@@ -426,6 +426,7 @@ class ReactivateUserCommand:
                 db=self._db,
                 accounts=self._accounts,
                 core_intents=self._core_intents,
+                users=self._users,
                 pool=self._pool,
                 user_id=user.id,
                 now=inp.now,

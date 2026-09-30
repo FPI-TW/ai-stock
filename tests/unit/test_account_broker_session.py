@@ -20,7 +20,11 @@ NOW = datetime(2026, 9, 30, 1, 0, tzinfo=UTC)
 
 def _users(user_id: object, status: str) -> MagicMock:
     users = MagicMock()
-    users.get_by_id.return_value = MagicMock(id=user_id, status=status)
+    user = MagicMock(id=user_id, status=status)
+    users.get_by_id.return_value = user
+    # The real repo flips the row; the restore afterwards re-reads it under the token.
+    users.reactivate.side_effect = lambda *_a, **_k: setattr(user, "status", "active")
+    users.disable.side_effect = lambda *_a, **_k: setattr(user, "status", "disabled")
     return users
 
 
