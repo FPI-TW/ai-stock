@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from tests.unit.test_broker_session_pool import _CREDS, FakeProvider, _login_error, _pool, live_session
 
+from app.domain.broker_account import LOGIN_FAILURE_MESSAGES
 from app.domain.trading_session import TradingSessionService
 from app.services.broker_session_pool import BrokerSessionPool
 from app.services.broker_session_reconnect import BrokerSessionReconnectLoop
@@ -35,18 +36,32 @@ class ReconnectableFake(FakeProvider):
         self.realtime_connected = True
 
 
+def _account(user_id: UUID, *, status: str = "active", last_error: str | None = None) -> MagicMock:
+    return MagicMock(user_id=user_id, status=status, last_error=last_error)
+
+
 def _loop(
-    pool: BrokerSessionPool, *, now: datetime = IN_SESSION, credentials: object = _CREDS
+    pool: BrokerSessionPool,
+    *,
+    now: datetime = IN_SESSION,
+    credentials: object = _CREDS,
+    accounts_rows: list[MagicMock] | None = None,
+    user_status: str = "active",
 ) -> tuple[BrokerSessionReconnectLoop, MagicMock]:
+    """`accounts_rows` defaults to one active row per live session (the normal
+    case); pass rows explicitly to describe bindings without a session."""
     db = MagicMock()
     db.__enter__ = MagicMock(return_value=db)
     db.__exit__ = MagicMock(return_value=False)
     accounts = MagicMock()
     accounts.get_credentials.return_value = credentials
+    accounts.list_all.return_value = (
+        accounts_rows if accounts_rows is not None else [_account(user_id) for user_id, _ in pool.live_sessions()]
+    )
     core_intents = MagicMock()
     core_intents.active_or_scheduled_symbols_by_owner.return_value = {"2330"}
     users = MagicMock()
-    users.get_by_id.return_value = MagicMock(status="active")
+    users.get_by_id.return_value = MagicMock(status=user_status)
     loop = BrokerSessionReconnectLoop(
         pool=pool,
         session_factory=lambda: db,
@@ -152,7 +167,8 @@ def test_a_session_the_admin_stopped_is_never_logged_back_in() -> None:
     loop.run_once()  # outside the window: the loss is observed, nothing done yet
     pool.stop(pool.claim(user_id))  # the admin disables the account
 
-    loop, accounts = _loop(pool)
+    # Disable keeps the binding row; only the user's status says no.
+    loop, accounts = _loop(pool, accounts_rows=[_account(user_id)], user_status="disabled")
     loop.run_once()
 
     assert live_session(pool, user_id) is None
@@ -200,6 +216,63 @@ def test_tick_survives_a_broken_database() -> None:
     loop.run_once()  # must not raise
 
     assert live_session(pool, user_id) is built[0]  # still dead: retried next tick
+
+
+# --- bindings without a live session (startup / crash-restart failures) -----------
+
+
+def test_binding_whose_startup_login_failed_transiently_is_retried() -> None:
+    """Review finding (PR #98): the loop only repaired live sessions, so a binding
+    whose login failed at boot — the crash-restart case: Compose restarts inside
+    the broker's ~60 s residual-session window and every login answers
+    session_limit — stayed `login_failed` for good."""
+    pool, built = _pool(provider_for=ReconnectableFake)
+    user_id = uuid4()
+    row = _account(user_id, status="login_failed", last_error=LOGIN_FAILURE_MESSAGES["session_limit"])
+    loop, accounts = _loop(pool, accounts_rows=[row])
+
+    loop.run_once()
+
+    assert live_session(pool, user_id) is built[0]
+    assert built[0].subscribed == {"2330"}
+    accounts.mark_login_ok.assert_called_once()
+
+
+def test_bound_row_without_a_session_is_logged_in() -> None:
+    """`activate` failed after the bind committed: row says active, pool has nothing."""
+    pool, built = _pool(provider_for=ReconnectableFake)
+    user_id = uuid4()
+    loop, _ = _loop(pool, accounts_rows=[_account(user_id, status="active")])
+
+    loop.run_once()
+
+    assert live_session(pool, user_id) is built[0]
+
+
+@pytest.mark.parametrize("code", ["login_rejected", "cert_invalid", "credentials_unreadable"])
+def test_binding_whose_last_failure_needs_a_human_is_not_retried(code: str) -> None:
+    """Wrong password, bad cert, rotated key: retrying every 30 s cannot succeed and
+    repeated refused logins risk the broker locking the account. The admin re-binds."""
+    pool, built = _pool(provider_for=ReconnectableFake)
+    row = _account(uuid4(), status="login_failed", last_error=LOGIN_FAILURE_MESSAGES[code])  # type: ignore[index]
+    loop, accounts = _loop(pool, accounts_rows=[row])
+
+    loop.run_once()
+
+    assert built == []
+    accounts.get_credentials.assert_not_called()
+
+
+def test_dead_login_is_not_retried_once_the_broker_rejected_the_credentials() -> None:
+    pool, built, user_id = _live()
+    built[0].login_alive = False  # type: ignore[attr-defined]
+    row = _account(user_id, status="login_failed", last_error=LOGIN_FAILURE_MESSAGES["login_rejected"])
+    loop, accounts = _loop(pool, accounts_rows=[row])
+
+    loop.run_once()
+
+    assert len(built) == 1
+    accounts.get_credentials.assert_not_called()
 
 
 def test_run_forever_ticks_then_sleeps(monkeypatch: pytest.MonkeyPatch) -> None:

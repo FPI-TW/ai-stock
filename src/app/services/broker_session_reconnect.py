@@ -6,17 +6,26 @@ only raise a flag on the provider — this loop is the single place that acts on
 them, every `interval_seconds`, and only on a trading day between 08:30 and
 13:35 Taipei so nothing thrashes against a broker that is closed for the day.
 
-- socket down, login alive  -> `provider.reconnect_realtime()` (login stays,
-  the provider resubscribes what it owns).
-- login gone                -> `restore_bound_user` once per tick (fresh login
-  from the stored credentials, swap, retire the dead session). Failure leaves
-  the dead session in place, so the next tick tries again; no backoff.
+Every tick walks the stored bindings (`broker_accounts`) against the sessions
+that are live now:
 
-Nothing is remembered between ticks: every tick starts from the sessions that
-are live *now*. A session the admin stopped (disable / unbind) or replaced
-(re-bind) is simply not there to repair, and `restore_bound_user` re-checks the
-user under the per-user token, so a login can never be brought back for an
-account that was disabled while the loop was looking at it.
+- live, login alive, socket down -> `provider.reconnect_realtime()` (login
+  stays, the provider resubscribes what it owns).
+- live but login gone, or no session at all (login failed at boot — e.g. a
+  crash-restart inside the broker's ~60 s residual-session window refused
+  everyone with session_limit — or `activate` failed after a bind committed)
+  -> `restore_bound_user` once per tick: fresh login from the stored
+  credentials, swap, retire the dead session. Failure is recorded on the row and
+  the next tick tries again; no backoff.
+- a row whose last failure needs a human (`login_rejected`, `cert_invalid`,
+  `credentials_unreadable`) is skipped: retrying cannot succeed and repeated
+  refused logins risk the broker locking the account. The admin re-binds.
+
+Nothing is remembered between ticks. A session the admin stopped (disable /
+unbind) or replaced (re-bind) is simply not there — or is healthy — and
+`restore_bound_user` re-checks the user under the per-user token, so a login
+can never be brought back for an account that was disabled while the loop was
+looking at it.
 
 Runs `run_once` in a worker thread (`asyncio.to_thread`): the SDK's `connect()`
 busy-spins for up to ~5 s and must not sit on the event loop. Never raises out
@@ -26,12 +35,12 @@ of a tick. Produces no health state and no notifications — repair only.
 import asyncio
 import logging
 from collections.abc import Callable
-from datetime import datetime, time
-from uuid import UUID
+from datetime import time
 
 from sqlalchemy.orm import Session
 
 from app.commands.broker_account import restore_bound_user
+from app.domain.broker_account import RETRYABLE_LOGIN_FAILURES, BrokerAccountData, login_failure_code_for
 from app.domain.trading_session import TradingSessionService
 from app.repositories.broker_account_repository import BrokerAccountRepository
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
@@ -84,36 +93,42 @@ class BrokerSessionReconnectLoop:
             self._session_service.is_trading_day(now.date()) and REPAIR_WINDOW_START <= now.time() < REPAIR_WINDOW_END
         ):
             return
-        login_lost: list[UUID] = []
-        for user_id, provider in self._pool.live_sessions():
-            # Duck-typed: only the Fubon provider has these; a provider without
-            # them (test fakes, a future broker) is treated as healthy.
-            if not getattr(provider, "login_alive", True):
-                login_lost.append(user_id)
-            elif not getattr(provider, "realtime_connected", True):
-                try:
-                    provider.reconnect_realtime()  # type: ignore[attr-defined]
-                except Exception as exc:
-                    logger.warning("realtime reconnect failed %s user_id=%s", type(exc).__name__, user_id)
-        if login_lost:
-            self._relogin(login_lost, now)
-
-    def _relogin(self, user_ids: list[UUID], now: datetime) -> None:
+        live = dict(self._pool.live_sessions())
         with self._session_factory() as db:
             accounts = self._accounts_for(db)
             core_intents = self._core_intents_for(db)
             users = self._users_for(db)
-            for user_id in user_ids:
+            for account in accounts.list_all():
+                provider = live.get(account.user_id)
+                # Duck-typed: only the Fubon provider has these flags; a provider
+                # without them (test fakes, a future broker) is treated as healthy.
+                if provider is not None and getattr(provider, "login_alive", True):
+                    if not getattr(provider, "realtime_connected", True):
+                        try:
+                            provider.reconnect_realtime()  # type: ignore[attr-defined]
+                        except Exception as exc:
+                            logger.warning(
+                                "realtime reconnect failed %s user_id=%s", type(exc).__name__, account.user_id
+                            )
+                    continue
+                if not _worth_retrying(account):
+                    continue
                 outcome = restore_bound_user(
                     db=db,
                     accounts=accounts,
                     core_intents=core_intents,
                     users=users,
                     pool=self._pool,
-                    user_id=user_id,
+                    user_id=account.user_id,
                     now=now,
                 )
                 if outcome == "failed":
-                    logger.warning("broker re-login failed user_id=%s; retrying next tick", user_id)
+                    logger.warning("broker re-login failed user_id=%s; retrying next tick", account.user_id)
                 else:
-                    logger.info("broker session re-login user_id=%s outcome=%s", user_id, outcome)
+                    logger.info("broker session re-login user_id=%s outcome=%s", account.user_id, outcome)
+
+
+def _worth_retrying(account: BrokerAccountData) -> bool:
+    if account.status != "login_failed":
+        return True  # bound and expected live: lost login, or activate failed after commit
+    return login_failure_code_for(account.last_error) in RETRYABLE_LOGIN_FAILURES

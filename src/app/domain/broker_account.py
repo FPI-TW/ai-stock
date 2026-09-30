@@ -27,6 +27,23 @@ LOGIN_FAILURE_MESSAGES: dict[BrokerLoginFailureCode, str] = {
     "unknown": "券商登入發生未預期錯誤",
 }
 
+# Failures the repair loop may retry on its own: the broker or the environment was
+# the problem. The rest (wrong password, bad cert, rotated key) cannot succeed
+# without the admin, and hammering a refused login risks the broker locking the
+# account.
+RETRYABLE_LOGIN_FAILURES: frozenset[BrokerLoginFailureCode] = frozenset(
+    {"session_limit", "provider_unavailable", "unknown"}
+)
+
+
+def login_failure_code_for(last_error: str | None) -> BrokerLoginFailureCode | None:
+    """The code a stored `last_error` message came from (the column stores only the
+    whitelisted message). None for an unknown text or no error."""
+    for code, message in LOGIN_FAILURE_MESSAGES.items():
+        if message == last_error:
+            return code
+    return None
+
 
 @dataclass(frozen=True, repr=False)
 class FubonCredentials:
