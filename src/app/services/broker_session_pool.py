@@ -159,6 +159,23 @@ class BrokerSessionPool:
         with self._lock:
             return list(self._sessions.items())
 
+    def free_slots(self) -> int:
+        """How many more users could get a session right now (0 in shared mode).
+        A snapshot: `prepare` re-checks under the lock and is the only arbiter."""
+        if self._shared is not None:
+            return 0
+        with self._lock:
+            return max(0, self._max - len(self._sessions) - self._reserved_first_binds())
+
+    def _reserved_first_binds(self) -> int:
+        # Callers hold the lock. Slots in use beyond live sessions: first-bind
+        # candidates still logging in. An unbind's claim never holds a slot.
+        return sum(
+            1
+            for uid, holder in self._pending.items()
+            if uid not in self._sessions and not isinstance(holder, BrokerStopClaim)
+        )
+
     def set_quote_listener(self, listener: OwnerScopedQuoteListener) -> None:
         """Attach the dispatcher to every session, present and future, scoped to
         the session's owner. Called once by the lifespan."""
@@ -186,14 +203,7 @@ class BrokerSessionPool:
         with self._lock:
             if user_id in self._pending:
                 raise BrokerBindInProgressError()
-            # Slots in use = live sessions + first-bind candidates still logging in.
-            # An unbind's claim holds the user's token but never a slot: the session
-            # it will stop is already counted (or never existed).
-            reserved = len(self._sessions) + sum(
-                1
-                for uid, holder in self._pending.items()
-                if uid not in self._sessions and not isinstance(holder, BrokerStopClaim)
-            )
+            reserved = len(self._sessions) + self._reserved_first_binds()
             if user_id not in self._sessions and reserved >= self._max:
                 raise BrokerSessionLimitReachedError(self._max)
             self._pending[user_id] = object()

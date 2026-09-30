@@ -130,7 +130,7 @@ def test_login_failure_is_recorded_and_raised(fail_with: Exception, expected_cod
     assert token_free(pool, user_id)
 
 
-def test_pool_capacity_is_recorded_as_session_limit() -> None:
+def test_pool_capacity_is_recorded_as_this_systems_limit_not_the_brokers() -> None:
     pool, _ = _pool(max_sessions=1)
     pool.activate(pool.prepare(uuid4(), _CREDS))
     db, accounts, core_intents = _repos()
@@ -148,7 +148,7 @@ def test_pool_capacity_is_recorded_as_session_limit() -> None:
             now=NOW,
         )
 
-    accounts.mark_login_failed.assert_called_once_with(user_id, "session_limit", now=NOW)
+    accounts.mark_login_failed.assert_called_once_with(user_id, "session_pool_full", now=NOW)
 
 
 def test_subscribe_failure_discards_the_candidate_and_keeps_the_old_session() -> None:
@@ -371,6 +371,61 @@ def test_restore_all_logs_every_binding_in_at_the_same_time_each_on_its_own_sess
     for worker_session in sessions[1:]:
         worker_session.commit.assert_called_once()
     assert accounts.mark_login_ok.call_count == 2
+
+
+def test_restore_all_logs_in_the_oldest_bindings_first_and_marks_the_overflow_without_trying() -> None:
+    """Review finding (PR #98): with more restorable bindings than
+    BROKER_MAX_SESSIONS, which users got a session was decided by thread scheduling
+    and the rest were told the *broker* was full. Now: the listing order (oldest
+    binding first) is the login order, the overflow is never sent to the broker,
+    and its row names this system's limit."""
+    pool, built = _pool(max_sessions=2)
+    users = [uuid4(), uuid4(), uuid4()]
+    accounts = MagicMock()
+    accounts.list_all.return_value = [MagicMock(user_id=user_id) for user_id in users]
+    accounts.get_credentials.return_value = _CREDS
+    core_intents = MagicMock()
+    core_intents.active_or_scheduled_symbols_by_owner.return_value = set()
+    sessions: list[MagicMock] = []
+
+    restore_all_bound_users(
+        session_factory=_session_factory(sessions),
+        accounts_for=lambda _db: accounts,
+        core_intents_for=lambda _db: core_intents,
+        users_for=lambda _db: _users("active"),
+        pool=pool,
+        now=NOW,
+    )
+
+    assert live_user_ids(pool) == set(users[:2])
+    assert len(built) == 2
+    accounts.mark_login_failed.assert_called_once_with(users[2], "session_pool_full", now=NOW)
+    assert len(sessions) == 3  # listing + two logins; the overflow is recorded on the listing session
+
+
+def test_restore_all_does_not_let_a_disabled_user_consume_a_slot() -> None:
+    pool, built = _pool(max_sessions=1)
+    disabled, active = uuid4(), uuid4()
+    accounts = MagicMock()
+    accounts.list_all.return_value = [MagicMock(user_id=disabled), MagicMock(user_id=active)]
+    accounts.get_credentials.return_value = _CREDS
+    core_intents = MagicMock()
+    core_intents.active_or_scheduled_symbols_by_owner.return_value = set()
+    statuses = {disabled: "disabled", active: "active"}
+    users = MagicMock()
+    users.get_by_id.side_effect = lambda user_id: MagicMock(status=statuses[user_id])
+
+    restore_all_bound_users(
+        session_factory=_session_factory([]),
+        accounts_for=lambda _db: accounts,
+        core_intents_for=lambda _db: core_intents,
+        users_for=lambda _db: users,
+        pool=pool,
+        now=NOW,
+    )
+
+    assert live_user_ids(pool) == {active}
+    accounts.mark_login_failed.assert_not_called()
 
 
 def test_restore_all_with_nobody_bound_opens_no_worker() -> None:

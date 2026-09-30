@@ -332,6 +332,33 @@ def test_dead_login_is_not_retried_once_the_broker_rejected_the_credentials() ->
     accounts.get_credentials.assert_not_called()
 
 
+def test_binding_without_a_session_waits_for_a_free_slot_instead_of_hammering_the_pool() -> None:
+    """The pool is full: trying would fail at `prepare` every 30 s and rewrite the
+    row each time. Skip until a slot frees (unbind / disable), then log in."""
+    pool, clients = _pool()  # BROKER_MAX_SESSIONS = 2
+    a, b, waiting = uuid4(), uuid4(), uuid4()
+    pool.activate(pool.prepare(a, _CREDS))
+    pool.activate(pool.prepare(b, _CREDS))
+    rows = [
+        _account(a),
+        _account(b),
+        _account(waiting, status="login_failed", last_error=LOGIN_FAILURE_MESSAGES["session_pool_full"]),
+    ]
+    loop, accounts = _loop(pool, accounts_rows=rows)
+
+    loop.run_once()
+    assert len(clients) == 2
+    accounts.get_credentials.assert_not_called()
+    accounts.mark_login_failed.assert_not_called()
+
+    pool.stop(pool.claim(a))  # the admin unbinds A: session gone, row gone
+    loop, accounts = _loop(pool, accounts_rows=rows[1:])
+    loop.run_once()
+    assert live_session(pool, waiting) is not None
+    assert clients[2].login_alive
+    accounts.mark_login_ok.assert_called_once_with(waiting, now=IN_SESSION.astimezone(TAIPEI))
+
+
 def test_a_provider_that_is_not_fubon_is_reported_not_guessed_healthy() -> None:
     """Per-user mode holds one provider type; anything else is a wiring bug and is
     logged as such instead of being treated as healthy."""

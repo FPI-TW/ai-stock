@@ -20,6 +20,8 @@ that are live now:
 - a row whose last failure needs a human (`login_rejected`, `cert_invalid`,
   `credentials_unreadable`) is skipped: retrying cannot succeed and repeated
   refused logins risk the broker locking the account. The admin re-binds.
+- a row with no session at all only gets a login while the pool has a free
+  slot (`session_pool_full` rows wait for an unbind / disable, no churn).
 
 Nothing is remembered between ticks. A session the admin stopped (disable /
 unbind) or replaced (re-bind) is simply not there — or is healthy — and
@@ -95,6 +97,7 @@ class BrokerSessionReconnectLoop:
         ):
             return
         live = dict(self._pool.live_sessions())
+        free_slots = self._pool.free_slots()
         with self._session_factory() as db:
             accounts = self._accounts_for(db)
             core_intents = self._core_intents_for(db)
@@ -117,6 +120,13 @@ class BrokerSessionReconnectLoop:
                     continue
                 if not _worth_retrying(account):
                     continue
+                if provider is None:
+                    # No session to replace: this needs a slot. A full pool would fail
+                    # at `prepare` every tick and rewrite the row each time; wait for
+                    # an unbind / disable to free one instead.
+                    if free_slots <= 0:
+                        continue
+                    free_slots -= 1
                 outcome = restore_bound_user(
                     db=db,
                     accounts=accounts,

@@ -451,3 +451,19 @@ def test_shared_mode_listener_dispatches_without_an_owner() -> None:
         attached(_snapshot())
 
     assert received == [("2330", None)]
+
+
+def test_free_slots_counts_live_sessions_and_first_bind_candidates() -> None:
+    pool, _ = _pool(max_sessions=2)
+    assert pool.free_slots() == 2
+    first = uuid4()
+    pool.activate(pool.prepare(first, _CREDS))
+    assert pool.free_slots() == 1
+    rebind = pool.prepare(first, _CREDS)  # replacing needs no extra slot
+    assert pool.free_slots() == 1
+    pool.discard(rebind)
+    pending = pool.prepare(uuid4(), _CREDS)
+    assert pool.free_slots() == 0
+    pool.discard(pending)
+    assert pool.free_slots() == 1
+    assert BrokerSessionPool(_settings(), shared=FakeProvider()).free_slots() == 0  # nothing per-user to fill

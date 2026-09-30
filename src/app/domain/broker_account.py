@@ -13,7 +13,13 @@ from typing import Literal
 from uuid import UUID
 
 BrokerLoginFailureCode = Literal[
-    "login_rejected", "session_limit", "provider_unavailable", "cert_invalid", "credentials_unreadable", "unknown"
+    "login_rejected",
+    "session_limit",
+    "session_pool_full",
+    "provider_unavailable",
+    "cert_invalid",
+    "credentials_unreadable",
+    "unknown",
 ]
 
 # The only text that may reach `broker_accounts.last_error`, the API and the logs.
@@ -21,6 +27,7 @@ BrokerLoginFailureCode = Literal[
 LOGIN_FAILURE_MESSAGES: dict[BrokerLoginFailureCode, str] = {
     "login_rejected": "券商拒絕登入，請確認身分證字號、密碼與憑證",
     "session_limit": "券商連線數已達上限，請稍後再試",
+    "session_pool_full": "本系統同時連線數已達上限（BROKER_MAX_SESSIONS），有人解除綁定後會自動登入",
     "provider_unavailable": "券商服務暫時無法使用",
     "cert_invalid": "憑證檔或憑證密碼無效",
     "credentials_unreadable": "券商金鑰無法解密（加密金鑰已輪替），請重新綁定",
@@ -32,7 +39,7 @@ LOGIN_FAILURE_MESSAGES: dict[BrokerLoginFailureCode, str] = {
 # without the admin, and hammering a refused login risks the broker locking the
 # account.
 RETRYABLE_LOGIN_FAILURES: frozenset[BrokerLoginFailureCode] = frozenset(
-    {"session_limit", "provider_unavailable", "unknown"}
+    {"session_limit", "session_pool_full", "provider_unavailable", "unknown"}
 )
 
 

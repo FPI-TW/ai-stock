@@ -295,7 +295,7 @@ def restore_broker_session(
         _record_login_failure(db, accounts, user_id, exc.code, now)
         raise
     except BrokerSessionLimitReachedError:
-        _record_login_failure(db, accounts, user_id, "session_limit", now)
+        _record_login_failure(db, accounts, user_id, "session_pool_full", now)
         raise
     except BrokerSessionSetupError as exc:
         _record_login_failure(db, accounts, user_id, "unknown", now)
@@ -388,19 +388,28 @@ def restore_all_bound_users(
     pool: BrokerSessionPool,
     now: datetime,
 ) -> None:
-    """Startup: one login per stored binding, all at once. Nobody bound is a valid
-    state (the admin binds the first user after boot); one user failing never
-    stops the rest.
+    """Startup: one login per restorable binding, all at once. Nobody bound is a
+    valid state (the admin binds the first user after boot); one user failing
+    never stops the rest.
 
-    Parallel because each login costs ~3 s at the broker and `BROKER_MAX_SESSIONS`
-    goes up to 10: sequential would hold the app off the network for the whole
-    sum, parallel for one login. A SQLAlchemy Session is not thread-safe, so
-    every worker opens its own through `session_factory`; the pool itself is
-    thread-safe and reserves slots under its lock.
+    More restorable bindings than `BROKER_MAX_SESSIONS` (the limit was lowered, or
+    users were bound while others were disabled): the oldest bindings get the
+    slots, deterministically, and the overflow is marked `session_pool_full`
+    without touching the broker — the reconnect loop logs them in as slots free up.
+
+    Parallel because each login costs ~3 s at the broker and the cap goes up to
+    10: sequential would hold the app off the network for the whole sum, parallel
+    for one login. A SQLAlchemy Session is not thread-safe, so every worker opens
+    its own through `session_factory`; the pool itself is thread-safe.
     """
     with session_factory() as db:
-        user_ids = [account.user_id for account in accounts_for(db).list_all()]
-    if not user_ids:
+        accounts, users = accounts_for(db), users_for(db)
+        restorable = [a.user_id for a in accounts.list_all() if _restorable(users, accounts, a.user_id)]
+        to_login, overflow = restorable[: pool.free_slots()], restorable[pool.free_slots() :]
+        for user_id in overflow:
+            logger.warning("broker session startup user_id=%s outcome=session_pool_full", user_id)
+            _record_login_failure(db, accounts, user_id, "session_pool_full", now)
+    if not to_login:
         return
 
     def restore_one(user_id: UUID) -> BoundUserRestoreOutcome:
@@ -415,6 +424,6 @@ def restore_all_bound_users(
                 now=now,
             )
 
-    with ThreadPoolExecutor(max_workers=len(user_ids), thread_name_prefix="broker-login") as workers:
-        for user_id, outcome in zip(user_ids, workers.map(restore_one, user_ids), strict=True):
+    with ThreadPoolExecutor(max_workers=len(to_login), thread_name_prefix="broker-login") as workers:
+        for user_id, outcome in zip(to_login, workers.map(restore_one, to_login), strict=True):
             logger.info("broker session startup user_id=%s outcome=%s", user_id, outcome)
