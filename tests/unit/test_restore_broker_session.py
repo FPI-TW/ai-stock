@@ -6,14 +6,24 @@ Any failure before commit discards the candidate and records a safe failure code
 the caller decides whether to continue (lifespan / loop) or to swallow (reactivate).
 """
 
+import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
-from tests.unit.test_broker_session_pool import _CREDS, FakeProvider, _login_error, _pool, live_session, token_free
+from tests.unit.test_broker_session_pool import (
+    _CREDS,
+    FakeProvider,
+    _login_error,
+    _pool,
+    live_session,
+    live_user_ids,
+    token_free,
+)
 
-from app.commands.broker_account import restore_broker_session
+from app.commands.broker_account import restore_all_bound_users, restore_broker_session
 from app.domain.broker_account import (
     BrokerBindInProgressError,
     BrokerLoginFailedError,
@@ -154,3 +164,71 @@ def test_bind_in_progress_is_not_a_login_failure() -> None:
     accounts.mark_login_failed.assert_not_called()
     db.commit.assert_not_called()
     pool.release(claim)
+
+
+# --- startup: every binding at once -------------------------------------------------
+
+
+def _session_factory(sessions: list[MagicMock]) -> Callable[[], MagicMock]:
+    def factory() -> MagicMock:
+        db = MagicMock()
+        db.__enter__ = MagicMock(return_value=db)
+        db.__exit__ = MagicMock(return_value=False)
+        sessions.append(db)
+        return db
+
+    return factory
+
+
+def test_restore_all_logs_every_binding_in_at_the_same_time_each_on_its_own_session() -> None:
+    """Ten users × ~3 s each is a 30 s boot when done one after another; parallel
+    keeps it at one login. Each worker needs its own DB session (Session is not
+    thread-safe), so the factory is called once per user plus once for the listing."""
+    barrier = threading.Barrier(2)
+
+    class BarrierFake(FakeProvider):
+        def startup(self) -> None:
+            barrier.wait(timeout=5)  # a sequential loop never has two logins here at once
+            super().startup()
+
+    pool, built = _pool(provider_for=BarrierFake)
+    users = [uuid4(), uuid4()]
+    accounts = MagicMock()
+    accounts.list_all.return_value = [MagicMock(user_id=user_id) for user_id in users]
+    accounts.get_credentials.return_value = _CREDS
+    core_intents = MagicMock()
+    core_intents.active_or_scheduled_symbols_by_owner.return_value = {"2330"}
+    sessions: list[MagicMock] = []
+
+    restore_all_bound_users(
+        session_factory=_session_factory(sessions),
+        accounts_for=lambda _db: accounts,
+        core_intents_for=lambda _db: core_intents,
+        pool=pool,
+        now=NOW,
+    )
+
+    assert live_user_ids(pool) == set(users)
+    assert all(p.subscribed == {"2330"} for p in built)
+    assert len(sessions) == 3  # one to list, one per login
+    for worker_session in sessions[1:]:
+        worker_session.commit.assert_called_once()
+    assert accounts.mark_login_ok.call_count == 2
+
+
+def test_restore_all_with_nobody_bound_opens_no_worker() -> None:
+    pool, built = _pool()
+    accounts = MagicMock()
+    accounts.list_all.return_value = []
+    sessions: list[MagicMock] = []
+
+    restore_all_bound_users(
+        session_factory=_session_factory(sessions),
+        accounts_for=lambda _db: accounts,
+        core_intents_for=lambda _db: MagicMock(),
+        pool=pool,
+        now=NOW,
+    )
+
+    assert built == [] and len(sessions) == 1
+    accounts.get_credentials.assert_not_called()

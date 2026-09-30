@@ -67,7 +67,7 @@ Schema 已前進時 app image rollback 不代表 DB downgrade；migration 必須
 ## per-user 券商 session（`QUOTE_PROVIDER=fubon`）
 
 - 一個 process 持有每位綁定使用者一條富邦 SDK session，記憶體隨綁定人數線性成長；`BROKER_MAX_SESSIONS`（1..10，預設 2）是應用層上限，達上限時綁定回 409。富邦登入連線硬上限 10 是每帳號還是每應用程式尚未實測；單一 SDK 實例 RSS 也待 Linux 量測後再調預設。
-- 每次部署或重啟全員重登券商；異常關機（OS kill）殘留的富邦端 session 會佔用連線額度，等其 pong 逾時（約 30 秒 × 2）才釋放，重啟後若登入被拒可稍候再啟動。
+- 每次部署或重啟全員重登券商（平行登入，開機時間約一次登入的長度；登入完成前 app 尚未 listen，Nginx 回 502，healthcheck 的 `start_period` 20 秒＋5 次 15 秒足以涵蓋）；異常關機（OS kill）殘留的富邦端 session 會佔用連線額度，等其 pong 逾時（約 30 秒 × 2）才釋放，重啟後若登入被拒可稍候再啟動。
 - `GET /me/broker-account` 的 `status=login_failed` 表示最近一次登入（綁定、啟動、復權或重連）失敗，`lastError` 是白名單訊息。啟動或綁定當下的失敗不會自動重試，需重新綁定或重啟；交易時段內斷線後的重登由重連迴圈每 30 秒再試。
 - 重連迴圈只在交易日台北 08:30～13:35 動作（目前只排除週末，平日休市仍會嘗試）；行情斷線到接回之間最多約 30 秒加重連耗時收不到行情，價位在這段時間掃過又回頭的觸發會漏掉，只通知階段接受。
 - SDK 的 Rust 核心 panic 攔不住，會殺掉整個 process，所有使用者一起斷；Compose 的 restart policy 負責拉起來並全員重登。

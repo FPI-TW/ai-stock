@@ -17,6 +17,8 @@ logs see only `BrokerLoginFailureCode` and its whitelisted message.
 """
 
 import logging
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -346,16 +348,33 @@ def restore_bound_user(
 
 def restore_all_bound_users(
     *,
-    db: Session,
-    accounts: BrokerAccountRepository,
-    core_intents: TradeIntentCoreRepository,
+    session_factory: Callable[[], Session],
+    accounts_for: Callable[[Session], BrokerAccountRepository],
+    core_intents_for: Callable[[Session], TradeIntentCoreRepository],
     pool: BrokerSessionPool,
     now: datetime,
 ) -> None:
-    """Startup: one login per stored binding. Nobody bound is a valid state (the
-    admin binds the first user after boot); one user failing never stops the rest."""
-    for account in accounts.list_all():
-        outcome = restore_bound_user(
-            db=db, accounts=accounts, core_intents=core_intents, pool=pool, user_id=account.user_id, now=now
-        )
-        logger.info("broker session startup user_id=%s outcome=%s", account.user_id, outcome)
+    """Startup: one login per stored binding, all at once. Nobody bound is a valid
+    state (the admin binds the first user after boot); one user failing never
+    stops the rest.
+
+    Parallel because each login costs ~3 s at the broker and `BROKER_MAX_SESSIONS`
+    goes up to 10: sequential would hold the app off the network for the whole
+    sum, parallel for one login. A SQLAlchemy Session is not thread-safe, so
+    every worker opens its own through `session_factory`; the pool itself is
+    thread-safe and reserves slots under its lock.
+    """
+    with session_factory() as db:
+        user_ids = [account.user_id for account in accounts_for(db).list_all()]
+    if not user_ids:
+        return
+
+    def restore_one(user_id: UUID) -> BoundUserRestoreOutcome:
+        with session_factory() as db:
+            return restore_bound_user(
+                db=db, accounts=accounts_for(db), core_intents=core_intents_for(db), pool=pool, user_id=user_id, now=now
+            )
+
+    with ThreadPoolExecutor(max_workers=len(user_ids), thread_name_prefix="broker-login") as workers:
+        for user_id, outcome in zip(user_ids, workers.map(restore_one, user_ids), strict=True):
+            logger.info("broker session startup user_id=%s outcome=%s", user_id, outcome)

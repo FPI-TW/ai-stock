@@ -104,21 +104,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 _start_shared_provider(app, shared, session_factory, session_service)
                 twap_quote_provider: QuoteProvider = shared
             else:
-                with session_factory() as db:
-                    restore_all_bound_users(
-                        db=db,
-                        accounts=BrokerAccountRepository(db, encryption_key=settings.broker_credential_key),
-                        core_intents=TradeIntentCoreRepository(db),
-                        pool=pool,
-                        now=datetime.now(UTC),
-                    )
+
+                def accounts_for(db: Session) -> BrokerAccountRepository:
+                    return BrokerAccountRepository(db, encryption_key=settings.broker_credential_key)
+
+                restore_all_bound_users(
+                    session_factory=session_factory,
+                    accounts_for=accounts_for,
+                    core_intents_for=TradeIntentCoreRepository,
+                    pool=pool,
+                    now=datetime.now(UTC),
+                )
                 logger.info("broker sessions restored", extra={"live_sessions": len(pool.live_sessions())})
                 # ponytail: legacy TWAP has no per-user session; empty provider until TWAP cutover.
                 twap_quote_provider = InMemoryQuoteProvider()
                 reconnect = BrokerSessionReconnectLoop(
                     pool=pool,
                     session_factory=session_factory,
-                    accounts_for=lambda db: BrokerAccountRepository(db, encryption_key=settings.broker_credential_key),
+                    accounts_for=accounts_for,
                     core_intents_for=TradeIntentCoreRepository,
                     session_service=session_service,
                 )
