@@ -15,7 +15,7 @@ FastAPI app（API + quote + schedulers） ── AWS RDS / Aurora
         ├── GHCR image
         ├── Shioaji demo
         ├── AWS SES SMTP
-        └── Telegram / DeepSeek
+        └── Telegram / OpenAI
 ```
 
 production Compose 不自架 PostgreSQL。`migrate` service 先對外部 DB 執行 `alembic upgrade head`，成功後才啟動單一 app；Nginx 等待 app healthcheck 通過。
@@ -30,7 +30,11 @@ production Compose 不自架 PostgreSQL。`migrate` service 先對外部 DB 執�
 - 讓 `TRUSTED_PROXY_IPS` 與 Compose backend subnet／實際代理鏈一致。
 - 不在 log、shell history、Docker argv 或 Git 中保存原始 token、密碼與私鑰。
 
-Quote、SES、Telegram 與 DeepSeek 設定皆以環境變數注入。SES 四個欄位必須全填或全空；啟用 Telegram inbound 時 production 會驗證必要欄位是否齊全。
+Quote、SES、Telegram 與 OpenAI 設定皆以環境變數注入。SES 四個欄位必須全填或全空；啟用 Telegram inbound 時 production 會驗證必要欄位是否齊全。
+
+Telegram 文字判讀呼叫 OpenAI `POST https://api.openai.com/v1/responses`（Responses API），預設模型為 `gpt-6-luna`。請在 GitHub Secrets 設定 `OPENAI_API_KEY`，並將 GitHub Variables 的 `TELEGRAM_LLM_MODEL` 改為 `gpt-6-luna`；該 variable 未設定時 CD 使用此預設值。金鑰需具備 Responses API 寫入權限，不需要 Chat Completions 或列出模型的權限。遷移時移除舊的 `DEEPSEEK_API_KEY` secret。啟用 inbound 必須同時提供 `TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`、`TELEGRAM_WEBHOOK_SECRET` 與 `OPENAI_API_KEY`，缺值會阻擋 production 啟動。
+
+判讀維持 JSON mode 與本地 Pydantic schema 驗證，`text.format.type=json_object`、`reasoning.effort=none`、`max_output_tokens=512`、`store=false`，逾時由 `TELEGRAM_LLM_TIMEOUT_SECONDS` 控制（預設 10 秒）。拒答、未完成輸出或無效內容均視為判讀失敗，不建立交易草稿；既有使用者確認流程維持不變。參考 [OpenAI 模型文件](https://developers.openai.com/api/docs/models/gpt-6-luna)與 [JSON mode 文件](https://developers.openai.com/api/docs/guides/structured-outputs#json-mode)。
 
 ## CI/CD
 

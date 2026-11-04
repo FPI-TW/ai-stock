@@ -16,7 +16,9 @@ make bootstrap-admin
 make dev
 ```
 
-本地 API 預設為 `http://127.0.0.1:8100`。`.env.example` 是完整本地設定範本；至少要把 `LOCAL_USER_ID` 換成有效 UUID。Shioaji、SES、Telegram 與 DeepSeek 憑證都不可提交至 Git。
+本地 API 預設為 `http://127.0.0.1:8100`。`.env.example` 是完整本地設定範本；至少要把 `LOCAL_USER_ID` 換成有效 UUID。Shioaji、SES、Telegram 與 OpenAI 憑證都不可提交至 Git。
+
+Telegram 文字判讀使用 OpenAI，需在本機 `.env` 設定 `OPENAI_API_KEY`，並將 `TELEGRAM_LLM_MODEL` 設為 `gpt-6-luna`（程式預設值）。既有環境需移除舊的 `DEEPSEEK_API_KEY` 並更新模型設定；完整 inbound 設定見 [維運指南](operations.md#設定與機密)。
 
 ## 資料庫
 

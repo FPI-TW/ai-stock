@@ -118,9 +118,9 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str | None = Field(default=None, alias="TELEGRAM_WEBHOOK_SECRET")
     telegram_owner_email: str = Field(default="admin@tingfong.com", alias="TELEGRAM_OWNER_EMAIL")
     telegram_webhook_url: str | None = Field(default=None, alias="TELEGRAM_WEBHOOK_URL")
-    telegram_llm_model: str = Field(default="deepseek-v4-flash", alias="TELEGRAM_LLM_MODEL")
+    telegram_llm_model: str = Field(default="gpt-6-luna", alias="TELEGRAM_LLM_MODEL")
     telegram_llm_timeout_seconds: float = Field(default=10.0, alias="TELEGRAM_LLM_TIMEOUT_SECONDS")
-    deepseek_api_key: str | None = Field(default=None, alias="DEEPSEEK_API_KEY")
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
 
     # Local V0.5 TWAP worker loop; dev endpoints remain available for manual backfill.
     twap_worker_enabled: bool = Field(default=True, alias="TWAP_WORKER_ENABLED")
@@ -186,7 +186,7 @@ class Settings(BaseSettings):
         # Once an inbound-only value is present in production, fail fast unless
         # the complete runtime path is configured; otherwise CD could register a
         # secure webhook while the app silently uses the disabled decider.
-        inbound_enabled = bool(self.deepseek_api_key or self.telegram_webhook_secret or self.telegram_webhook_url)
+        inbound_enabled = bool(self.openai_api_key or self.telegram_webhook_secret or self.telegram_webhook_url)
         if not self.local_mode and inbound_enabled:
             missing = [
                 env
@@ -194,7 +194,7 @@ class Settings(BaseSettings):
                     ("TELEGRAM_BOT_TOKEN", self.telegram_bot_token),
                     ("TELEGRAM_CHAT_ID", self.telegram_chat_id),
                     ("TELEGRAM_WEBHOOK_SECRET", self.telegram_webhook_secret),
-                    ("DEEPSEEK_API_KEY", self.deepseek_api_key),
+                    ("OPENAI_API_KEY", self.openai_api_key),
                 )
                 if not value
             ]

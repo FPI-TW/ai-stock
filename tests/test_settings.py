@@ -123,7 +123,7 @@ def test_production_inbound_telegram_config_fails_fast_when_partial(monkeypatch:
     assert "Telegram inbound workflow is partially configured" in message
     assert "TELEGRAM_BOT_TOKEN" in message
     assert "TELEGRAM_CHAT_ID" in message
-    assert "DEEPSEEK_API_KEY" in message
+    assert "OPENAI_API_KEY" in message
 
 
 def test_production_outbound_telegram_config_remains_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -134,12 +134,28 @@ def test_production_outbound_telegram_config_remains_allowed(monkeypatch: pytest
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "configured-group")
     monkeypatch.delenv("TELEGRAM_WEBHOOK_SECRET", raising=False)
     monkeypatch.delenv("TELEGRAM_WEBHOOK_URL", raising=False)
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.local_mode is False
     assert settings.telegram_bot_token == "bot-token"
+
+
+def test_openai_model_default_and_complete_production_inbound_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TELEGRAM_LLM_MODEL", raising=False)
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        LOCAL_MODE=False,
+        JWT_ACCESS_SECRET="prod-secret",
+        MFA_ENCRYPTION_KEY="prod-mfa-key",
+        TELEGRAM_BOT_TOKEN="bot-token",
+        TELEGRAM_CHAT_ID="configured-group",
+        TELEGRAM_WEBHOOK_SECRET="test-secret",
+        OPENAI_API_KEY="test-key",
+    )
+    assert settings.telegram_llm_model == "gpt-6-luna"
+    assert settings.openai_api_key == "test-key"
 
 
 def test_trusted_proxy_ips_default_empty(monkeypatch: pytest.MonkeyPatch) -> None:

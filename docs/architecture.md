@@ -57,7 +57,7 @@ production 使用單一 `app` container，同時承載 API、quote callback、TW
 
 - **Shioaji demo**：目前 runtime quote provider，adapter 細節隔離在 `services/quote/shioaji_demo/`；provider 上限與 allowlist 由設定控制。
 - **Telegram outbound**：trigger／TWAP transaction 內建立 notification row 後直接 best-effort 呼叫 Bot API，失敗只寫安全 warning並繼續完成 DB transaction。
-- **Telegram inbound**：webhook secret + chat allowlist，使用 DeepSeek 將文字分類成四種受支援 intent，確認後呼叫相同 core command。
+- **Telegram inbound**：webhook secret + chat allowlist，使用 OpenAI 將文字分類成四種受支援 intent，確認後呼叫相同 core command。
 - **AWS SES**：四個 SES 設定全有值時使用 SMTP，否則使用 logging stub；部分設定會在啟動時 fail fast。
 
 目前沒有 transactional outbox、notification retry worker、corporate action importer、正式富邦 adapter 或真實下單路徑。
