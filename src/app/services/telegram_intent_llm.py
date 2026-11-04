@@ -1,4 +1,4 @@
-"""DeepSeek classifier for Telegram text.
+"""OpenAI classifier for Telegram text.
 
 The classifier is intentionally narrow.  A response that is not exactly the
 small Pydantic schema below is rejected and never reaches the intent command.
@@ -135,11 +135,11 @@ class DisabledTelegramIntentDecider:
         raise TelegramIntentLlmError("telegram intent LLM is not configured")
 
 
-class DeepSeekTelegramIntentDecider:
+class OpenAITelegramIntentDecider:
     def __init__(self, settings: Settings) -> None:
-        if not settings.deepseek_api_key:
-            raise ValueError("DEEPSEEK_API_KEY is required for DeepSeekTelegramIntentDecider")
-        self._api_key = settings.deepseek_api_key
+        if not settings.openai_api_key:
+            raise ValueError("OPENAI_API_KEY is required for OpenAITelegramIntentDecider")
+        self._api_key = settings.openai_api_key
         self._model = settings.telegram_llm_model
         self._timeout = settings.telegram_llm_timeout_seconds
 
@@ -152,7 +152,7 @@ class DeepSeekTelegramIntentDecider:
     ) -> TelegramIntentDecision:
         body = {
             "model": self._model,
-            "messages": [
+            "input": [
                 {
                     "role": "system",
                     "content": (
@@ -182,13 +182,14 @@ class DeepSeekTelegramIntentDecider:
                     ),
                 },
             ],
-            "response_format": {"type": "json_object"},
-            "thinking": {"type": "disabled"},
+            "text": {"format": {"type": "json_object"}},
+            "reasoning": {"effort": "none"},
             "stream": False,
-            "max_tokens": 512,
+            "store": False,
+            "max_output_tokens": 512,
         }
         request = urllib.request.Request(
-            "https://api.deepseek.com/chat/completions",
+            "https://api.openai.com/v1/responses",
             data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
             headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
             method="POST",
@@ -206,7 +207,7 @@ class DeepSeekTelegramIntentDecider:
 
 
 def _parse_response(raw: dict[str, Any]) -> TelegramIntentDecision:
-    text = _extract_chat_content(raw)
+    text = _extract_response_content(raw)
     try:
         payload = _DecisionPayload.model_validate_json(text)
     except ValidationError as exc:
@@ -233,23 +234,39 @@ def _parse_response(raw: dict[str, Any]) -> TelegramIntentDecision:
     )
 
 
-def _extract_chat_content(raw: dict[str, Any]) -> str:
-    choices = raw.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise TelegramIntentLlmError("telegram intent LLM response has no choices")
-    first = choices[0]
-    if not isinstance(first, dict):
-        raise TelegramIntentLlmError("telegram intent LLM response choice is invalid")
-    message = first.get("message")
-    if not isinstance(message, dict):
-        raise TelegramIntentLlmError("telegram intent LLM response message is invalid")
-    content = message.get("content")
-    if not isinstance(content, str) or not content:
+def _extract_response_content(raw: dict[str, Any]) -> str:
+    if raw.get("status") != "completed" or raw.get("error") or raw.get("incomplete_details"):
+        raise TelegramIntentLlmError("telegram intent LLM response did not complete")
+    output = raw.get("output")
+    if not isinstance(output, list):
+        raise TelegramIntentLlmError("telegram intent LLM response output is invalid")
+    texts: list[str] = []
+    for item in output:
+        if not isinstance(item, dict):
+            raise TelegramIntentLlmError("telegram intent LLM response output item is invalid")
+        if item.get("type") == "reasoning":
+            continue
+        if item.get("type") != "message" or item.get("role") != "assistant" or item.get("status") != "completed":
+            raise TelegramIntentLlmError("telegram intent LLM response message is invalid")
+        content = item.get("content")
+        if not isinstance(content, list):
+            raise TelegramIntentLlmError("telegram intent LLM response content is invalid")
+        for part in content:
+            if not isinstance(part, dict):
+                raise TelegramIntentLlmError("telegram intent LLM response content part is invalid")
+            if part.get("type") == "refusal":
+                raise TelegramIntentLlmError("telegram intent LLM refused the request")
+            text = part.get("text")
+            if part.get("type") != "output_text" or not isinstance(text, str):
+                raise TelegramIntentLlmError("telegram intent LLM response text is invalid")
+            texts.append(text)
+    combined = "".join(texts)
+    if not combined:
         raise TelegramIntentLlmError("telegram intent LLM response has no content")
-    return content
+    return combined
 
 
 def build_telegram_intent_decider(settings: Settings) -> TelegramIntentDecider:
-    if settings.deepseek_api_key:
-        return DeepSeekTelegramIntentDecider(settings)
+    if settings.openai_api_key:
+        return OpenAITelegramIntentDecider(settings)
     return DisabledTelegramIntentDecider()
