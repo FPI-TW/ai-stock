@@ -4,7 +4,7 @@
 """
 
 from collections.abc import Generator
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -12,16 +12,19 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, create_engine, delete
+from sqlalchemy import Engine, create_engine, delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.commands.twap import TwapSliceWorkerCommand
 from app.core.config import get_settings
-from app.db.models.core import Symbol
+from app.db.models.core import Notification, Symbol
 from app.db.models.trade_intent_core import (
     TradeIntentCore,
     TradeIntentPriceParams,
     TradeIntentTrailingParams,
     TradeIntentTwapParams,
+    TradeIntentTwapSlice,
 )
 from app.domain.price import SecurityType
 from app.domain.trade_intent import (
@@ -30,7 +33,11 @@ from app.domain.trade_intent import (
     IntentNotFoundError,
     InvalidCursorError,
 )
+from app.domain.trading_session import TradingDayPhase, TradingSessionService
+from app.domain.twap import TwapDuplicateActivePlanError, TwapPlan, TwapSlicePlan
 from app.repositories.trade_intent_core_repository import TradeIntentCoreRepository
+from app.services.quote.base import QuoteSnapshot
+from app.services.quote.in_memory import InMemoryQuoteProvider
 from tests.db_helpers import ensure_user
 
 
@@ -66,6 +73,9 @@ def int_engine() -> Generator[Engine]:
 
 
 def _wipe(session: Session) -> None:
+    # 切片先於通知：切片持有 notifications 的 FK
+    session.execute(delete(TradeIntentTwapSlice))
+    session.execute(delete(Notification))
     session.execute(delete(TradeIntentPriceParams))
     session.execute(delete(TradeIntentTrailingParams))
     session.execute(delete(TradeIntentTwapParams))
@@ -191,8 +201,6 @@ def test_duplicate_blocked_at_db_level_on_concurrent_precheck_miss(repo: TradeIn
             dedup_key="600.00",
         )
     )
-    from sqlalchemy.exc import IntegrityError
-
     with pytest.raises(IntegrityError):
         repo._db.flush()
     repo._db.rollback()
@@ -454,3 +462,218 @@ def test_cancel_active_for_owner_only_touches_that_owner(repo: TradeIntentCoreRe
     assert repo.find_by_id(mine, owner).status == "cancelled_by_account_disabled"
     assert repo.find_by_id(already_cancelled, owner).status == "cancelled"
     assert repo.find_by_id(theirs, other).status == "active"
+
+
+# ----------------------------------------------------------------------
+# TWAP（PR4）：核心 + twap 衛星 + 切片子表
+# ----------------------------------------------------------------------
+
+
+def _twap_plan(
+    *,
+    position_side: str = "long",
+    quantity_lots: int = 2,
+    trading_date: date = date(2026, 5, 12),
+) -> TwapPlan:
+    start_at = datetime(2026, 5, 12, 1, 0, tzinfo=UTC)
+    return TwapPlan(
+        position_side=position_side,
+        trading_phase=TradingDayPhase.REGULAR_SESSION,
+        trading_date=trading_date,
+        requested_start_time=time(9, 0),
+        start_at=start_at,
+        requested_end_time=time(9, 5),
+        end_at=start_at + timedelta(minutes=5),
+        interval_seconds=300,
+        target_quantity_lots=quantity_lots,
+        available_slice_count=2,
+        materialized_slice_count=2,
+        slices=tuple(
+            TwapSlicePlan(
+                sequence_no=seq,
+                scheduled_at=start_at + timedelta(minutes=5 * (seq - 1)),
+                planned_quantity_lots=1,
+            )
+            for seq in (1, 2)
+        ),
+    )
+
+
+def _create_twap(
+    repo: TradeIntentCoreRepository,
+    *,
+    owner_user_id: UUID,
+    position_side: str = "long",
+    quantity_lots: int = 2,
+    trading_date: date = date(2026, 5, 12),
+    status: str = "active",
+) -> UUID:
+    ensure_user(repo._db, owner_user_id)
+    intent_id = repo.create_twap(
+        owner_user_id=owner_user_id,
+        symbol="2330",
+        twap_plan=_twap_plan(position_side=position_side, quantity_lots=quantity_lots, trading_date=trading_date),
+        execution_mode="notify_only",
+        time_in_force="day",
+        status=status,
+        trigger_reference_price_type="last_fallback",
+    )
+    repo.commit()
+    return intent_id
+
+
+@pytest.mark.integration
+def test_create_twap_writes_core_params_and_slices(repo: TradeIntentCoreRepository) -> None:
+    owner = uuid4()
+    intent_id = _create_twap(repo, owner_user_id=owner)
+
+    intent = repo.find_by_id(intent_id, owner)
+    assert intent.strategy == "twap_order"
+    assert intent.position_side == "long"
+    assert intent.quantity_lots == 2
+    assert intent.twap_interval_seconds == 300
+    assert intent.twap_materialized_slice_count == 2
+    # 非 TWAP 的衛星欄維持 None
+    assert intent.target_price_effective is None
+    assert intent.trail_mode is None
+
+    slices = repo.list_twap_slices(intent_id, owner)
+    assert [s.sequence_no for s in slices] == [1, 2]
+    assert all(s.status == "pending" for s in slices)
+    assert all(s.planned_quantity_lots == 1 for s in slices)
+
+
+@pytest.mark.integration
+def test_create_twap_same_side_same_day_blocked(repo: TradeIntentCoreRepository) -> None:
+    owner = uuid4()
+    _create_twap(repo, owner_user_id=owner, position_side="long")
+
+    with pytest.raises(TwapDuplicateActivePlanError):
+        _create_twap(repo, owner_user_id=owner, position_side="long")
+
+
+@pytest.mark.integration
+def test_create_twap_long_and_short_same_quantity_same_day_allowed(repo: TradeIntentCoreRepository) -> None:
+    # 組長 2026-07-14 定案：做多／做空是方向相反的兩個意圖，同 qty 同日不算重複。
+    # 新軌 TWAP 唯一索引只看 position_side（不含 quantity_lots），故兩張並存。
+    owner = uuid4()
+    long_id = _create_twap(repo, owner_user_id=owner, position_side="long", quantity_lots=2)
+    short_id = _create_twap(repo, owner_user_id=owner, position_side="short", quantity_lots=2)
+
+    assert repo.find_by_id(long_id, owner).position_side == "long"
+    assert repo.find_by_id(short_id, owner).position_side == "short"
+
+
+@pytest.mark.integration
+def test_create_twap_duplicate_blocked_at_db_level_on_precheck_miss(repo: TradeIntentCoreRepository) -> None:
+    # 併發下前置 SELECT 可能雙雙落空 → 唯一索引是最後防線（繞過 pre-check 直接插）。
+    owner = uuid4()
+    _create_twap(repo, owner_user_id=owner, position_side="long")
+
+    repo._db.add(
+        TradeIntentCore(
+            id=uuid4(),
+            owner_user_id=owner,
+            symbol="2330",
+            strategy="twap_order",
+            execution_mode="notify_only",
+            quantity_lots=5,
+            trigger_reference_price_type="last_fallback",
+            trading_date=date(2026, 5, 12),
+            time_in_force="day",
+            status="active",
+            dedup_key="long",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        repo._db.flush()
+    repo._db.rollback()
+
+
+@pytest.mark.integration
+def test_cancel_twap_cascades_pending_slices(repo: TradeIntentCoreRepository) -> None:
+    owner = uuid4()
+    intent_id = _create_twap(repo, owner_user_id=owner)
+    # 第 1 片已通知並在等補價；只有未發出的第 2 片該被取消。
+    notified = repo._db.execute(
+        select(TradeIntentTwapSlice).where(
+            TradeIntentTwapSlice.trade_intent_id == intent_id,
+            TradeIntentTwapSlice.sequence_no == 1,
+        )
+    ).scalar_one()
+    notified.status = "notified"
+    notified.price_followup_required = True
+    notified.next_price_followup_at = datetime(2026, 5, 12, 1, 0, tzinfo=UTC)
+    repo.commit()
+
+    repo.cancel(intent_id, owner)
+    repo.commit()
+
+    by_seq = {s.sequence_no: s for s in repo.list_twap_slices(intent_id, owner)}
+    assert by_seq[1].status == "notified"
+    assert by_seq[1].price_followup_required is False
+    assert by_seq[1].next_price_followup_at is None
+    assert by_seq[2].status == "cancelled"
+
+
+@pytest.mark.integration
+def test_expire_twap_cascades_pending_slices(repo: TradeIntentCoreRepository) -> None:
+    owner = uuid4()
+    now = datetime(2026, 5, 13, 2, 0, tzinfo=UTC)
+    intent_id = _create_twap(repo, owner_user_id=owner, trading_date=date(2026, 5, 12))
+
+    assert repo.system_expire_day_intents_through(date(2026, 5, 12), now) == 1
+    repo.commit()
+
+    assert repo.find_by_id(intent_id, owner).status == "expired"
+    assert [s.status for s in repo.list_twap_slices(intent_id, owner)] == ["cancelled", "cancelled"]
+
+
+@pytest.mark.integration
+def test_list_twap_slices_wrong_owner_raises(repo: TradeIntentCoreRepository) -> None:
+    owner = uuid4()
+    intent_id = _create_twap(repo, owner_user_id=owner)
+
+    with pytest.raises(IntentNotFoundError):
+        repo.list_twap_slices(intent_id, uuid4())
+
+
+@pytest.mark.integration
+def test_twap_worker_notifies_due_slices_against_real_tables(
+    repo: TradeIntentCoreRepository,
+    db_session: Session,
+) -> None:
+    """worker 的 loader 是 切片×核心×TWAP 參數 的三表 JOIN + FOR UPDATE OF——單元測試
+    餵假 session 驗不到 SQL 本身，故在真 PG 上跑一輪：兩片都到期 → 兩則通知、委託轉 triggered。"""
+
+    owner = uuid4()
+    intent_id = _create_twap(repo, owner_user_id=owner)
+    now = datetime(2026, 5, 12, 2, 0, tzinfo=UTC)  # 10:00 台北，盤中
+    provider = InMemoryQuoteProvider()
+    provider.push_quote(
+        QuoteSnapshot(
+            symbol="2330",
+            bid_price=Decimal("589"),
+            ask_price=Decimal("591"),
+            last_price=Decimal("590"),
+            quote_time=now,
+            received_at=now,
+        )
+    )
+
+    output = TwapSliceWorkerCommand(
+        db_session,
+        provider,
+        TradingSessionService(clock=lambda: now),
+    ).process_due_slices()
+
+    assert output.processed_count == 2
+    slices = repo.list_twap_slices(intent_id, owner)
+    assert [s.status for s in slices] == ["notified", "notified"]
+    assert all(s.primary_reference_price == Decimal("591.0000") for s in slices)  # long → ask
+    assert repo.find_by_id(intent_id, owner).status == "triggered"
+
+    notifications = db_session.execute(select(Notification).order_by(Notification.created_at)).scalars().all()
+    assert len(notifications) == 2
+    # 新軌通知掛 trade_intent_core_id（舊欄留空），否則會撞 notifications 的 num_nonnulls CHECK
+    assert all(n.trade_intent_core_id == intent_id and n.trade_intent_id is None for n in notifications)

@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.commands.trade_intent import IntentLimits
+from app.commands.trade_intent_core import IntentLimits
 from app.commands.twap import TwapConfirmCommand, TwapPlanInput
 from app.domain.trade_intent import SymbolIntentLimitExceededError, UserIntentLimitExceededError
 

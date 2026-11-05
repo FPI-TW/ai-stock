@@ -13,6 +13,7 @@ from app.db.models.trade_intent_core import (
     TradeIntentTrailingParams,
     TradeIntentTrigger,
     TradeIntentTwapParams,
+    TradeIntentTwapSlice,
 )
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "TradeIntentTrailingParams",
     "TradeIntentTrigger",
     "TradeIntentTwapParams",
+    "TradeIntentTwapSlice",
     "TriggerEvent",
     "TwapSlice",
     "User",

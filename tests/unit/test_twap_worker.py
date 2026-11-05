@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import cast
 from uuid import UUID, uuid4
@@ -7,8 +7,9 @@ from zoneinfo import ZoneInfo
 import pytest
 from sqlalchemy.orm import Session
 
-from app.commands.twap import TwapSliceWorkerCommand
-from app.db.models.core import Notification, TradeIntent, TwapSlice
+from app.commands.twap import TwapSliceRow, TwapSliceWorkerCommand
+from app.db.models.core import Notification
+from app.db.models.trade_intent_core import TradeIntentCore, TradeIntentTwapParams, TradeIntentTwapSlice
 from app.domain.trading_session import TradingSessionService
 from app.services.kill_switch import KillSwitchProvider
 from app.services.quote.base import QuoteListener, QuoteSnapshot, QuoteUnavailableError
@@ -24,7 +25,7 @@ class FakeResult:
     def __init__(
         self,
         *,
-        rows: list[tuple[TwapSlice, TradeIntent]] | None = None,
+        rows: list[TwapSliceRow] | None = None,
         scalar: int | None = None,
         rowcount: int = 0,
     ) -> None:
@@ -38,7 +39,7 @@ class FakeResult:
     def scalars(self) -> "FakeResult":
         return self
 
-    def all(self) -> list[tuple[TwapSlice, TradeIntent]]:
+    def all(self) -> list[TwapSliceRow]:
         return self._rows
 
     def scalar_one(self) -> int:
@@ -118,39 +119,50 @@ def _snapshot(*, bid: str | None = "589", ask: str | None = "591", last: str | N
     )
 
 
-def _intent(*, status: str = "active", position_side: str = "long") -> TradeIntent:
-    return TradeIntent(
+def _intent(*, status: str = "active", position_side: str = "long") -> TradeIntentCore:
+    intent = TradeIntentCore(
         id=uuid4(),
         owner_user_id=OWNER_ID,
         symbol="2330",
         strategy="twap_order",
         execution_mode="notify_only",
         quantity_lots=2,
-        target_price_original=None,
-        target_price_effective=None,
         trigger_reference_price_type="last_fallback",
         trading_date=date(2026, 5, 28),
         time_in_force="day",
         status=status,
         transaction_mode="single_notification",
         notification_mode="single",
+        dedup_key=position_side,
+    )
+    intent.twap_params = TradeIntentTwapParams(
+        trade_intent_id=intent.id,
         position_side=position_side,
         twap_interval_seconds=60,
+        twap_end_time=time(13, 25),
         twap_start_at=NOW,
         twap_end_at=NOW + timedelta(minutes=1),
         twap_available_slice_count=2,
         twap_materialized_slice_count=2,
     )
+    return intent
+
+
+def _row(slice_row: TradeIntentTwapSlice, intent: TradeIntentCore) -> TwapSliceRow:
+    """worker 的 loader 回 (切片, 委託, TWAP 參數) 三元組。"""
+
+    assert intent.twap_params is not None
+    return (slice_row, intent, intent.twap_params)
 
 
 def _slice(
-    intent: TradeIntent,
+    intent: TradeIntentCore,
     *,
     sequence_no: int = 2,
     status: str = "pending",
     attempts: int = 0,
-) -> TwapSlice:
-    return TwapSlice(
+) -> TradeIntentTwapSlice:
+    return TradeIntentTwapSlice(
         id=uuid4(),
         trade_intent_id=intent.id,
         owner_user_id=OWNER_ID,
@@ -204,14 +216,14 @@ def test_process_due_slice_with_price_creates_primary_notification_and_completes
     dispatched = _capture_telegram_dispatch(monkeypatch)
     intent = _intent(status="active", position_side="long")
     slice_row = _slice(intent, status="pending")
-    fake_db = FakeSession([FakeResult(rows=[(slice_row, intent)]), FakeResult(scalar=0)])
+    fake_db = FakeSession([FakeResult(rows=[_row(slice_row, intent)]), FakeResult(scalar=0)])
 
     output = _worker(fake_db, FakeQuoteProvider(_snapshot())).process_due_slices()
 
     assert output.processed_count == 1
     [notification] = fake_db.added_notifications
     assert notification.type == "twap_slice"
-    assert notification.trade_intent_id == intent.id
+    assert notification.trade_intent_core_id == intent.id
     assert "參考價：591.00（ask）" in notification.rendered_body
     assert slice_row.status == "notified"
     assert slice_row.primary_price_available is True
@@ -233,7 +245,7 @@ def test_process_due_slices_creates_notification_for_each_slice(monkeypatch: pyt
     second_slice = _slice(intent, sequence_no=2, status="pending")
     fake_db = FakeSession(
         [
-            FakeResult(rows=[(first_slice, intent), (second_slice, intent)]),
+            FakeResult(rows=[_row(first_slice, intent), _row(second_slice, intent)]),
             FakeResult(scalar=1),
             FakeResult(scalar=0),
         ]
@@ -259,7 +271,7 @@ def test_process_due_slices_after_close_skips_notifications() -> None:
     after_close = datetime(2026, 5, 28, 13, 31, 0, tzinfo=TAIPEI)
     intent = _intent(status="active", position_side="long")
     slice_row = _slice(intent, status="pending")
-    fake_db = FakeSession([FakeResult(rows=[(slice_row, intent)])])
+    fake_db = FakeSession([FakeResult(rows=[_row(slice_row, intent)])])
 
     output = _worker(fake_db, FakeQuoteProvider(_snapshot()), now=after_close).process_due_slices()
 
@@ -273,7 +285,7 @@ def test_process_due_slices_skips_when_kill_switch_halted() -> None:
     # regular session. The slice query never runs (results untouched).
     intent = _intent(status="active", position_side="long")
     slice_row = _slice(intent, status="pending")
-    fake_db = FakeSession([FakeResult(rows=[(slice_row, intent)])])
+    fake_db = FakeSession([FakeResult(rows=[_row(slice_row, intent)])])
 
     output = _worker(
         fake_db, FakeQuoteProvider(_snapshot()), kill_switch=FakeKillSwitch(halted=True)
@@ -287,7 +299,7 @@ def test_process_due_slices_skips_when_kill_switch_halted() -> None:
 def test_process_price_followups_skips_when_kill_switch_halted() -> None:
     intent = _intent(position_side="short")
     slice_row = _slice(intent, status="notified", attempts=1)
-    fake_db = FakeSession([FakeResult(rows=[(slice_row, intent)])])
+    fake_db = FakeSession([FakeResult(rows=[_row(slice_row, intent)])])
 
     output = _worker(
         fake_db, FakeQuoteProvider(_snapshot()), kill_switch=FakeKillSwitch(halted=True)
@@ -302,7 +314,7 @@ def test_process_due_slices_runs_when_kill_switch_not_halted() -> None:
     # Halt off → normal processing (guards against the gate firing unconditionally).
     intent = _intent(status="active", position_side="long")
     slice_row = _slice(intent, status="pending")
-    fake_db = FakeSession([FakeResult(rows=[(slice_row, intent)]), FakeResult(scalar=0)])
+    fake_db = FakeSession([FakeResult(rows=[_row(slice_row, intent)]), FakeResult(scalar=0)])
 
     output = _worker(
         fake_db, FakeQuoteProvider(_snapshot()), kill_switch=FakeKillSwitch(halted=False)
@@ -315,7 +327,7 @@ def test_process_due_slices_runs_when_kill_switch_not_halted() -> None:
 def test_process_due_slice_without_price_sends_primary_notification_and_schedules_followup() -> None:
     intent = _intent(status="scheduled", position_side="short")
     slice_row = _slice(intent, status="pending")
-    fake_db = FakeSession([FakeResult(rows=[(slice_row, intent)]), FakeResult(scalar=1)])
+    fake_db = FakeSession([FakeResult(rows=[_row(slice_row, intent)]), FakeResult(scalar=1)])
 
     output = _worker(fake_db, FakeQuoteProvider(None)).process_due_slices()
 
@@ -339,7 +351,7 @@ def test_process_price_followup_success_creates_followup_notification_and_clears
     dispatched = _capture_telegram_dispatch(monkeypatch)
     intent = _intent(position_side="short")
     slice_row = _slice(intent, status="notified", attempts=1)
-    fake_db = FakeSession([FakeResult(rows=[(slice_row, intent)])])
+    fake_db = FakeSession([FakeResult(rows=[_row(slice_row, intent)])])
 
     output = _worker(fake_db, FakeQuoteProvider(_snapshot())).process_price_followups()
 
@@ -361,7 +373,7 @@ def test_process_price_followup_failure_retries_then_stops_at_third_attempt() ->
     intent = _intent(position_side="long")
     retry_slice = _slice(intent, status="notified", attempts=1)
     stop_slice = _slice(intent, status="notified", attempts=2)
-    fake_db = FakeSession([FakeResult(rows=[(retry_slice, intent), (stop_slice, intent)])])
+    fake_db = FakeSession([FakeResult(rows=[_row(retry_slice, intent), _row(stop_slice, intent)])])
 
     output = _worker(fake_db, FakeQuoteProvider(None)).process_price_followups()
 

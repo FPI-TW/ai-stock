@@ -21,7 +21,6 @@ from app.commands.kill_switch import SetKillSwitchCommand
 from app.commands.notification import MarkNotificationReadCommand
 from app.commands.password_reset import PasswordResetConfirmCommand, PasswordResetRequestCommand
 from app.commands.telegram_intent import TelegramIntentCommand
-from app.commands.trade_intent import IntentLimits
 from app.commands.trade_intent_core import CancelTradeIntentCommand, CreateTradeIntentCommand
 from app.commands.trade_intent_core import IntentLimits as CoreIntentLimits
 from app.commands.trigger_intent import TriggerIntentCommand
@@ -289,20 +288,10 @@ def get_quote_evaluator(session_service: TradingSessionServiceDep) -> QuoteEvalu
 QuoteEvaluatorDep = Annotated[QuoteEvaluator, Depends(get_quote_evaluator)]
 
 
-def get_intent_limits(settings: SettingsDep) -> IntentLimits:
-    """§15 creation caps from env defaults. P5 overrides this dependency to source
-    admin-tunable limits without touching the command.
-
-    Legacy 型別，現在只剩 TWAP（舊軌）在用；新軌走 `get_core_intent_limits`。
-    兩份 dataclass 內容相同但分屬兩軌（新軌不 import 舊軌），舊軌退役時本函式一併刪。
-    """
-    return IntentLimits(per_user=settings.intent_limit_per_user, per_symbol=settings.intent_limit_per_symbol)
-
-
-IntentLimitsDep = Annotated[IntentLimits, Depends(get_intent_limits)]
-
-
 def get_core_intent_limits(settings: SettingsDep) -> CoreIntentLimits:
+    """§15 creation caps from env defaults. P5 overrides this dependency to source
+    admin-tunable limits without touching the command."""
+
     return CoreIntentLimits(per_user=settings.intent_limit_per_user, per_symbol=settings.intent_limit_per_symbol)
 
 
@@ -375,10 +364,10 @@ TwapPlanCommandDep = Annotated[TwapPlanCommand, Depends(get_twap_plan_command)]
 def get_twap_confirm_command(
     symbol_service: SymbolServiceDep,
     session_service: TradingSessionServiceDep,
-    intent_repo: IntentRepoDep,
+    intent_repo: TradeIntentCoreRepoDep,
     quote_provider: QuoteProviderDep,
     db: DatabaseDep,
-    limits: IntentLimitsDep,
+    limits: CoreIntentLimitsDep,
 ) -> TwapConfirmCommand:
     return TwapConfirmCommand(symbol_service, session_service, intent_repo, quote_provider, db, limits)
 

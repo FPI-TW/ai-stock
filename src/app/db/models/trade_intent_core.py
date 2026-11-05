@@ -231,6 +231,73 @@ class TradeIntentTwapParams(Base):
     intent: Mapped[TradeIntentCore] = relationship(back_populates="twap_params")
 
 
+class TradeIntentTwapSlice(TimestampMixin, Base):
+    """新軌 TWAP 切片（對應 legacy `twap_slices`，FK→trade_intent_core）。
+
+    欄位形狀與舊表一致——每一欄都出現在對外的 slice DTO 上，沒有可省的。表名前綴與
+    其他新軌表對齊；FK 名顯式縮短，避免慣例產生的名字超過 PG 63 字上限。
+    """
+
+    __tablename__ = "trade_intent_twap_slices"
+    __table_args__ = (
+        CheckConstraint("planned_quantity_lots > 0", name="planned_quantity_lots"),
+        CheckConstraint("status IN ('pending', 'notified', 'cancelled')", name="status"),
+        CheckConstraint(
+            "primary_reference_price IS NULL OR primary_reference_price > 0",
+            name="primary_reference_price",
+        ),
+        CheckConstraint(
+            "primary_reference_price_type IS NULL OR primary_reference_price_type IN ('ask', 'bid', 'last_fallback')",
+            name="primary_reference_price_type",
+        ),
+        CheckConstraint(
+            "price_followup_attempts >= 0 AND price_followup_attempts <= 3",
+            name="price_followup_attempts",
+        ),
+        Index("uq_trade_intent_twap_slices_intent_sequence", "trade_intent_id", "sequence_no", unique=True),
+        Index("ix_trade_intent_twap_slices_due", "status", "scheduled_at"),
+        Index("ix_trade_intent_twap_slices_followup_due", "price_followup_required", "next_price_followup_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
+    trade_intent_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("trade_intent_core.id", name="fk_trade_intent_twap_slices_intent"),
+        nullable=False,
+    )
+    owner_user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", name="fk_trade_intent_twap_slices_owner"),
+        nullable=False,
+    )
+    symbol: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("symbols.symbol", name="fk_trade_intent_twap_slices_symbol"),
+        nullable=False,
+    )
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    planned_quantity_lots: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    primary_notification_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("notifications.id", name="fk_trade_intent_twap_slices_primary_notification"),
+    )
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    primary_price_available: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    primary_reference_price: Mapped[Decimal | None] = mapped_column(Numeric(9, 4), nullable=True)
+    primary_reference_price_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    primary_quote_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    price_followup_required: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    price_followup_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    next_price_followup_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    price_followup_notification_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("notifications.id", name="fk_trade_intent_twap_slices_followup_notification"),
+    )
+    price_followup_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class TradeIntentTrigger(Base):
     """新軌觸發事件（對應 legacy `trigger_events`，FK→trade_intent_core）。
 

@@ -13,7 +13,6 @@ from app.api.deps import (
     get_db,
     get_idempotency_key,
     get_idempotency_manager,
-    get_intent_limits,
     get_intent_repository,
     get_kill_switch_provider,
     get_quote_provider,
@@ -79,7 +78,6 @@ def client(
     # The mocked intent repo returns MagicMocks from the §15 count queries; disable
     # limit enforcement so `count >= limit` doesn't blow up. Limits are covered by
     # dedicated unit + integration tests.
-    app.dependency_overrides[get_intent_limits] = lambda: None
     app.dependency_overrides[get_core_intent_limits] = lambda: None
     # The §13 mutation rate limit runs real bucket SQL; with get_db mocked it has no
     # real session, so disable it here. Rate limiting is covered by an integration test.
