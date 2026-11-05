@@ -11,6 +11,8 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.services.quote.factory import build_quote_provider
+from app.services.quote.fubon.client import FubonCredentials
+from app.services.quote.fubon.provider import FubonQuoteProvider
 from app.services.quote.in_memory import InMemoryQuoteProvider
 
 
@@ -51,6 +53,7 @@ def test_settings_rejects_unknown_provider(monkeypatch: pytest.MonkeyPatch) -> N
     msg = str(exc_info.value)
     assert "shioaji_demo" in msg
     assert "in_memory" in msg
+    assert "fubon" in msg
 
 
 def test_settings_requires_shioaji_credentials_when_provider_is_shioaji_demo(
@@ -79,3 +82,42 @@ def test_in_memory_provider_does_not_read_shioaji_env(monkeypatch: pytest.Monkey
     provider = build_quote_provider(settings)
 
     assert isinstance(provider, InMemoryQuoteProvider)
+
+
+def _fubon_credentials() -> FubonCredentials:
+    return FubonCredentials(personal_id="A123456789", password="pw", cert_pfx=b"pfx", cert_password="certpw")
+
+
+def test_factory_builds_fubon_provider_from_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fubon is per-user: the factory needs that user's credentials, never `.env` secrets."""
+
+    settings = _settings(monkeypatch, QUOTE_PROVIDER="fubon")
+
+    provider = build_quote_provider(settings, credentials=_fubon_credentials())
+
+    assert isinstance(provider, FubonQuoteProvider)
+
+
+def test_factory_fubon_without_credentials_is_a_programming_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings(monkeypatch, QUOTE_PROVIDER="fubon")
+
+    with pytest.raises(ValueError, match="credentials"):
+        build_quote_provider(settings)
+
+
+def test_factory_does_not_import_fubon_for_in_memory(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in list(sys.modules):
+        if name.startswith("app.services.quote.fubon"):
+            sys.modules.pop(name)
+
+    build_quote_provider(_settings(monkeypatch))
+
+    assert not [name for name in sys.modules if name.startswith("app.services.quote.fubon")]
+
+
+def test_fubon_credentials_repr_masks_secrets() -> None:
+    text = repr(_fubon_credentials())
+
+    assert "A123456789" not in text
+    assert "pw" not in text
+    assert "certpw" not in text

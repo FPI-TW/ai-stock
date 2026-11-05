@@ -67,77 +67,79 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     twap_scheduler_task: Task[None] | None = None
     idempotency_cleanup_task: Task[None] | None = None
-    if settings.database_url:
-        from app.db.session import get_session_factory
+    # provider.startup() already holds a broker login; any failure below
+    # must still reach provider.shutdown() or that login leaks at the broker.
+    try:
+        if settings.database_url:
+            from app.db.session import get_session_factory
 
-        session_factory = get_session_factory()
-        session_service = TradingSessionService()
-        with session_factory() as db:
-            intent_repo = IntentRepository(db)
-            IntentLifecycleCommand(intent_repo, session_service).run()
-            for symbol in intent_repo.active_or_scheduled_symbols():
-                provider.subscribe(symbol)
-            # 模式丙：新軌（trade_intent_core）的 symbol 也要訂閱，否則 robot #2 收不到
-            # 報價。subscribe 對重複 symbol 為 idempotent，新舊軌共用同一訂閱集。
-            core_repo = TradeIntentCoreRepository(db)
-            IntentLifecycleCommand(core_repo, session_service).run()
-            for symbol in core_repo.active_or_scheduled_symbols():
-                provider.subscribe(symbol)
-        logger.info(
-            "quote provider startup reconcile complete",
-            extra={"active_subscriptions": sorted(provider.active_subscriptions())},
-        )
+            session_factory = get_session_factory()
+            session_service = TradingSessionService()
+            with session_factory() as db:
+                intent_repo = IntentRepository(db)
+                IntentLifecycleCommand(intent_repo, session_service).run()
+                for symbol in intent_repo.active_or_scheduled_symbols():
+                    provider.subscribe(symbol)
+                # 模式丙：新軌（trade_intent_core）的 symbol 也要訂閱，否則 robot #2 收不到
+                # 報價。subscribe 對重複 symbol 為 idempotent，新舊軌共用同一訂閱集。
+                core_repo = TradeIntentCoreRepository(db)
+                IntentLifecycleCommand(core_repo, session_service).run()
+                for symbol in core_repo.active_or_scheduled_symbols():
+                    provider.subscribe(symbol)
+            logger.info(
+                "quote provider startup reconcile complete",
+                extra={"active_subscriptions": sorted(provider.active_subscriptions())},
+            )
 
-        # Wire incoming quotes to the evaluator: every snapshot the provider
-        # observes (via broker callback or `push_quote`) now drives evaluation
-        # of that symbol's active intents on a fresh short-lived session.
-        # Without DATABASE_URL we have no intents to evaluate, so the listener
-        # is only useful when the DB is configured.
-        dispatcher = QuoteEvaluationDispatcher(
-            session_factory=session_factory,
-            evaluator=QuoteEvaluator(session_service),
-            session_service=session_service,
-            kill_switch=app.state.kill_switch_provider,
-        )
-        provider.add_quote_listener(dispatcher.dispatch)
-
-        # 模式丙 robot #2：新軌的報價→觸發 dispatcher，作為第二個 listener 並行掛上。
-        # 每筆報價兩台各掃各表（舊 trade_intents / 新 trade_intent_core），一張單只存在
-        # 一張表 → 不會重複觸發。共用 evaluator / kill switch。
-        core_dispatcher = TradeIntentCoreDispatcher(
-            session_factory=session_factory,
-            evaluator=QuoteEvaluator(session_service),
-            session_service=session_service,
-            kill_switch=app.state.kill_switch_provider,
-        )
-        provider.add_quote_listener(core_dispatcher.dispatch)
-
-        if settings.twap_worker_enabled:
-            scheduler = TwapSliceScheduler(
+            # Wire incoming quotes to the evaluator: every snapshot the provider
+            # observes (via broker callback or `push_quote`) now drives evaluation
+            # of that symbol's active intents on a fresh short-lived session.
+            # Without DATABASE_URL we have no intents to evaluate, so the listener
+            # is only useful when the DB is configured.
+            dispatcher = QuoteEvaluationDispatcher(
                 session_factory=session_factory,
-                quote_provider=provider,
+                evaluator=QuoteEvaluator(session_service),
                 session_service=session_service,
-                interval_seconds=settings.twap_worker_interval_seconds,
                 kill_switch=app.state.kill_switch_provider,
             )
-            twap_scheduler_task = create_task(scheduler.run_forever())
-            logger.info(
-                "twap slice scheduler started",
-                extra={"interval_seconds": settings.twap_worker_interval_seconds},
-            )
+            provider.add_quote_listener(dispatcher.dispatch)
 
-        if settings.idempotency_cleanup_enabled:
-            cleanup = IdempotencyCleanupScheduler(
+            # 模式丙 robot #2：新軌的報價→觸發 dispatcher，作為第二個 listener 並行掛上。
+            # 每筆報價兩台各掃各表（舊 trade_intents / 新 trade_intent_core），一張單只存在
+            # 一張表 → 不會重複觸發。共用 evaluator / kill switch。
+            core_dispatcher = TradeIntentCoreDispatcher(
                 session_factory=session_factory,
-                interval_seconds=settings.idempotency_cleanup_interval_seconds,
+                evaluator=QuoteEvaluator(session_service),
+                session_service=session_service,
+                kill_switch=app.state.kill_switch_provider,
             )
-            idempotency_cleanup_task = create_task(cleanup.run_forever())
-            logger.info(
-                "idempotency cleanup scheduler started",
-                extra={"interval_seconds": settings.idempotency_cleanup_interval_seconds},
-            )
+            provider.add_quote_listener(core_dispatcher.dispatch)
 
-    try:
+            if settings.twap_worker_enabled:
+                scheduler = TwapSliceScheduler(
+                    session_factory=session_factory,
+                    quote_provider=provider,
+                    session_service=session_service,
+                    interval_seconds=settings.twap_worker_interval_seconds,
+                    kill_switch=app.state.kill_switch_provider,
+                )
+                twap_scheduler_task = create_task(scheduler.run_forever())
+                logger.info(
+                    "twap slice scheduler started",
+                    extra={"interval_seconds": settings.twap_worker_interval_seconds},
+                )
+
+            if settings.idempotency_cleanup_enabled:
+                cleanup = IdempotencyCleanupScheduler(
+                    session_factory=session_factory,
+                    interval_seconds=settings.idempotency_cleanup_interval_seconds,
+                )
+                idempotency_cleanup_task = create_task(cleanup.run_forever())
+                logger.info(
+                    "idempotency cleanup scheduler started",
+                    extra={"interval_seconds": settings.idempotency_cleanup_interval_seconds},
+                )
+
         yield
     finally:
         for task in (twap_scheduler_task, idempotency_cleanup_task):

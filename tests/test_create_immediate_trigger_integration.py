@@ -106,6 +106,10 @@ def quote_provider() -> InMemoryQuoteProvider:
 
 
 class CurrentPriceOnlyQuoteProvider(InMemoryQuoteProvider):
+    # CurrentPriceProvider is a runtime_checkable Protocol with a data member;
+    # isinstance() requires this attribute or the market-order path never asks us.
+    current_price_source = "fake"
+
     def __init__(self, snapshot: QuoteSnapshot) -> None:
         super().__init__()
         self.snapshot = snapshot
@@ -151,6 +155,7 @@ def _snapshot(
     return QuoteSnapshot(
         symbol="2330",
         quote_time=SESSION_QUOTE_TIME,
+        last_trade_time=SESSION_QUOTE_TIME,
         received_at=SESSION_QUOTE_TIME,
         ask_price=Decimal(ask) if ask else None,
         bid_price=Decimal(bid) if bid else None,
@@ -190,6 +195,7 @@ def test_create_inside_session_with_condition_met_triggers_immediately(
     assert trigger_row.trigger_reference_price_type == "ask"
     assert trigger_row.fallback_used is False
     assert trigger_row.quote_snapshot["ask_price"] == "99.5"
+    assert trigger_row.quote_snapshot["last_trade_time"] == SESSION_QUOTE_TIME.isoformat()
 
     notification_row = db_session.execute(
         select(Notification).where(Notification.trade_intent_core_id == intent_id)

@@ -18,4 +18,5 @@ def get_current_price(
     the V1 licensed provider.
     """
 
-    return CurrentPriceResponse(data=map_current_price(current_price_provider.get_current_price(symbol)))
+    snapshot = current_price_provider.get_current_price(symbol)
+    return CurrentPriceResponse(data=map_current_price(snapshot, source=current_price_provider.current_price_source))

@@ -218,10 +218,39 @@ P1 已定案**自己洗價、自己送委託，不外包富邦條件單**（見 
 | 斷線後 | tick 全停，SDK **不會**自動重連，`disconnect` 之後什麼都不做 |
 | 盤後重連 | 16:33 另一帳號（58581758）盤後可正常連上行情 WS；同一個已登入 SDK 重做 `init_realtime` → 重掛 listener → `connect` → `subscribe` 成功 |
 | 兩帳號並存 | 兩個測試帳號在不同行程同時登入互不影響，第二個登入不會踢掉第一個 |
-| `logout()` | 回 `True`，並觸發 `set_on_event('302', 'manual disconnect')`；logout 後 SDK 背景執行緒不會退出，腳本要自行 `os._exit` |
+| `logout()` | 回 `True`，並觸發 `set_on_event('302', 'manual disconnect')`；**只登出交易端，不關行情 WS**：`fugle_marketdata` 的 reader thread 是 non-daemon `Thread(run_forever)`，logout 後不會退出，腳本要自行 `os._exit`。要收乾淨得先 `sdk.marketdata.websocket_client.stock.disconnect()`（會 `ws.close()` 並取消 auth／ping timer） |
 
 原因：行情 WS 客戶端是 `fugle_marketdata` 2.5.0rc5 的 `WebSocketClient`，`__on_close` 只 emit `DISCONNECT_EVENT`，沒有任何重連邏輯；
 health-check 只負責偵測（30 秒 ping、連續 2 次沒回應就主動 `disconnect`），不負責恢復。
+
+同一個 `WebSocketClient.connect()` 是**無 sleep 的 busy-spin**：起 reader thread 後 `while True:` 輪詢 `auth_status`，直到 auth ack 或 `auth_timer`（約 5 秒）逾時，期間該 thread 滿載搶 GIL。
+呼叫端不能把它放在任何 lock 內，也不能直接在 asyncio event loop 上呼叫。
+
+行情 callback 拋例外不會弄斷連線，但會被記成假的連線錯誤：`pyee` 的 `_emit_run` 不攔例外，一路傳回 `websocket-client` 的 `_callback`，
+那裡 catch 後改呼叫 `on_error`，於是 `fugle` emit `ERROR_EVENT`、我方 `_on_error` 記一條「websocket error」——但 socket 與 reader thread 都還活著，真正發生的只是那一筆 frame 被丟掉。
+另外 `fugle.__on_message` 是**先** emit `MESSAGE_EVENT` 才處理 `authenticated`／`error`，所以 handler 拋例外還會跳過 SDK 自己的認證記帳。
+結論：我方的行情 handler 必須自己攔下所有例外，不得拋回 SDK thread。
+
+`init_realtime()` 只是換屬性，不會關掉舊連線：`fubon_neo/sdk.py` 裡它就一行 `self.marketdata = MarketData(sdk_token, mode, version)`。
+舊的 `WebSocketClient` 仍被自己的 reader thread 參考著而不會被回收，`self.ee` 又是每個實例一份，所以我方先前掛上去的 `_on_message` 依然有效。
+在舊 socket 還活著時重做 `init_realtime`，結果是每筆 frame 送進 handler 兩次，且舊 socket 繼續佔一個 WS 配額。重建前一定要自己 `disconnect()` 舊的。
+
+**2026-09-22 14:18 盤後實測**（測試環境、帳號 58581758、SDK 2.2.9 mac arm64、腳本 `fubon-test/probe_teardown_and_reinit.py`）：
+
+| 階段 | `threading.enumerate()`（主執行緒除外） |
+| --- | --- |
+| 登入後、尚未 `init_realtime` | 空 |
+| 第一條 socket connect + subscribe 後 | `Thread-1 (run_forever)` **non-daemon**、`Thread-2` non-daemon、`Thread-3` |
+| **不 disconnect** 直接重做 `init_realtime` + connect | `Thread-1 (run_forever)` **仍在**、`Thread-4 (run_forever)` non-daemon、`Thread-5` non-daemon、`Thread-3`／`Thread-6` |
+| 兩條都 `disconnect()` 後 | **空** |
+| 再 `logout()` 後 | 空 |
+
+結論：(1) 兩個 `run_forever` reader thread 確實並存，BUG-018 的前提為實測確認，不是推論；
+(2) `disconnect()` 是收掉 reader thread 的**必要且充分**步驟，`logout()` 不負責這件事——上表第四列 disconnect 之後就已經清空，logout 沒有再改變什麼；
+(3) `main()` 返回後行程自然結束，exit code 0，**不需要 `os._exit`**，證實 BUG-011 的修法有效。
+
+WS 事件名稱以廠商文件為準，只有 `authenticated`、`data`、`error`、`heartbeat`、`pong`、`subscribed`、`unsubscribed` 七種；
+文件查無 `snapshot` 事件（PR1 曾誤加該分支，2026-09-22 移除）。
 
 ### 交易端事件代碼（`sdk.set_on_event(callback)`，官方文件「事件代碼 (Event Code)」）
 
@@ -238,6 +267,84 @@ health-check 只負責偵測（30 秒 ping、連續 2 次沒回應就主動 `dis
 
 官方「自動重連」範例：收到 `300` → `logout()` → **建新的 `FubonSDK()`** → `login()` → 重新 `set_on_*` 所有 callback → 重連行情 WS，用 lock 防重入。
 callback 的 code 是字串，比對時用 `"300"` 不是 `300`。
+
+### 殘留 session 會讓行情 WS 被拒（2026-09-18 實測）
+
+同一帳號（41610792）先後有三個行程未經 `logout()` 就結束（一個被 `kill`、兩個因例外中止）後，
+新行程 `login()` **仍成功**，但 `init_realtime` → `connect()` 立刻收到伺服器關閉：
+
+```
+opcode=8 data=b'\x03\xe9Maximum number of connections reached'
+→ fugle_marketdata 端拋 Exception("authentication timeout")
+```
+
+換乾淨的帳號（58581758）同一段程式一次通過。結論：
+
+- 殘留 session 佔的是**行情 WS 額度**，交易端登入不受影響；額度多久釋放未測。
+- 這是「WS 連線失敗」不是「登入失效」：程式不可據此重登，否則每次重試都再多一條殘留。
+- 任何實測腳本一律 `try/finally: sdk.logout()`；用 `os._exit` 前記得 `sys.stdout.reconfigure(line_buffering=True)`，不然輸出會被吃掉。
+
+### 本專案 client 的 session 釋放規則（2026-09-22，PR #95 review 定案）
+
+上面兩節的共同結論是「登入一旦成功，任何失敗路徑都必須把 session 還給券商」，否則殘留累積到 WS 額度上限。
+`FubonClient`／`FubonQuoteProvider` 依此收斂成下列規則，每條都有對應的單元測試：
+
+| 路徑 | 規則 | 依據 |
+| --- | --- | --- |
+| `login()` 成功但 `data` 內無 `account_type == "stock"` | 先 `sdk.logout()` 再拒絕；此時 `_sdk` 尚未設定，之後的 `client.logout()` 會是 no-op，所以必須在原地釋放 | `login().data` 多筆、測試帳號期權帳戶排前面（見地雷節） |
+| `login()` 回 `is_success=False` | **不**呼叫 logout；未實測登入被拒後 SDK 是否殘留連線，也未驗證對未登入成功的 SDK 呼叫 `logout()` 的行為 | 待 Linux 冒煙 probe |
+| `provider.startup()`：login 成功、`connect_realtime()` 失敗 | 補 `client.logout()` 再 re-raise；`shutdown()` 以 `_started` 為門檻，此時仍為 False 不會替你 logout | 2026-09-18「殘留 session 會讓行情 WS 被拒」 |
+| lifespan：`provider.startup()` 之後 DB reconcile 或 dispatcher 掛載失敗 | startup 之後到 `yield` 的整段都在同一個 try/finally 內，失敗一律 `provider.shutdown()` | 同上 |
+| `provider.shutdown()` 的 unsubscribe | 每筆各自 best-effort，拋錯只記 warning，`logout()` 必跑 | 14:05 券商主動關 WS 且不重連，晚間停機時 unsubscribe 會拋 `WebSocketConnectionClosedException` |
+| `client.logout()` | 先 best-effort `ws.disconnect()` 再 `sdk.logout()`；主動關閉觸發的 `disconnect` 事件記 info 不記 warning | `logout()` 不關 WS（上表） |
+| `client.connect_realtime()` 重建行情連線 | `init_realtime` 前先 best-effort `disconnect()` 目前的 socket（與 `logout()` 共用 `_close_realtime_socket`）；首次連線時 `marketdata` 為 None 直接跳過 | `init_realtime` 只換屬性不關舊連線（上節）；工單已定案此方法「可重複呼叫」，實作必須真的能重複 |
+| `client._on_message()` 收到畸形 `data` frame | 正規化與 handler 整段包 try/except，記 `frame dropped` warning 後繼續；每筆記一條，不去重也不限流 | 例外會被 SDK 吞掉並轉成假的 `websocket error`（上節）；廠商標 `symbol`／`time` 必填，實際觸發機率低但代價是誤導性告警 |
+| `provider.startup()`／`reconnect_realtime()` 的 login／connect | 在 lock 外執行；lock 內只設 `_connecting` 旗標（已在連線中則直接返回，防重入）。連線期間 `subscribe()` 只記錄 `_subscribed` 不打 client，重連完成後在 lock 內一次重送整組，每檔恰好一次。PR2 的重連迴圈須以 `asyncio.to_thread` 呼叫 | `connect()` 是 busy-spin（上節）；否則 `get_quotes`／`subscribe`／`_on_snapshot` 全部排隊最長 5 秒，N 個使用者就是 N×5 秒 |
+| `client.subscribe()`／`unsubscribe()` 在 WS 已斷後被呼叫 | SDK 拋自己的 `WebSocketConnectionClosedException`，client 轉成 `QuoteProviderUnavailableError("fubon", "subscribe_failed"/"unsubscribe_failed")`，不夾帶 SDK 原文；API 層只把 `QuoteProviderError` 映射成 503，否則建單掉 500、取消時 provider 的本地訂閱狀態清不掉 | 14:05 券商主動關 WS 且不重連；對齊 `ShioajiClient` 的包裝方式 |
+
+尚未驗證（合併前一併做）：登入被拒（`is_success=False`）後 SDK 是否殘留連線（需刻意失敗登入，有鎖帳號風險，未執行）；`aggregates` frame 的 `lastUpdated` 在只有掛單變動（無成交）時是否前進（需盤中，見下節）。`disconnect()` 後行程能否自然結束已於 2026-09-22 實測通過（見上表）。
+
+### 行情 frame 的兩個時間：`lastUpdated` 與 `lastTrade.time`（2026-09-22，PR #95 review 定案）
+
+`aggregates` 頻道與 REST `intraday/quote` 的 frame 都同時帶兩個時間，意義不同，本專案分開用：
+
+| 欄位 | 意義 | 對應 `QuoteSnapshot` 欄位 | 用途 |
+| --- | --- | --- | --- |
+| `lastUpdated` | frame 最後更新時間，掛單（`bids`／`asks`）變動就會動 | `quote_time`（缺時退回 `received_at`；官方文件未標為必揭示欄位） | 交易時段檢查與 10 秒新鮮度閘門。觸發先讀 bid／ask，所以新鮮度看掛單時間 |
+| `lastTrade.time` | 最後一筆成交時間，沒人成交就不動 | `last_trade_time`（`lastTrade` 缺時為 `None`） | 只在 bid／ask 缺失、退用 `lastTrade.price` 時檢查：成交超過 10 秒視為無成交價 |
+
+為什麼要分：冷門股可能幾十分鐘沒成交但掛單一直在動。若新鮮度綁 `lastTrade.time`，每個 frame 都被判過期，限價／到價意圖要等下一筆成交才可能觸發（PR1 原本就是這樣寫，review 抓到）。反過來若只看 `lastUpdated`，掛單全空時會拿十分鐘前的成交價當現價，這是組長的顧慮，所以備援路徑另看成交時間。
+
+永豐對照：tick／bidask 各自帶一個時間，`quote_time` 取各 frame 時間，`last_trade_time` 只在 tick frame 更新。REST snapshot 只有一個 `ts`，兩欄同值。
+
+`lastPrice` 含試撮，觸發一律不用（既有結論）。
+
+已實測（2026-09-23 09:02–09:55 盤中，測試環境帳號 58581758，probe：`~/Desktop/work_place/fubon-test/probe_last_updated_advance.py`）：**`lastUpdated` 確實會在只有掛單變動、沒有新成交時前進**，`quote_time` 綁 `lastUpdated` 的前提成立，不需要改回 `received_at`。
+
+| 標的 | frames（30 分鐘） | 只有掛單動<br>（`lastUpdated` 前進、`lastTrade.time` 不變） | 成交同步前進 | frame 間隔中位／最大 |
+| --- | --- | --- | --- | --- |
+| 1324 地球（幾乎不成交） | 11 | 8 | 2 | 192s／360s |
+| 2420（微量成交） | 174 | 160 | 12 | 0.4s／187s |
+| 2330 台積電（對照組） | 7016 | 6321 | 661 | 0.1s／5.9s |
+
+三檔都以「掛單動、成交不動」的 frame 為多數。最直接的單筆證據是 2420 在 09:25:53～09:25:55 連續三個 frame，`lastUpdated` 一路前進而 `lastTrade.time` 停在 09:16:22（9 分鐘前），`bid`／`ask` 維持 53.9／54。`lastUpdated` 在任何 frame 都沒有缺漏。
+
+⚠️ **新鮮度閘門對冷門股的影響，只發生在「讀快取／REST」的路徑上**（2026-09-23 實測後修正）：
+
+先釐清一件容易誤判的事——**串流 frame 一到達就評估，幾乎不可能過期**。實測 frame 到達時間與其 `lastUpdated` 的落差，三檔的中位數都是 0.028 秒（1324 n=11、2420 n=174、2330 n=7016）。也就是 dispatcher 這條路（`add_quote_listener` → 每個 frame 觸發一次評估）上，`now - quote_time` 永遠遠小於門檻。唯一超過 10 秒的是 subscribe 當下那個 `snapshot` 事件（1324 823 秒、2420 58 秒），而 client 的 `_on_message` 不處理 `snapshot`，它根本進不到 evaluator。
+
+真正被 10 秒門檻擋住的是**不靠 frame 驅動、改讀最後已知快照的路徑**：
+
+- 建單當下的立即檢查（`_fetch_quote_for_create` → `get_quotes`）讀的是快取，冷門股可能是幾分鐘前的。
+- 市價單先打的 REST 現價，帶的是券商端的 `lastUpdated`，實測比當下舊 19 秒（1324，10:08:15 查到 10:07:56.287）。
+
+所以症狀不是「永不觸發」，而是**建單當下沒反應**（市價單尤其明顯，正是 `_fetch_quote_for_create` docstring 要避免的「按了沒反應」體感），要等下一個 frame 進來才會補觸發。已於 `feat/thin-symbol-quote-freshness` 拆成兩個窗處置（掛單 10 分鐘、成交價 10 秒）。
+
+另一個**與門檻無關、尚未處置**的限制：偵測延遲的上限就是 frame 間隔本身。1324 的 frame 中位 192 秒、最長 360 秒，條件成立後最慢要 6 分鐘才會被發現——因為沒有 frame 就沒有評估。放寬門檻完全不會改善這點，要改善只能加定時重評估，屬另一個決策。
+
+未採用但已確認可行的選項：伺服器**確實會送 `event: "snapshot"`**（subscribe 後立刻送，payload 形狀與 `data` 相同，1324 的名稱「地球」就是從它來的），但這個事件名不在富邦文件的 event 清單（文件只列 authenticated／data／error／heartbeat／pong／subscribed／unsubscribed），BUG-017 review 也以「文件沒有」為由刪掉了它的 dispatch。接住它可以讓剛訂閱的冷門股立刻有一份快取（否則要等最長 6 分鐘），代價是依賴未公開事件；要不要恢復屬 review 決策，未動。
+
+已排除的解法：**用 REST 定期輪詢刷新時間無效**（2026-09-23 10:08–10:11 盤中實測，probe：`~/Desktop/work_place/fubon-test/probe_rest_refresh.py`）。`intraday/quote` 的 `lastUpdated` 是券商端「這檔資料最後變動的時間」，與我們何時發出查詢無關：1324 連續查 12 次（每 15 秒一次，共 3 分鐘）都回同一個 `10:07:56.287`，前進 0 次；2420 只在掛單真的變動時前進 2 次；2330 因為本來就一直在變，12 次查詢 12 個值。所以輪詢只會消耗速率額度，不會讓冷門股通過新鮮度閘門。
 
 對本專案的影響：行情 WS 斷線與登入斷線（`300`／`301`／`304`）都可偵測，交由同一支重建迴圈在交易時段內恢復；登入本身不需要每天重做。
 尚未驗證：登入超過 24 小時、跨週末是否失效（若失效預期會以 `300`／`301` 事件浮現）。
@@ -262,6 +369,13 @@ Python 層 `try/except` **攔不住**。根因是 Rust 核心對缺值欄位直�
 ➡️ 通則仍然成立：任何新接的 `sdk.*` API，**先在獨立行程單獨試打一次**確認不會 panic，
 再接進服務——第三方 Rust 綁定的失敗模式不一定是回傳值，可能是直接殺行程，
 `is_success` 這層防禦是假的。
+
+### `FubonSDK(url=...)` 不傳就是正式環境
+
+2.2.9 二進位裡唯一內建的交易端 WS URL 是 `wss://neoapi.fbs.com.tw/TASP/XCPXWS`（production）；`url=None` 或省略就連真單，
+登入照樣成功、不會有任何警告。測試環境 `wss://neoapitest.fbs.com.tw/TASP/XCPXWS` 一定要明傳。
+本專案 `FubonClient` 的 `ws_url` 因此是必填參數（漏傳在建構時就 `TypeError`），設定層由 `FUBON_WS_URL` 供值、預設測試環境；
+任何 dev script 或綁定流程直接建 client 都不得省略。
 
 ### `login().data` 是多筆，不能寫死 `data[0]`
 

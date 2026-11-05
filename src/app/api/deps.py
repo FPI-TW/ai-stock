@@ -27,7 +27,7 @@ from app.commands.trade_intent_core import IntentLimits as CoreIntentLimits
 from app.commands.trigger_intent import TriggerIntentCommand
 from app.commands.twap import TwapConfirmCommand, TwapPlanCommand, TwapSliceWorkerCommand
 from app.commands.two_factor import SetupTwoFactorCommand, VerifyTwoFactorCommand
-from app.core.config import REQUIRED_CURRENT_PRICE_PROVIDER, Settings, get_settings
+from app.core.config import Settings, get_settings
 from app.core.passwords import build_password_hasher
 from app.core.rate_limiter import RateLimiter
 from app.core.security import RequestUser
@@ -255,13 +255,6 @@ def get_current_price_provider(
     settings: SettingsDep,
     quote_provider: QuoteProviderDep,
 ) -> CurrentPriceProvider:
-    if settings.quote_provider != REQUIRED_CURRENT_PRICE_PROVIDER:
-        raise ApiError(
-            code=ErrorCode.QUOTE_PROVIDER_UNAVAILABLE,
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            message="此測試 API 依賴 broker demo quote provider，無法在其他 provider 下使用",
-            details={"requiredProvider": REQUIRED_CURRENT_PRICE_PROVIDER, "currentProvider": settings.quote_provider},
-        )
     if not isinstance(quote_provider, CurrentPriceProvider):
         raise ApiError(
             code=ErrorCode.QUOTE_PROVIDER_UNAVAILABLE,
